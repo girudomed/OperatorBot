@@ -1,111 +1,119 @@
-import os
-import telebot
-from gtts import gTTS
-from admin_utils import log_user, log_request, log_admin, get_logged_users, get_logged_admins, remove_user
-from logger_utils import setup_logging
+import asyncio
+import logging
+import time  # Для замера времени
 from report_generator import ReportGenerator
-
+from operator_data import OperatorData
 from logger_utils import setup_logging
-
-logger = setup_logging()
-
-def some_function():
-    logger.info("Функция some_function начала работу.")
-    # Логика функции
-    try:
-        # Некоторый код
-        logger.info("Успешное выполнение.")
-    except Exception as e:
-        logger.error(f"Произошла ошибка: {e}")
-
 
 # Настройка логирования
 logger = setup_logging()
 
-# Токен вашего Telegram бота и OpenAI API (из переменных окружения или напрямую)
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "your_telegram_token_here")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "your_openai_key_here")
+class OpenAIReportGenerator:
+    def __init__(self, model="gpt-4o-mini"):
+        self.report_generator = ReportGenerator(model=model)
+        self.operator_data = OperatorData()
 
-# Инициализация OpenAI клиента и ReportGenerator
-report_generator = ReportGenerator(model="gpt-4o-mini")
-
-# Создаем экземпляр бота
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
-
-# Команда /start
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    log_user(message.from_user)
-    bot.reply_to(message, "Привет! Я ваш Telegram бот с поддержкой OpenAI. Напишите /help для получения дополнительной информации.")
-
-# Команда /help
-@bot.message_handler(commands=['help'])
-def send_help(message):
-    help_message = "Команды бота:\n/start - запустить бота\n/help - получить помощь\n/ask - задать вопрос модели GPT-4o-mini"
-    if message.from_user.username in get_logged_admins():
-        help_message += "\n/remove_user [username] - удалить пользователя\n/add_admin [username] - добавить администратора"
-    bot.reply_to(message, help_message)
-
-# Команда /ask
-@bot.message_handler(commands=['ask'])
-def ask(message):
-    log_request(message.from_user, message.text)
-    question = message.text[len('/ask '):].strip()
-    if not question:
-        bot.reply_to(message, "Пожалуйста, укажите вопрос после команды /ask.")
-        return
-    try:
-        recommendations = report_generator.generate_recommendations(question)
-        bot.reply_to(message, recommendations)
-    except Exception as e:
-        bot.reply_to(message, f"Произошла ошибка: {e}")
-        logger.error(f"Ошибка при генерации рекомендаций: {e}")
-
-# Команда для администрирования
-@bot.message_handler(commands=['admin'])
-def admin_command(message):
-    if message.from_user.username in get_logged_admins():
-        bot.reply_to(message, "Добро пожаловать в админ-панель! Используйте команды /remove_user [username] для удаления пользователей и /add_admin [username] для добавления администраторов.")
-    else:
-        bot.reply_to(message, "На какой IDE был написан этот бот?")
-
-# Проверка ответа для доступа к админ-панели
-@bot.message_handler(func=lambda message: message.text and message.text.lower() == "vs")
-def authenticate_admin(message):
-    log_admin(message.from_user)
-    bot.reply_to(message, "Правильно! Теперь у вас есть доступ к админ-панели. Используйте команду /admin для входа.")
-
-# Обрабатываем текстовые сообщения (эхо-бот)
-@bot.message_handler(func=lambda message: True)
-def echo_all(message):
-    log_request(message.from_user, message.text)
-    try:
-        recommendations = report_generator.generate_recommendations(message.text)
+    async def generate_report(self, operator_id):
+        """
+        Генерация отчета для оператора по его ID с использованием данных и OpenAI.
         
-        # Преобразование текста в голос
-        tts = gTTS(text=recommendations, lang='ru')
-        temp_file = "response.mp3"
-        tts.save(temp_file)
-        
-        # Отправка голосового сообщения
-        with open(temp_file, "rb") as voice:
-            bot.send_voice(message.chat.id, voice)
-        
-        # Удаление временного файла
-        os.remove(temp_file)
-        
-        # Отправка текстового ответа
-        bot.reply_to(message, recommendations)
-    except Exception as e:
-        bot.reply_to(message, f"Произошла ошибка: {e}")
-        logger.error(f"Ошибка при обработке сообщения: {e}")
+        :param operator_id: ID оператора для получения данных
+        :return: Сформированный отчет или сообщение об ошибке
+        """
+        try:
+            start_time = time.time()
+            # Получение данных оператора из базы данных
+            operator_metrics = await self.operator_data.get_operator_metrics(operator_id)
+            if not operator_metrics:
+                logger.error(f"[КРОТ]: Данные по оператору с ID {operator_id} не найдены.")
+                return f"Данные по оператору с ID {operator_id} не найдены."
 
-# Запуск бота
-if __name__ == "__main__":
-    bot.polling(non_stop=True)
+            # Генерация коучинговой рекомендации с помощью OpenAI на основе данных оператора
+            recommendations = await self.generate_coaching_recommendations(operator_metrics)
+            
+            # Формирование отчета в правильном формате
+            report = self.format_report(operator_metrics, recommendations)
+            elapsed_time = time.time() - start_time
+            logger.info(f"[КРОТ]: Отчет успешно сгенерирован для оператора {operator_id}. (Время выполнения: {elapsed_time:.4f} сек)")
+            return report
+        except Exception as e:
+            logger.error(f"[КРОТ]: Ошибка при генерации отчета для оператора {operator_id}: {e}")
+            return f"Ошибка при генерации отчета: {e}"
 
-    # Просмотр подключенных пользователей
-    users = get_logged_users()
-    logger.info("Подключенные пользователи:")
-    for user in users:
-        logger.info(user)
+    async def generate_coaching_recommendations(self, operator_metrics, retries=3):
+        """
+        Создание коучинговой рекомендации для оператора с использованием данных звонков.
+        
+        :param operator_metrics: Данные оператора, включая оценки и метрики звонков
+        :param retries: Количество повторных попыток при сбое запроса
+        :return: Сгенерированная рекомендация
+        """
+        coaching_prompt = f"""
+        Оператор с идентификатором {operator_metrics.get('operator_id', 'Не указан')} выполнил следующие действия во время звонков:
+
+        1. Приветливость и эмпатия сотрудника: {operator_metrics.get('empathy_score', 'Не указано')}
+        2. Понимание запроса клиента: {operator_metrics.get('understanding_score', 'Не указано')}
+        3. Качество ответов и информирование: {operator_metrics.get('response_quality_score', 'Не указано')}
+        4. Эффективность общения и решение проблемы: {operator_metrics.get('problem_solving_score', 'Не указано')}
+        5. Завершение звонка: {operator_metrics.get('call_closing_score', 'Не указано')}
+        Общая оценка звонка: {operator_metrics.get('total_call_score', 'Не указано')}
+
+        ### Рекомендации:
+        На основе вышеуказанных данных, предоставь персонализированные рекомендации для улучшения работы оператора.
+        """
+        
+        for attempt in range(retries):
+            try:
+                start_time = time.time()
+                recommendations = await self.report_generator.send_message(coaching_prompt)
+                elapsed_time = time.time() - start_time
+                logger.info(f"[КРОТ]: Коучинговая рекомендация успешно сгенерирована (Попытка {attempt + 1}, Время выполнения: {elapsed_time:.4f} сек).")
+                return recommendations
+            except Exception as e:
+                logger.error(f"[КРОТ]: Попытка {attempt + 1} генерации коучинговой рекомендации не удалась: {e}")
+                if attempt == retries - 1:
+                    logger.error("[КРОТ]: Все попытки генерации коучинговой рекомендации исчерпаны.")
+                    return "Не удалось сгенерировать рекомендации. Попробуйте позже."
+                await asyncio.sleep(2 ** attempt)  # Экспоненциальная задержка перед повторной попыткой
+
+    def format_report(self, operator_metrics, recommendations):
+        """
+        Форматирование отчета на основе метрик оператора и рекомендаций.
+        
+        :param operator_metrics: Метрики оператора из базы данных
+        :param recommendations: Рекомендации, сгенерированные OpenAI
+        :return: Сформированный отчет
+        """
+        start_time = time.time()
+        report = f"""
+        📊 Ежедневный отчет за {operator_metrics.get('report_date', 'Не указано')}
+        
+        1. Общая статистика по звонкам:
+        - Всего звонков за день: {operator_metrics.get('total_calls', 'Нет данных')}
+        - Принято звонков за день: {operator_metrics.get('answered_calls', 'Нет данных')}
+        - Записаны на услугу: {operator_metrics.get('booked_services', 'Нет данных')}
+        - Конверсия в запись от общего числа звонков: {operator_metrics.get('conversion_rate', 'Нет данных')}%
+        
+        2. Качество обработки звонков:
+        - Оценка разговоров (средняя по всем клиентам): {operator_metrics.get('average_call_score', 'Нет данных')}
+        
+        3. Анализ отмен и ошибок:
+        - Совершено отмен: {operator_metrics.get('cancellations', 'Нет данных')}
+        - Доля отмен от всех звонков: {operator_metrics.get('cancellation_rate', 'Нет данных')}%
+        
+        4. Время обработки и разговоров:
+        - Среднее время разговора при записи: {operator_metrics.get('avg_booking_time', 'Нет данных')}
+        - Среднее время разговора со спамом: {operator_metrics.get('avg_spam_time', 'Нет данных')}
+        - Среднее время навигации звонков: {operator_metrics.get('avg_navigation_time', 'Нет данных')}
+        - Общее время разговоров по телефону: {operator_metrics.get('total_talk_time', 'Нет данных')}
+        
+        5. Работа с жалобами:
+        - Звонки с жалобами: {operator_metrics.get('complaints', 'Нет данных')}
+        - Оценка обработки жалобы: {operator_metrics.get('complaint_handling_score', 'Нет данных')}
+        
+        6. Рекомендации на основе данных:
+        {recommendations}
+        """
+        elapsed_time = time.time() - start_time
+        logger.info(f"[КРОТ]: Отчет успешно отформатирован (Время выполнения: {elapsed_time:.4f} сек).")
+        return report

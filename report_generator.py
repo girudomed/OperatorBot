@@ -5,26 +5,14 @@ from datetime import datetime
 import aiomysql
 from dotenv import load_dotenv
 import os
+import time  # Для замера времени
 
 # Загрузка переменных окружения
 load_dotenv()
 
 # Настройка логирования
-logger = config.init_logging()
-
 from logger_utils import setup_logging
-
 logger = setup_logging()
-
-def some_function():
-    logger.info("Функция some_function начала работу.")
-    # Логика функции
-    try:
-        # Некоторый код
-        logger.info("Успешное выполнение.")
-    except Exception as e:
-        logger.error(f"Произошла ошибка: {e}")
-
 
 # Настройки OpenAI API
 openai.api_key = config.openai_api_key
@@ -33,8 +21,9 @@ openai.api_base = config.openai_api_base
 # Опции для генерации текста OpenAI
 OPENAI_COMPLETION_OPTIONS = config.openai_completion_options
 
+# Асинхронное подключение к базе данных
 async def create_async_connection():
-    logger.info("Попытка асинхронного подключения к базе данных MySQL...")
+    logger.info("[КРОТ]: Попытка асинхронного подключения к базе данных MySQL...")
     try:
         connection = await aiomysql.connect(
             host=os.getenv("DB_HOST"),
@@ -45,24 +34,27 @@ async def create_async_connection():
             cursorclass=aiomysql.DictCursor,
             autocommit=True
         )
-        logger.info("Подключено к серверу MySQL")
+        logger.info("[КРОТ]: Подключено к серверу MySQL")
         return connection
     except aiomysql.Error as e:
-        logger.error(f"Произошла ошибка '{e}' при подключении к базе данных.")
+        logger.error(f"[КРОТ]: Ошибка при подключении к базе данных: {e}")
         return None
 
+# Выполнение запроса с повторными попытками
 async def execute_async_query(connection, query, params=None, retries=3):
     for attempt in range(retries):
         try:
+            start_time = time.time()
             async with connection.cursor() as cursor:
                 await cursor.execute(query, params)
                 result = await cursor.fetchall()
-                logger.info(f"Запрос успешно выполнен, получено {len(result)} записей")
+                elapsed_time = time.time() - start_time
+                logger.info(f"[КРОТ]: Запрос выполнен: {query}, записей получено: {len(result)} (Время выполнения: {elapsed_time:.4f} сек)")
                 return result
         except aiomysql.Error as e:
-            logger.error(f"Произошла ошибка '{e}' при выполнении запроса: {query}")
+            logger.error(f"[КРОТ]: Ошибка при выполнении запроса '{query}': {e}")
             if e.args[0] in (2013, 2006):  # Ошибки потери соединения
-                logger.info("Попытка повторного подключения...")
+                logger.info("[КРОТ]: Повторная попытка подключения...")
                 await connection.ensure_closed()
                 connection = await create_async_connection()
                 if connection is None:
@@ -80,6 +72,7 @@ class ChatGPT:
         answer = None
         while answer is None:
             try:
+                start_time = time.time()
                 if self.model in {"gpt-4", "gpt-4o-mini"}:
                     messages = self._generate_prompt_messages(message, dialog_messages, chat_mode)
                     r = await openai.ChatCompletion.acreate(
@@ -91,16 +84,17 @@ class ChatGPT:
                 else:
                     raise ValueError(f"Неизвестная модель: {self.model}")
                 answer = self._postprocess_answer(answer)
+                elapsed_time = time.time() - start_time
                 n_input_tokens, n_output_tokens = r.usage.prompt_tokens, r.usage.completion_tokens
+                logger.info(f"[КРОТ]: Сообщение успешно отправлено. Входных токенов: {n_input_tokens}, выходных токенов: {n_output_tokens} (Время выполнения: {elapsed_time:.4f} сек)")
             except openai.error.InvalidRequestError as e:
                 if len(dialog_messages) == 0:
-                    raise ValueError("Слишком много токенов для завершения, даже после удаления всех сообщений диалога.") from e
+                    raise ValueError("Превышено количество токенов, даже после удаления всех сообщений диалога.") from e
                 dialog_messages = dialog_messages[1:]
             except Exception as e:
-                logger.error(f"Ошибка при отправке сообщения: {e}")
+                logger.error(f"[КРОТ]: Ошибка при отправке сообщения: {e}")
                 raise
-        n_first_dialog_messages_removed = n_dialog_messages_before - len(dialog_messages)
-        return answer, (n_input_tokens, n_output_tokens), n_first_dialog_messages_removed
+        return answer, (n_input_tokens, n_output_tokens), n_dialog_messages_before - len(dialog_messages)
 
     def _generate_prompt_messages(self, message, dialog_messages, chat_mode):
         messages = [{"role": "system", "content": config.chat_modes[chat_mode]["prompt_start"]}]
@@ -128,16 +122,18 @@ class ReportGenerator:
                 На основе следующих данных оператора: {operator_data}, предоставь рекомендации по улучшению его работы.
                 Данные включают количество звонков, длительность звонков, уровень конверсии и другие важные метрики.
                 """
+                start_time = time.time()
                 response, _, _ = await self.gpt.send_message(prompt)
-                logger.info("Рекомендации успешно сгенерированы.")
+                elapsed_time = time.time() - start_time
+                logger.info(f"[КРОТ]: Рекомендации успешно сгенерированы (Время выполнения: {elapsed_time:.4f} сек).")
                 return response
             except Exception as e:
-                logger.error(f"Ошибка при генерации рекомендаций: {e}")
+                logger.error(f"[КРОТ]: Ошибка при генерации рекомендаций: {e}")
                 return "Не удалось сгенерировать рекомендации. Пожалуйста, попробуйте позже."
             finally:
                 await connection.ensure_closed()
         else:
-            logger.error("Не удалось подключиться к базе данных для генерации рекомендаций.")
+            logger.error("[КРОТ]: Ошибка подключения к базе данных для генерации рекомендаций.")
             return "Ошибка подключения к базе данных."
 
     async def create_report(self, operator_id, operator_data, recommendations):
@@ -162,21 +158,21 @@ class ReportGenerator:
                     checklist_number=operator_data.get('checklist_info'),
                     checklist_category=operator_data.get('checklist_category')
                 )
+                logger.info("[КРОТ]: Отчет успешно создан.")
             except Exception as e:
-                logger.error(f"Ошибка при сохранении данных звонка: {e}")
+                logger.error(f"[КРОТ]: Ошибка при сохранении данных звонка: {e}")
             finally:
                 await connection.ensure_closed()
         else:
-            logger.error("Не удалось подключиться к базе данных для сохранения отчета.")
+            logger.error("[КРОТ]: Ошибка подключения к базе данных для сохранения отчета.")
             return "Ошибка подключения к базе данных."
-        logger.info("Отчет успешно создан.")
         return report
 
     async def get_checklist_data(self, category_number, connection):
         if category_number is None:
-            logger.warning("Категорийный номер не определен.")
+            logger.warning("[КРОТ]: Категорийный номер не определен.")
             return None, "Не определено"
-        logger.info(f"Получение чек-листа для категории: {category_number}")
+        logger.info(f"[КРОТ]: Получение чек-листа для категории: {category_number}")
         try:
             query = """
             SELECT Number_check_list, Check_list_categories, Info_check_list 
@@ -189,25 +185,23 @@ class ReportGenerator:
             """
             result = await execute_async_query(connection, query, (category_number,))
             
-            # Проверка на наличие данных
             if result and len(result) > 0:
                 return result[0]['Number_check_list'], result[0]['Info_check_list']
             else:
-                logger.warning(f"Чек-лист для категории {category_number} не найден.")
+                logger.warning(f"[КРОТ]: Чек-лист для категории {category_number} не найден.")
                 return None, "Чек-лист не найден"
                 
         except aiomysql.Error as e:
-            logger.error(f"Произошла ошибка '{e}' при получении данных чек-листа")
+            logger.error(f"[КРОТ]: Ошибка при получении данных чек-листа: {e}")
         return None, "Не определено"
 
     async def save_call_score(self, connection, call_id, score, call_category, call_date, called_info, caller_info, talk_duration, transcript, result, category_number, checklist_number, checklist_category):
         if not all([call_id, score, call_date, called_info, caller_info, talk_duration, transcript, result, category_number, checklist_number, checklist_category]):
-            logger.warning("Одно или несколько полей данных звонка отсутствуют.")
+            logger.warning("[КРОТ]: Одно или несколько полей данных звонка отсутствуют.")
             return
-        logger.info(f"Попытка сохранения данных звонка: {call_id} с оценкой {score}, call_category {call_category}, call_date {call_date}, called_info {called_info}, caller_info {caller_info}, talk_duration {talk_duration}, transcript и result")
+        logger.info(f"[КРОТ]: Попытка сохранения данных звонка: {call_id}")
         try:
             score_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            logger.info(f"Данные для вставки: history_id={call_id}, call_score={str(score)}, score_date={score_date}, call_date={call_date}, call_category={str(call_category)}, called_info={str(called_info)}, caller_info={str(caller_info)}, talk_duration={str(talk_duration)}, transcript={str(transcript)}, result={str(result)}, number_category={str(category_number)}, number_checklist={str(checklist_number)}, category_checklist={str(checklist_category)}")
             insert_score_query = """
             INSERT INTO call_scores (history_id, call_score, score_date, call_date, call_category, called_info, caller_info, talk_duration, transcript, result, number_category, number_checklist, category_checklist)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -227,6 +221,6 @@ class ReportGenerator:
                 str(checklist_number), 
                 str(checklist_category)
             ))
-            logger.info("Данные звонка успешно сохранены в call_scores")
+            logger.info("[КРОТ]: Данные звонка успешно сохранены в call_scores")
         except aiomysql.Error as e:
-            logger.error(f"Произошла ошибка '{e}' при сохранении данных звонка")
+            logger.error(f"[КРОТ]: Ошибка при сохранении данных звонка: {e}")

@@ -1,11 +1,35 @@
 import os
 import json
+import time  # Для замера времени
+from logger_utils import setup_logging
+
+# Настройка логирования
+logger = setup_logging()
 
 USERS_LOG = "users.log"
-ADMINS_LOG = "admins.log"
 ROLES_LOG = "roles.json"
 
-# Определение ролей и их уровней доступа
+# Загружаем роли из файла roles.json или сохраняем текущие роли, если файл не существует
+def load_roles():
+    start_time = time.time()
+    if os.path.exists(ROLES_LOG):
+        with open(ROLES_LOG, "r") as f:
+            roles = json.load(f)
+            elapsed_time = time.time() - start_time
+            logger.info(f"[КРОТ]: Роли загружены из {ROLES_LOG} (Время выполнения: {elapsed_time:.4f} сек).")
+            return roles
+    else:
+        save_roles()  # Сохраняем текущие роли, если файл не существует
+        return ROLES
+
+# Сохраняем роли в файл roles.json
+def save_roles():
+    start_time = time.time()
+    with open(ROLES_LOG, "w") as f:
+        json.dump(ROLES, f)
+    elapsed_time = time.time() - start_time
+    logger.info(f"[КРОТ]: Роли сохранены в {ROLES_LOG} (Время выполнения: {elapsed_time:.4f} сек).")
+
 ROLES = {
     "Developer": {
         "priority": 1,
@@ -25,48 +49,46 @@ ROLES = {
     }
 }
 
-from logger_utils import setup_logging
-
-logger = setup_logging()
-
-def some_function():
-    logger.info("Функция some_function начала работу.")
-    # Логика функции
-    try:
-        # Некоторый код
-        logger.info("Успешное выполнение.")
-    except Exception as e:
-        logger.error(f"Произошла ошибка: {e}")
-
-
+# Функции для работы с пользователями
 def log_user(user):
     """
     Логирует пользователя в файл users.log.
     Если пользователь не был зарегистрирован, добавляется с ролью по умолчанию (Operator).
     """
+    start_time = time.time()
     users = get_logged_users()
     if user.username not in users:
-        users[user.username] = {"id": user.id, "role": "Operator"}  # По умолчанию роль Оператора
+        users[user.username] = {"id": user.id, "role": "Operator"}
         with open(USERS_LOG, "w") as f:
             json.dump(users, f)
-        print(f"Пользователь {user.username} добавлен в систему с ролью Operator.")
+        elapsed_time = time.time() - start_time
+        logger.info(f"[КРОТ]: Пользователь {user.username} добавлен в систему с ролью Operator (Время выполнения: {elapsed_time:.4f} сек).")
 
 def log_request(user, request):
     """
     Логирует запрос пользователя в файл requests.log.
     """
+    start_time = time.time()
     with open("requests.log", "a") as f:
         f.write(f"{user.username}: {request}\n")
+    elapsed_time = time.time() - start_time
+    logger.info(f"[КРОТ]: Запрос от {user.username}: {request} (Время выполнения: {elapsed_time:.4f} сек).")
 
 def get_logged_users():
     """
     Возвращает всех зарегистрированных пользователей.
     Если файл users.log не существует, возвращается пустой словарь.
     """
+    start_time = time.time()
     if not os.path.exists(USERS_LOG):
+        elapsed_time = time.time() - start_time
+        logger.info(f"[КРОТ]: Файл {USERS_LOG} не найден. Возвращен пустой список пользователей (Время выполнения: {elapsed_time:.4f} сек).")
         return {}
     with open(USERS_LOG, "r") as f:
-        return json.load(f)
+        users = json.load(f)
+        elapsed_time = time.time() - start_time
+        logger.info(f"[КРОТ]: Пользователи загружены из {USERS_LOG} (Время выполнения: {elapsed_time:.4f} сек).")
+        return users
 
 def get_logged_admins():
     """
@@ -78,26 +100,30 @@ def log_admin(user):
     """
     Логирует администратора в файл users.log, если его еще нет, или обновляет роль на Developer.
     """
+    start_time = time.time()
     users = get_logged_users()
     if user.username not in users:
-        log_user(user)  # Логируем пользователя, если его еще нет
+        log_user(user)
     users[user.username]["role"] = "Developer"
     with open(USERS_LOG, "w") as f:
         json.dump(users, f)
-    print(f"Пользователю {user.username} присвоена роль Developer.")
+    elapsed_time = time.time() - start_time
+    logger.info(f"[КРОТ]: Пользователю {user.username} присвоена роль Developer (Время выполнения: {elapsed_time:.4f} сек).")
 
 def remove_user(username):
     """
     Удаляет пользователя из системы.
     """
+    start_time = time.time()
     users = get_logged_users()
     if username in users:
         del users[username]
         with open(USERS_LOG, "w") as f:
             json.dump(users, f)
-        print(f"Пользователь {username} удален.")
+        elapsed_time = time.time() - start_time
+        logger.info(f"[КРОТ]: Пользователь {username} удален из системы (Время выполнения: {elapsed_time:.4f} сек).")
     else:
-        print(f"Пользователь {username} не найден.")
+        logger.warning(f"[КРОТ]: Пользователь {username} не найден.")
 
 def assign_role(username, role):
     """
@@ -105,12 +131,14 @@ def assign_role(username, role):
     """
     if role not in ROLES:
         raise ValueError(f"Роль {role} не существует.")
+    start_time = time.time()
     users = get_logged_users()
     if username in users:
         users[username]["role"] = role
         with open(USERS_LOG, "w") as f:
             json.dump(users, f)
-        print(f"Пользователю {username} присвоена роль {role}.")
+        elapsed_time = time.time() - start_time
+        logger.info(f"[КРОТ]: Пользователю {username} присвоена роль {role} (Время выполнения: {elapsed_time:.4f} сек).")
     else:
         raise ValueError(f"Пользователь {username} не найден.")
 
@@ -119,11 +147,7 @@ def get_user_role(username):
     Возвращает роль пользователя по его имени.
     Если пользователь не найден, возвращает None.
     """
-    users = get_logged_users()
-    if username in users:
-        return users[username]["role"]
-    else:
-        return None
+    return get_logged_users().get(username, {}).get("role", None)
 
 def has_permission(username, permission):
     """
@@ -144,28 +168,7 @@ def list_users_by_role(role):
     """
     Возвращает список пользователей, у которых назначена указанная роль.
     """
-    users = get_logged_users()
-    return [user for user, details in users.items() if details["role"] == role]
-
-def save_roles():
-    """
-    Сохраняет роли и их права доступа в файл roles.json.
-    """
-    with open(ROLES_LOG, "w") as f:
-        json.dump(ROLES, f)
-    print("Роли сохранены в roles.json.")
-
-def load_roles():
-    """
-    Загружает роли из файла roles.json.
-    Если файл не существует, сохраняет текущие роли.
-    """
-    if os.path.exists(ROLES_LOG):
-        with open(ROLES_LOG, "r") as f:
-            return json.load(f)
-    else:
-        save_roles()  # Сохраняем текущие роли, если файл не существует
-        return ROLES
+    return [user for user, details in get_logged_users().items() if details["role"] == role]
 
 # Инициализация ролей при запуске
 ROLES = load_roles()

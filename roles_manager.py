@@ -1,53 +1,57 @@
-
 import pymysql
 from db_utils import get_db_connection
-
 from logger_utils import setup_logging
+import time  # Для замера времени
 
+# Настройка логирования
 logger = setup_logging()
-
-def some_function():
-    logger.info("Функция some_function начала работу.")
-    # Логика функции
-    try:
-        # Некоторый код
-        logger.info("Успешное выполнение.")
-    except Exception as e:
-        logger.error(f"Произошла ошибка: {e}")
-
 
 class RoleManager:
     def __init__(self):
         self.connection = get_db_connection()
 
     def create_role(self, role_name, permissions):
+        """
+        Создание новой роли и назначение ей разрешений.
+        """
         try:
+            start_time = time.time()
             with self.connection.cursor() as cursor:
                 sql = "INSERT INTO roles (role_name) VALUES (%s)"
                 cursor.execute(sql, (role_name,))
                 role_id = cursor.lastrowid
                 self._assign_permissions(role_id, permissions)
                 self.connection.commit()
-                print(f"Role '{role_name}' created successfully.")
+                elapsed_time = time.time() - start_time
+                logger.info(f"[КРОТ]: Роль '{role_name}' успешно создана (Время выполнения: {elapsed_time:.4f} сек).")
         except Exception as e:
-            print(f"Error creating role: {e}")
+            logger.error(f"[КРОТ]: Ошибка при создании роли '{role_name}': {e}")
             self.connection.rollback()
 
     def delete_role(self, role_id):
+        """
+        Удаление роли и связанных с ней разрешений.
+        """
         try:
+            start_time = time.time()
             with self.connection.cursor() as cursor:
                 sql = "DELETE FROM roles WHERE role_id = %s"
                 cursor.execute(sql, (role_id,))
                 sql_perm = "DELETE FROM permissions WHERE role_id = %s"
                 cursor.execute(sql_perm, (role_id,))
                 self.connection.commit()
-                print(f"Role ID '{role_id}' deleted successfully.")
+                elapsed_time = time.time() - start_time
+                logger.info(f"[КРОТ]: Роль с ID '{role_id}' успешно удалена (Время выполнения: {elapsed_time:.4f} сек).")
         except Exception as e:
-            print(f"Error deleting role: {e}")
+            logger.error(f"[КРОТ]: Ошибка при удалении роли с ID '{role_id}': {e}")
             self.connection.rollback()
 
     def update_role(self, role_id, new_name=None, new_permissions=None):
+        """
+        Обновление роли и её разрешений.
+        """
         try:
+            start_time = time.time()
             with self.connection.cursor() as cursor:
                 if new_name:
                     sql = "UPDATE roles SET role_name = %s WHERE role_id = %s"
@@ -55,12 +59,16 @@ class RoleManager:
                 if new_permissions:
                     self._assign_permissions(role_id, new_permissions, update=True)
                 self.connection.commit()
-                print(f"Role ID '{role_id}' updated successfully.")
+                elapsed_time = time.time() - start_time
+                logger.info(f"[КРОТ]: Роль с ID '{role_id}' успешно обновлена (Время выполнения: {elapsed_time:.4f} сек).")
         except Exception as e:
-            print(f"Error updating role: {e}")
+            logger.error(f"[КРОТ]: Ошибка при обновлении роли с ID '{role_id}': {e}")
             self.connection.rollback()
 
     def _assign_permissions(self, role_id, permissions, update=False):
+        """
+        Назначение разрешений для роли. Если update=True, то сначала удаляются старые разрешения.
+        """
         try:
             with self.connection.cursor() as cursor:
                 if update:
@@ -69,23 +77,36 @@ class RoleManager:
                 for permission in permissions:
                     sql_perm = "INSERT INTO permissions (role_id, permission_name) VALUES (%s, %s)"
                     cursor.execute(sql_perm, (role_id, permission))
+            logger.info(f"[КРОТ]: Разрешения для роли с ID '{role_id}' успешно назначены.")
         except Exception as e:
-            print(f"Error assigning permissions: {e}")
+            logger.error(f"[КРОТ]: Ошибка при назначении разрешений для роли с ID '{role_id}': {e}")
 
     def get_role(self, role_id):
+        """
+        Получение информации о роли по её ID.
+        """
         try:
+            start_time = time.time()
             with self.connection.cursor() as cursor:
                 sql = "SELECT * FROM roles WHERE role_id = %s"
                 cursor.execute(sql, (role_id,))
                 role = cursor.fetchone()
-                print(f"Role found: {role}")
+                elapsed_time = time.time() - start_time
+                logger.info(f"[КРОТ]: Роль с ID '{role_id}' успешно получена (Время выполнения: {elapsed_time:.4f} сек).")
                 return role
         except Exception as e:
-            print(f"Error fetching role: {e}")
+            logger.error(f"[КРОТ]: Ошибка при получении роли с ID '{role_id}': {e}")
             return None
 
-# Example usage
-# role_manager = RoleManager()
-# role_manager.create_role('Manager', ['view_reports', 'manage_users'])
-# role_manager.delete_role(1)
-# role_manager.update_role(1, 'Super Manager', ['view_reports', 'edit_reports'])
+# Пример использования
+if __name__ == "__main__":
+    role_manager = RoleManager()
+    # Пример создания роли
+    role_manager.create_role('Manager', ['view_reports', 'manage_users'])
+    # Пример удаления роли
+    role_manager.delete_role(1)
+    # Пример обновления роли
+    role_manager.update_role(1, 'Super Manager', ['view_reports', 'edit_reports'])
+    # Пример получения роли
+    role = role_manager.get_role(1)
+    print(f"Полученная роль: {role}")

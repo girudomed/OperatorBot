@@ -1,9 +1,12 @@
 import aiomysql
 import logging
-
+import time  # Для замера времени выполнения
 from logger_utils import setup_logging
 
-# Пример функции для получения роли пользователя по его username
+# Настройка логирования
+logger = setup_logging()
+
+# Функция для получения роли пользователя по его username
 async def get_user_role(connection, username):
     """
     Получает роль пользователя по его имени пользователя (username).
@@ -13,7 +16,7 @@ async def get_user_role(connection, username):
     :return: Название роли пользователя или None, если пользователь не найден.
     """
     if not username:
-        logging.warning("Получен пустой username для запроса роли пользователя.")
+        logger.warning("Получен пустой username для запроса роли пользователя.")
         return None
 
     try:
@@ -24,47 +27,25 @@ async def get_user_role(connection, username):
             JOIN roles ON users.role_id = roles.id 
             WHERE users.username = %s
             """
+            start_time = time.time()  # Начало замера времени
             await cursor.execute(query, (username,))
             result = await cursor.fetchone()
+            elapsed_time = time.time() - start_time  # Конец замера времени
             if result:
-                logging.info(f"Роль пользователя '{username}' успешно получена: {result['role_name']}")
+                logger.info(f"Роль пользователя '{username}' успешно получена: {result['role_name']} "
+                            f"(Время выполнения: {elapsed_time:.4f} сек)")
                 return result['role_name']
             else:
-                logging.warning(f"Пользователь с username '{username}' не найден.")
+                logger.warning(f"Пользователь с username '{username}' не найден (Время выполнения: {elapsed_time:.4f} сек).")
                 return None
     except aiomysql.Error as e:
-        logging.error(f"Ошибка при получении роли пользователя: {e}")
+        logger.error(f"Ошибка при получении роли пользователя: {e}")
         return None
-    
-    from logger_utils import setup_logging
+    finally:
+        if connection:
+            await connection.ensure_closed()  # Обязательно закрываем соединение
 
-logger = setup_logging()
-
-from logger_utils import setup_logging
-
-logger = setup_logging()
-
-def some_function():
-    logger.info("Функция some_function начала работу.")
-    # Логика функции
-    try:
-        # Некоторый код
-        logger.info("Успешное выполнение.")
-    except Exception as e:
-        logger.error(f"Произошла ошибка: {e}")
-
-
-def some_function():
-    logger.info("Функция some_function начала работу.")
-    # Логика функции
-    try:
-        # Некоторый код
-        logger.info("Успешное выполнение.")
-    except Exception as e:
-        logger.error(f"Произошла ошибка: {e}")
-
-
-# Пример функции для проверки прав доступа
+# Функция для проверки прав доступа
 async def check_permission(connection, role_name, permission):
     """
     Проверяет наличие определенного разрешения для указанной роли.
@@ -75,7 +56,7 @@ async def check_permission(connection, role_name, permission):
     :return: True, если разрешение существует для этой роли, иначе False.
     """
     if not role_name or not permission:
-        logging.warning("Получены пустые значения для проверки прав доступа.")
+        logger.warning("Получены пустые значения для проверки прав доступа.")
         return False
 
     try:
@@ -86,14 +67,21 @@ async def check_permission(connection, role_name, permission):
             JOIN roles ON permissions.role_id = roles.id 
             WHERE roles.role_name = %s AND permissions.permission_name = %s
             """
+            start_time = time.time()  # Начало замера времени
             await cursor.execute(query, (role_name, permission))
             result = await cursor.fetchone()
+            elapsed_time = time.time() - start_time  # Конец замера времени
             if result:
-                logging.info(f"Доступ для роли '{role_name}' с правом '{permission}' подтвержден.")
+                logger.info(f"Доступ для роли '{role_name}' с правом '{permission}' подтвержден "
+                            f"(Время выполнения: {elapsed_time:.4f} сек).")
                 return True
             else:
-                logging.warning(f"Роль '{role_name}' не имеет права '{permission}'.")
+                logger.warning(f"Роль '{role_name}' не имеет права '{permission}' "
+                               f"(Время выполнения: {elapsed_time:.4f} сек).")
                 return False
     except aiomysql.Error as e:
-        logging.error(f"Ошибка при проверке прав доступа: {e}")
+        logger.error(f"Ошибка при проверке прав доступа: {e}")
         return False
+    finally:
+        if connection:
+            await connection.ensure_closed()  # Обязательно закрываем соединение

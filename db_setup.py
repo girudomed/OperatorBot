@@ -2,11 +2,10 @@ import logging
 import aiomysql
 import random
 import string
+import time  # Для замера времени
 from dotenv import load_dotenv
 import os
-from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 from db_helpers import create_async_connection, execute_async_query
-
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -25,6 +24,7 @@ async def create_tables(connection):
     logger.info("Проверка и создание необходимых таблиц...")
     async with connection.cursor() as cursor:
         try:
+            start_time = time.time()  # Начало замера времени
             # Создание таблицы пользователей
             logger.info("Создание таблицы UsersTelegaBot, если она не существует...")
             await cursor.execute("""
@@ -95,10 +95,13 @@ async def create_tables(connection):
             logger.info("Разрешения по умолчанию добавлены.")
 
             await connection.commit()
-            logger.info("Все таблицы успешно созданы или уже существуют, роли, пароли и разрешения добавлены.")
+            elapsed_time = time.time() - start_time  # Конец замера времени
+            logger.info(f"Все таблицы успешно созданы, роли и разрешения добавлены (Время выполнения: {elapsed_time:.4f} сек).")
         except Exception as e:
             logger.error(f"Ошибка при создании таблиц или добавлении ролей: {e}")
             await connection.rollback()
+        finally:
+            await connection.ensure_closed()
 
 # Генерация пароля
 def generate_password(length=12):
@@ -110,6 +113,7 @@ async def add_user(connection, user_id, username, full_name, role_name="Operator
     logger.info(f"Попытка добавления пользователя: {username}")
     async with connection.cursor() as cursor:
         try:
+            start_time = time.time()  # Начало замера времени
             # Получение role_id для роли пользователя
             query_role_id = "SELECT id FROM RolesTelegaBot WHERE role_name = %s"
             await cursor.execute(query_role_id, (role_name,))
@@ -127,10 +131,13 @@ async def add_user(connection, user_id, username, full_name, role_name="Operator
             """
             await cursor.execute(insert_user_query, (user_id, username, full_name, role_id))
             await connection.commit()
-            logger.info(f"Пользователь {username} успешно добавлен с ролью {role_name}.")
+            elapsed_time = time.time() - start_time  # Конец замера времени
+            logger.info(f"Пользователь {username} успешно добавлен с ролью {role_name} (Время выполнения: {elapsed_time:.4f} сек).")
         except Exception as e:
             logger.error(f"Произошла ошибка при добавлении пользователя: {e}")
             await connection.rollback()
+        finally:
+            await connection.ensure_closed()
 
 # Получение роли пользователя
 async def get_user_role(connection, user_id):
@@ -153,10 +160,14 @@ async def get_user_password(connection, user_id):
     SELECT password FROM UsersTelegaBot WHERE user_id = %s
     """
     async with connection.cursor() as cursor:
+        start_time = time.time()  # Начало замера времени
         await cursor.execute(query, (user_id,))
         result = await cursor.fetchone()
+        elapsed_time = time.time() - start_time  # Конец замера времени
         if result:
+            logger.info(f"Пароль для пользователя с user_id {user_id} успешно получен (Время выполнения: {elapsed_time:.4f} сек).")
             return result['password']
+        logger.warning(f"Пароль для пользователя с user_id {user_id} не найден (Время выполнения: {elapsed_time:.4f} сек).")
         return None
 
 # Получение пароля роли
@@ -170,99 +181,6 @@ async def get_role_password(connection, role_name):
         return role_password[0]['role_password']
     else:
         return None
-
-# Регистрация пользователя
-async def register_user_if_not_exists(update, context):
-    user_id = update.message.from_user.id
-    username = update.message.from_user.username
-    full_name = update.message.from_user.full_name or "Не указано"
-
-    connection = await create_async_connection()
-    if not connection:
-        await update.message.reply_text("Ошибка подключения к базе данных. Попробуйте позже.")
-        return
-
-    # Проверка, существует ли пользователь в базе данных
-    role = await get_user_role(connection, user_id)
-    if role:
-        await update.message.reply_text(f"Добро пожаловать, {full_name}! Ваша роль: {role}")
-    else:
-        # Создание таблиц, если их нет
-        await create_tables(connection)
-
-        # Запрос на роль пользователя
-        await update.message.reply_text(
-            "Привет! Похоже, вы здесь впервые. Пожалуйста, выберите вашу роль.",
-            reply_markup=ReplyKeyboardMarkup(
-                keyboard=[
-                    [KeyboardButton(text="Developer")],
-                    [KeyboardButton(text="Head of Registry")],
-                    [KeyboardButton(text="Founder")],
-                    [KeyboardButton(text="Marketing Director")],
-                    [KeyboardButton(text="Operator")]
-                ],
-                resize_keyboard=True,
-                one_time_keyboard=True
-            )
-        )
-        context.user_data['awaiting_role_selection'] = True
-        context.user_data['user_id'] = user_id
-        context.user_data['username'] = username
-        context.user_data['full_name'] = full_name
-
-# Выбор роли
-async def role_selection_response(update, context):
-    user_id = context.user_data.get('user_id')
-    username = context.user_data.get('username')
-    full_name = context.user_data.get('full_name')
-    role_name = update.message.text.strip()
-    valid_roles = ["Developer", "Head of Registry", "Founder", "Marketing Director", "Operator"]
-
-    if role_name in valid_roles:
-        connection = await create_async_connection()
-        if not connection:
-            await update.message.reply_text("Ошибка подключения к базе данных. Попробуйте позже.")
-            return
-
-        await add_user(connection, user_id, username, full_name, role_name=role_name)
-        await update.message.reply_text(f"Вы успешно зарегистрированы как {role_name}.")
-        context.user_data.clear()
-        await connection.ensure_closed()
-    else:
-        keyboard = [
-            [KeyboardButton(text="Developer")],
-            [KeyboardButton(text="Head of Registry")],
-            [KeyboardButton(text="Founder")],
-            [KeyboardButton(text="Marketing Director")],
-            [KeyboardButton(text="Operator")]
-        ]
-
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-
-        await update.message.reply_text(
-            "Неверная роль. Пожалуйста, выберите из следующих ролей.",
-            reply_markup=reply_markup
-        )
-
-# Обработка пароля
-async def password_response(update, context):
-    entered_password = update.message.text.strip()
-    user_id = context.user_data['user_id']
-
-    connection = await create_async_connection()
-    if not connection:
-        await update.message.reply_text("Ошибка подключения к базе данных. Попробуйте позже.")
-        return
-
-    stored_password = await get_user_password(connection, user_id)
-    if stored_password and entered_password == stored_password:
-        context.user_data['awaiting_password'] = False
-        await update.message.reply_text("Вы успешно вошли в систему.")
-    else:
-        await update.message.reply_text("Неверный пароль. Пожалуйста, попробуйте снова.")
-    
-    context.user_data.clear()
-    await connection.ensure_closed()
 
 # Точка входа
 if __name__ == "__main__":
