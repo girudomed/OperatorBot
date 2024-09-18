@@ -28,9 +28,9 @@ def setup_logging(log_file="logs/logs.log", log_level=logging.INFO, max_bytes=5 
         log_file, maxBytes=max_bytes, backupCount=backup_count
     )
 
-    # Настройка форматирования логов
+    # Настройка форматирования логов с меткой [КРОТ]
     formatter = logging.Formatter(
-        fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        fmt="%(asctime)s - [КРОТ] - %(name)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     )
     rotating_handler.setFormatter(formatter)

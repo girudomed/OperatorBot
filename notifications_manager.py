@@ -1,89 +1,81 @@
 import logging
-import time  # Для замера времени
-from db_helpers import create_async_connection
+import time
+import asyncio
+from db_module import create_async_connection
 from datetime import datetime
 from logger_utils import setup_logging
+from telegram import Bot
+import config
 
 # Настройка логирования
 logger = setup_logging()
 
 class NotificationsManager:
     def __init__(self):
-        # Убираем синхронное подключение и создаем асинхронное подключение для таблиц
-        pass
-
-    async def _create_tables(self):
         """
-        Проверяет и создает таблицу `notifications`, если её нет (асинхронно).
+        Инициализация менеджера уведомлений.
+        Можно передать параметры для Telegram Bot для отправки сообщений через Telegram.
+        """
+        self.bot = Bot(token=config.telegram_token)  # Инициализация Telegram бота
+
+    async def execute_query(self, query, params=None, fetchone=False, fetchall=False):
+        """
+        Унифицированная функция для выполнения запросов к базе данных.
         """
         connection = await create_async_connection()
         if not connection:
-            logger.error("[КРОТ]: Ошибка подключения к базе данных при создании таблицы.")
-            return
+            logger.error("[КРОТ]: Ошибка подключения к базе данных.")
+            return None if fetchone or fetchall else False
+
         try:
             async with connection.cursor() as cursor:
                 start_time = time.time()
-                await cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS notifications (
-                        id INT AUTO_INCREMENT PRIMARY KEY,
-                        user_id INT NOT NULL,
-                        message TEXT NOT NULL,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                await connection.commit()
+                await cursor.execute(query, params)
                 elapsed_time = time.time() - start_time
-                logger.info(f"[КРОТ]: Таблица 'notifications' успешно создана (Время выполнения: {elapsed_time:.4f} сек).")
+                logger.info(f"[КРОТ]: Запрос выполнен за {elapsed_time:.4f} сек.")
+
+                if fetchone:
+                    result = await cursor.fetchone()
+                    return result
+                if fetchall:
+                    result = await cursor.fetchall()
+                    return result
+
+                await connection.commit()
+                return True
         except Exception as e:
-            logger.error(f"[КРОТ]: Ошибка при создании таблицы 'notifications': {e}")
+            logger.error(f"[КРОТ]: Ошибка выполнения запроса: {e}")
             await connection.rollback()
+            return None if fetchone or fetchall else False
         finally:
             await connection.ensure_closed()
 
-    async def send_notification(self, user_id, message):
+    async def send_notification(self, user_id, message, chat_id):
         """
-        Асинхронная отправка уведомления пользователю с сохранением в базу данных.
+        Асинхронная отправка уведомления пользователю через Telegram с сохранением в базу данных.
         """
-        connection = await create_async_connection()
-        if not connection:
-            logger.error("[КРОТ]: Ошибка подключения к базе данных при отправке уведомления.")
-            return
         try:
-            async with connection.cursor() as cursor:
-                start_time = time.time()
-                sql = "INSERT INTO notifications (user_id, message, created_at) VALUES (%s, %s, %s)"
-                await cursor.execute(sql, (user_id, message, datetime.utcnow()))
-                await connection.commit()
-                elapsed_time = time.time() - start_time
-                logger.info(f"[КРОТ]: Уведомление отправлено пользователю с ID '{user_id}' (Время выполнения: {elapsed_time:.4f} сек).")
+            # Сохранение уведомления в базе данных
+            query = "INSERT INTO notifications (user_id, message, created_at) VALUES (%s, %s, %s)"
+            success = await self.execute_query(query, (user_id, message, datetime.utcnow()))
+            if not success:
+                return
+
+            # Отправляем сообщение через Telegram API
+            await self.bot.send_message(chat_id=chat_id, text=message)
+            logger.info(f"[КРОТ]: Уведомление отправлено пользователю с ID '{user_id}' через Telegram.")
         except Exception as e:
             logger.error(f"[КРОТ]: Ошибка при отправке уведомления: {e}")
-            await connection.rollback()
-        finally:
-            await connection.ensure_closed()
 
     async def get_notifications(self, user_id):
         """
         Асинхронное получение всех уведомлений для конкретного пользователя.
         """
-        connection = await create_async_connection()
-        if not connection:
-            logger.error("[КРОТ]: Ошибка подключения к базе данных при получении уведомлений.")
-            return []
-        try:
-            async with connection.cursor() as cursor:
-                start_time = time.time()
-                sql = "SELECT * FROM notifications WHERE user_id = %s ORDER BY created_at DESC"
-                await cursor.execute(sql, (user_id,))
-                notifications = await cursor.fetchall()
-                elapsed_time = time.time() - start_time
-                logger.info(f"[КРОТ]: Уведомления для пользователя с ID '{user_id}' получены (Время выполнения: {elapsed_time:.4f} сек).")
-                return notifications
-        except Exception as e:
-            logger.error(f"[КРОТ]: Ошибка при получении уведомлений для пользователя с ID '{user_id}': {e}")
-            return []
-        finally:
-            await connection.ensure_closed()
+        query = "SELECT * FROM notifications WHERE user_id = %s ORDER BY created_at DESC"
+        notifications = await self.execute_query(query, (user_id,), fetchall=True)
+        if notifications is not None:
+            logger.info(f"[КРОТ]: Уведомления для пользователя с ID '{user_id}' получены.")
+        return notifications or []
 
     def log_critical_event(self, event_description):
         """
@@ -91,9 +83,39 @@ class NotificationsManager:
         """
         logger.critical(f"[КРОТ]: Критическое событие: {event_description}")
 
-# Пример использования:
-# notifications_manager = NotificationsManager()
-# await notifications_manager.send_notification(1, "Your report is ready")
-# user_notifications = await notifications_manager.get_notifications(1)
-# print(user_notifications)
-# notifications_manager.log_critical_event("Database connection lost")
+    async def send_daily_reports(self):
+        """
+        Отправка отчетов операторам в конце рабочего дня.
+        Использует данные из таблицы `reports` и отправляет отчеты через Telegram.
+        """
+        try:
+            # Получаем все отчеты за текущий день
+            query = "SELECT user_id, report_text FROM reports WHERE report_date = CURRENT_DATE"
+            reports = await self.execute_query(query, fetchall=True)
+
+            if not reports:
+                return
+
+            tasks = []
+            for report in reports:
+                user_id = report['user_id']
+                report_text = report['report_text']
+
+                # Получаем chat_id из таблицы UsersTelegaBot по user_id
+                query_user = "SELECT chat_id FROM UsersTelegaBot WHERE user_id = %s"
+                user = await self.execute_query(query_user, (user_id,), fetchone=True)
+
+                if user:
+                    chat_id = user['chat_id']
+                    # Параллельная отправка отчетов
+                    tasks.append(self.bot.send_message(chat_id=chat_id, text=report_text))
+                    logger.info(f"[КРОТ]: Отчет отправлен пользователю с ID '{user_id}' через Telegram.")
+                else:
+                    logger.warning(f"[КРОТ]: Не удалось найти chat_id для пользователя с ID '{user_id}'.")
+
+            # Асинхронная отправка всех отчетов
+            if tasks:
+                await asyncio.gather(*tasks)
+            logger.info(f"[КРОТ]: Все отчеты успешно отправлены.")
+        except Exception as e:
+            logger.error(f"[КРОТ]: Ошибка при отправке отчетов: {e}")

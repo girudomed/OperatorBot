@@ -85,7 +85,7 @@ openai_completion_options = {
     "request_timeout": float(os.getenv("OPENAI_REQUEST_TIMEOUT", 60.0)),
 }
 
-# Логирование параметров OpenAI для отладки
+# Логирование параметров OpenAI (без ключа для безопасности)
 logger.debug(f"OpenAI Completion options: {openai_completion_options}")
 
 # Конфигурация Telegram
@@ -112,6 +112,12 @@ logger.debug(f"Конфигурация базы данных: host={db_config['
 if not all(db_config[key] for key in ["host", "user", "password", "db", "port"]):
     logger.error("Конфигурация базы данных неполная.")
     raise EnvironmentError("Проблема с конфигурацией базы данных.")
+
+# Параметры для планировщика задач
+report_send_time = os.getenv("REPORT_SEND_TIME", "18:00")  # Время отправки отчетов, по умолчанию 18:00
+
+# Логирование времени отправки отчетов
+logger.info(f"Время отправки отчетов операторам установлено на {report_send_time}")
 
 # Засекаем время завершения загрузки конфигурации
 elapsed_time = time.time() - start_time

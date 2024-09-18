@@ -1,5 +1,5 @@
 import pymysql
-from db_utils import get_db_connection
+from db_module import get_db_connection
 from logger_utils import setup_logging
 import time  # Для замера времени
 

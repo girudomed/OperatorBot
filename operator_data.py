@@ -1,89 +1,31 @@
-import aiomysql
-import os
 import logging
 import time  # Для замера времени
-from dotenv import load_dotenv
-import asyncio
-
-# Загрузка переменных окружения
-load_dotenv()
-
-# Настройка логирования
 from logger_utils import setup_logging
-logger = setup_logging()
 
 class OperatorData:
-    def __init__(self):
+    def __init__(self, db_manager):
         """
-        Инициализация асинхронного подключения к базе данных MySQL.
+        Инициализация с использованием db_manager для взаимодействия с базой данных.
         """
-        self.connection = None
+        self.db_manager = db_manager
+        self.logger = setup_logging()
 
-    async def create_connection(self):
+    async def get_operator_metrics(self, user_id):
         """
-        Создание асинхронного подключения к базе данных с ретраями.
-        """
-        retries = 3
-        delay = 5  # задержка между попытками подключения
-        for attempt in range(retries):
-            try:
-                self.connection = await aiomysql.connect(
-                    host=os.getenv("DB_HOST"),
-                    user=os.getenv("DB_USER"),
-                    password=os.getenv("DB_PASSWORD"),
-                    db=os.getenv("DB_NAME"),
-                    port=int(os.getenv("DB_PORT")),
-                    cursorclass=aiomysql.DictCursor,
-                    autocommit=True
-                )
-                logger.info("[КРОТ]: Подключение к базе данных успешно установлено.")
-                await self._check_table_exists("call_scores")  # Проверим таблицу call_scores
-                return
-            except Exception as e:
-                logger.error(f"[КРОТ]: Ошибка при подключении к базе данных: {e}")
-                if attempt < retries - 1:
-                    logger.info(f"[КРОТ]: Повторная попытка подключения через {delay} секунд...")
-                    await asyncio.sleep(delay)
-                else:
-                    logger.error("[КРОТ]: Все попытки подключения к базе данных исчерпаны.")
-                    raise
-
-    async def _check_table_exists(self, table_name):
-        """
-        Проверка существования таблицы в базе данных.
+        Асинхронное извлечение данных по конкретному оператору на основе его user_id.
         """
         try:
-            query = f"SHOW TABLES LIKE '{table_name}'"
+            query = "SELECT * FROM UsersTelegaBot WHERE user_id = %s"
             start_time = time.time()
-            async with self.connection.cursor() as cursor:
-                await cursor.execute(query)
-                result = await cursor.fetchone()
-                elapsed_time = time.time() - start_time
-                if not result:
-                    raise ValueError(f"Таблица '{table_name}' не существует в базе данных.")
-                logger.info(f"[КРОТ]: Таблица '{table_name}' успешно найдена (Время выполнения: {elapsed_time:.4f} сек).")
+            result = await self.db_manager.execute_query(query, (user_id,), fetchone=True)
+            elapsed_time = time.time() - start_time
+            if result and isinstance(result, dict):  # Проверяем, что результат - это словарь
+                self.logger.info(f"[КРОТ]: Данные пользователя с user_id {user_id} успешно извлечены (Время выполнения: {elapsed_time:.4f} сек).")
+            else:
+                self.logger.warning(f"[КРОТ]: Пользователь с user_id {user_id} не найден или данные некорректны (Время выполнения: {elapsed_time:.4f} сек).")
+            return result
         except Exception as e:
-            logger.error(f"[КРОТ]: Ошибка при проверке таблицы '{table_name}': {e}")
-            raise
-
-    async def get_operator_metrics(self, operator_id):
-        """
-        Асинхронное извлечение данных по конкретному оператору на основе его ID.
-        """
-        try:
-            query = "SELECT * FROM operators WHERE operator_id = %s"
-            start_time = time.time()
-            async with self.connection.cursor() as cursor:
-                await cursor.execute(query, (operator_id,))
-                result = await cursor.fetchone()
-                elapsed_time = time.time() - start_time
-                if result:
-                    logger.info(f"[КРОТ]: Данные оператора с ID {operator_id} успешно извлечены (Время выполнения: {elapsed_time:.4f} сек).")
-                else:
-                    logger.warning(f"[КРОТ]: Оператор с ID {operator_id} не найден (Время выполнения: {elapsed_time:.4f} сек).")
-                return result
-        except Exception as e:
-            logger.error(f"[КРОТ]: Ошибка при получении данных оператора с ID {operator_id}: {e}")
+            self.logger.error(f"[КРОТ]: Ошибка при получении данных пользователя с user_id {user_id}: {e}")
             return None
 
     async def get_all_operators_metrics(self):
@@ -91,37 +33,40 @@ class OperatorData:
         Асинхронное извлечение данных по всем операторам.
         """
         try:
-            query = "SELECT * FROM operators"
+            query = "SELECT * FROM UsersTelegaBot"
             start_time = time.time()
-            async with self.connection.cursor() as cursor:
-                await cursor.execute(query)
-                result = await cursor.fetchall()
-                elapsed_time = time.time() - start_time
-                logger.info(f"[КРОТ]: Данные по всем операторам успешно извлечены (Время выполнения: {elapsed_time:.4f} сек).")
-                return result
+            result = await self.db_manager.execute_query(query, fetchall=True)
+            elapsed_time = time.time() - start_time
+            if result and isinstance(result, list):  # Проверяем, что результат - это список
+                self.logger.info(f"[КРОТ]: Данные по всем пользователям успешно извлечены (Время выполнения: {elapsed_time:.4f} сек).")
+            else:
+                self.logger.warning(f"[КРОТ]: Данные по пользователям некорректны или отсутствуют (Время выполнения: {elapsed_time:.4f} сек).")
+            return result
         except Exception as e:
-            logger.error(f"[КРОТ]: Ошибка при получении данных всех операторов: {e}")
+            self.logger.error(f"[КРОТ]: Ошибка при получении данных всех пользователей: {e}")
             return []
 
-    async def get_operator_call_data(self, operator_id):
+    async def get_operator_call_data(self, user_id):
         """
-        Получение данных о звонках для конкретного оператора из таблицы call_scores.
+        Получение данных о звонках для конкретного оператора (user_id) из таблицы call_scores.
         """
         try:
             query = """
             SELECT caller_info, called_info, transcript, result, call_date, talk_duration
             FROM call_scores
-            WHERE operator_id = %s
+            WHERE caller_info LIKE %s OR called_info LIKE %s
             """
+            operator_pattern = f"%{user_id}%"
             start_time = time.time()
-            async with self.connection.cursor() as cursor:
-                await cursor.execute(query, (operator_id,))
-                result = await cursor.fetchall()
-                elapsed_time = time.time() - start_time
-                logger.info(f"[КРОТ]: Данные звонков для оператора с ID {operator_id} успешно извлечены (Время выполнения: {elapsed_time:.4f} сек).")
-                return result
+            result = await self.db_manager.execute_query(query, (operator_pattern, operator_pattern), fetchall=True)
+            elapsed_time = time.time() - start_time
+            if result and isinstance(result, list):  # Проверяем, что результат - это список
+                self.logger.info(f"[КРОТ]: Данные звонков для пользователя с user_id {user_id} успешно извлечены (Время выполнения: {elapsed_time:.4f} сек).")
+            else:
+                self.logger.warning(f"[КРОТ]: Данные звонков для пользователя с user_id {user_id} некорректны или отсутствуют (Время выполнения: {elapsed_time:.4f} сек).")
+            return result
         except Exception as e:
-            logger.error(f"[КРОТ]: Ошибка при получении данных звонков для оператора с ID {operator_id}: {e}")
+            self.logger.error(f"[КРОТ]: Ошибка при получении данных звонков для пользователя с user_id {user_id}: {e}")
             return []
 
     async def get_operators_by_performance(self, min_calls=None, max_calls=None):
@@ -129,7 +74,7 @@ class OperatorData:
         Асинхронное извлечение данных операторов, соответствующих определенным критериям (например, количество звонков).
         """
         try:
-            query = "SELECT * FROM operators WHERE 1=1"
+            query = "SELECT * FROM UsersTelegaBot WHERE 1=1"
             params = []
 
             if min_calls is not None:
@@ -140,18 +85,19 @@ class OperatorData:
                 params.append(max_calls)
 
             start_time = time.time()
-            async with self.connection.cursor() as cursor:
-                await cursor.execute(query, params)
-                result = await cursor.fetchall()
-                elapsed_time = time.time() - start_time
-                logger.info(f"[КРОТ]: Данные операторов по производительности успешно извлечены "
-                            f"(min_calls={min_calls}, max_calls={max_calls}, Время выполнения: {elapsed_time:.4f} сек).")
-                return result
+            result = await self.db_manager.execute_query(query, params, fetchall=True)
+            elapsed_time = time.time() - start_time
+            if result and isinstance(result, list):  # Проверяем, что результат - это список
+                self.logger.info(f"[КРОТ]: Данные пользователей по производительности успешно извлечены "
+                                 f"(min_calls={min_calls}, max_calls={max_calls}, Время выполнения: {elapsed_time:.4f} сек).")
+            else:
+                self.logger.warning(f"[КРОТ]: Данные по производительности пользователей некорректны или отсутствуют (Время выполнения: {elapsed_time:.4f} сек).")
+            return result
         except Exception as e:
-            logger.error(f"[КРОТ]: Ошибка при получении данных по производительности операторов: {e}")
+            self.logger.error(f"[КРОТ]: Ошибка при получении данных по производительности пользователей: {e}")
             return []
 
-    async def get_operator_call_metrics(self, operator_id, start_date=None, end_date=None):
+    async def get_operator_call_metrics(self, user_id, start_date=None, end_date=None):
         """
         Получение метрик звонков оператора за определенный период (с датой начала и конца).
         """
@@ -161,9 +107,9 @@ class OperatorData:
                    AVG(talk_duration) as avg_talk_time,
                    SUM(CASE WHEN result = 'success' THEN 1 ELSE 0 END) as successful_calls
             FROM call_scores
-            WHERE operator_id = %s
+            WHERE (caller_info LIKE %s OR called_info LIKE %s)
             """
-            params = [operator_id]
+            params = [f"%{user_id}%", f"%{user_id}%"]
 
             if start_date:
                 query += " AND call_date >= %s"
@@ -173,34 +119,31 @@ class OperatorData:
                 params.append(end_date)
 
             start_time = time.time()
-            async with self.connection.cursor() as cursor:
-                await cursor.execute(query, params)
-                result = await cursor.fetchone()
-                elapsed_time = time.time() - start_time
-                logger.info(f"[КРОТ]: Метрики звонков для оператора с ID {operator_id} успешно извлечены (Время выполнения: {elapsed_time:.4f} сек).")
-                return result
+            result = await self.db_manager.execute_query(query, params, fetchone=True)
+            elapsed_time = time.time() - start_time
+            if result and isinstance(result, dict):  # Проверяем, что результат - это словарь
+                self.logger.info(f"[КРОТ]: Метрики звонков для пользователя с user_id {user_id} успешно извлечены (Время выполнения: {elapsed_time:.4f} сек).")
+            else:
+                self.logger.warning(f"[КРОТ]: Метрики звонков для пользователя с user_id {user_id} некорректны или отсутствуют (Время выполнения: {elapsed_time:.4f} сек).")
+            return result
         except Exception as e:
-            logger.error(f"[КРОТ]: Ошибка при получении метрик звонков для оператора с ID {operator_id}: {e}")
+            self.logger.error(f"[КРОТ]: Ошибка при получении метрик звонков для пользователя с user_id {user_id}: {e}")
             return None
-
-    async def close_connection(self):
-        """
-        Закрытие подключения к базе данных.
-        """
-        if self.connection:
-            await self.connection.ensure_closed()
-            logger.info("[КРОТ]: Соединение с базой данных закрыто.")
 
 # Пример использования модуля
 if __name__ == "__main__":
-    async def main():
-        operator_data = OperatorData()
-        await operator_data.create_connection()
+    import asyncio
+    from db_module import DatabaseManager
 
-        # Пример получения данных по конкретному оператору
-        operator_id = 1
-        operator_metrics = await operator_data.get_operator_metrics(operator_id)
-        print(f"Данные по оператору {operator_id}: {operator_metrics}")
+    async def main():
+        db_manager = DatabaseManager()
+        await db_manager.create_pool()
+        operator_data = OperatorData(db_manager)
+
+        # Пример получения данных по конкретному пользователю
+        user_id = 1
+        operator_metrics = await operator_data.get_operator_metrics(user_id)
+        print(f"Данные по пользователю {user_id}: {operator_metrics}")
 
         # Пример получения данных по всем операторам
         all_operators_metrics = await operator_data.get_all_operators_metrics()
@@ -209,13 +152,13 @@ if __name__ == "__main__":
             print(metrics)
 
         # Пример получения данных звонков по оператору
-        call_data = await operator_data.get_operator_call_data(operator_id)
-        print(f"Данные звонков оператора {operator_id}: {call_data}")
+        call_data = await operator_data.get_operator_call_data(user_id)
+        print(f"Данные звонков пользователя {user_id}: {call_data}")
 
-        # Пример получения метрик звонков оператора за период
-        call_metrics = await operator_data.get_operator_call_metrics(operator_id, "2024-01-01", "2024-09-12")
-        print(f"Метрики звонков оператора {operator_id}: {call_metrics}")
+        # Пример получения метрик звонков пользователя за период
+        call_metrics = await operator_data.get_operator_call_metrics(user_id, "2024-01-01", "2024-09-12")
+        print(f"Метрики звонков пользователя {user_id}: {call_metrics}")
 
-        await operator_data.close_connection()
+        await db_manager.close_connection()
 
     asyncio.run(main())
