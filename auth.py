@@ -1,9 +1,7 @@
+##auth.py
 import logging
-import secrets  # Для безопасной генерации паролей
-import string   # Для алфавита паролей
 import time
 import asyncio
-import bcrypt
 from permissions_manager import PermissionsManager
 from logger_utils import setup_logging
 from dotenv import load_dotenv  # Для загрузки переменных окружения
@@ -31,19 +29,7 @@ class AuthManager:
         self.db_manager = db_manager
         self.permissions_manager = PermissionsManager(db_manager)
 
-    def generate_password(self, length=12):
-        """Генерация безопасного случайного пароля."""
-        alphabet = string.ascii_letters + string.digits + string.punctuation
-        while True:
-            password = ''.join(secrets.choice(alphabet) for _ in range(length))
-            # Убедимся, что пароль содержит хотя бы один символ из каждой категории
-            if (any(c.islower() for c in password) and
-                any(c.isupper() for c in password) and
-                any(c.isdigit() for c in password) and
-                any(c in string.punctuation for c in password)):
-                return password
-
-    async def register_user(self, user_id, full_name, role, operator_id=None):
+    async def register_user(self, user_id, full_name, role, input_password, operator_id=None):
         """
         Регистрация пользователя, генерация пароля и сохранение в базе данных.
         Использует Telegram user_id как уникальный идентификатор.
@@ -51,42 +37,30 @@ class AuthManager:
         try:
             start_time = time.time()
 
-            # Если роль - оператор, проверяем существование operator_id
-            if role.lower() == "operator":
-                operator = await self.db_manager.find_operator_by_id(operator_id)
-                if not operator:
-                    logger.error(f"Оператор с ID {operator_id} не найден.")
-                    return {"status": "error", "message": f"Оператор с ID {operator_id} не найден."}
-            else:
-                operator_id = None  # Для других ролей operator_id не требуется
-
-            # Генерация пароля
-            password = self.generate_password()
-
-            # Хешируем пароль асинхронно
-            hashed_password = await asyncio.to_thread(
-                bcrypt.hashpw, password.encode('utf-8'), bcrypt.gensalt()
-            )
-
-            # Маппинг роли на role_id
             role_id = await self.db_manager.get_role_id_by_name(role)
             if role_id is None:
                 logger.error(f"Роль '{role}' не найдена.")
                 return {"status": "error", "message": f"Роль '{role}' не найдена."}
 
-            # Регистрация пользователя в базе данных
+            # Проверка пароля роли
+            stored_role_password = await self.db_manager.get_role_password_by_id(role_id)
+            if input_password != stored_role_password:
+                logger.error(f"Неверный пароль для роли '{role}'.")
+                return {"status": "error", "message": "Неверный пароль для выбранной роли."}
+
+            # Регистрация пользователя в базе данных (без генерации пароля)
+            logger.debug(f"Регистрация в БД: user_id={user_id}, full_name={full_name}, role_id={role_id}, operator_id={operator_id}")
             await self.db_manager.register_user_if_not_exists(
                 user_id=user_id,
-                username=None,  # Можно добавить получение username из context при необходимости
+                username=None,
                 full_name=full_name,
                 operator_id=operator_id,
-                password=hashed_password,
                 role_id=role_id
             )
 
             elapsed_time = time.time() - start_time
             logger.info(f"Пользователь {full_name} зарегистрирован с ролью {role}, operator ID {operator_id}. (Время выполнения: {elapsed_time:.4f} сек)")
-            return {"status": "success", "password": password}
+            return {"status": "success"}
         except Exception as e:
             logger.error(f"Ошибка при регистрации пользователя {full_name}: {e}")
             return {"status": "error", "message": f"Ошибка регистрации: {e}"}
@@ -97,36 +71,58 @@ class AuthManager:
         """
         try:
             start_time = time.time()
-            # Получаем хэшированный пароль пользователя по user_id
-            hashed_password = await self.db_manager.get_user_password(user_id)
+            # Получаем роль пользователя по user_id
+            role_id = await self.db_manager.get_user_role(user_id)
+            if not role_id:
+                logger.warning(f"Роль для пользователя {user_id} не найдена. (Время выполнения: {time.time() - start_time:.4f} сек)")
+                return {"status": "error", "message": "Роль пользователя не найдена."}
 
-            if hashed_password:
-                # Проверяем пароль асинхронно
-                is_correct = await asyncio.to_thread(
-                    bcrypt.checkpw, input_password.encode('utf-8'), hashed_password
-                )
+            # Получаем пароль, связанный с этой ролью
+            role_password = await self.db_manager.get_role_password_by_id(role_id)
+            if not role_password:
+                logger.warning(f"Пароль для роли с ID {role_id} не найден. (Время выполнения: {time.time() - start_time:.4f} сек)")
+                return {"status": "error", "message": "Пароль для роли не найден."}
+
+            # Простое сравнение пароля с сохраненным в базе
+            if input_password == role_password:
+                role_name = await self.db_manager.get_role_name_by_id(role_id)
                 elapsed_time = time.time() - start_time
-                if is_correct:
-                    role_id = await self.db_manager.get_user_role(user_id)
-                    role_name = await self.db_manager.get_role_name_by_id(role_id)
-                    logger.info(f"Пользователь {user_id} успешно аутентифицирован. (Время выполнения: {elapsed_time:.4f} сек)")
-                    return {"status": "success", "role": role_name}
-                else:
-                    logger.warning(f"Неверный пароль для пользователя {user_id}. (Время выполнения: {elapsed_time:.4f} сек)")
-                    return {"status": "error", "message": "Неверный пароль"}
+                logger.info(f"Пользователь {user_id} успешно аутентифицирован как {role_name}. (Время выполнения: {elapsed_time:.4f} сек)")
+                return {"status": "success", "role": role_name}
             else:
-                logger.warning(f"Пользователь {user_id} не найден. (Время выполнения: {elapsed_time:.4f} сек)")
-                return {"status": "error", "message": "Пользователь не найден"}
+                elapsed_time = time.time() - start_time
+                logger.warning(f"Неверный пароль для пользователя {user_id}. (Время выполнения: {elapsed_time:.4f} сек)")
+                return {"status": "error", "message": "Неверный пароль"}
+
         except Exception as e:
             logger.error(f"Ошибка при проверке пароля для пользователя {user_id}: {e}")
             return {"status": "error", "message": f"Ошибка проверки: {e}"}
+        
+async def verify_password_handle(update: Update, context: CallbackContext, auth_manager: AuthManager):
+        """Команда для проверки пароля пользователя."""
+        args = context.args
+        if not args:
+            await update.message.reply_text("Пожалуйста, укажите пароль после команды, например: /verify_password ваш_пароль")
+            return
 
-# Команда для начала регистрации
+        user_id = update.effective_user.id
+        input_password = ' '.join(args).strip()
+
+        # Вызов метода проверки пароля из AuthManager
+        verification_result = await auth_manager.verify_password(user_id, input_password)
+        if verification_result["status"] == "success":
+            role = verification_result["role"]
+            await update.message.reply_text(f"Пароль верный. Ваша роль: {role}.")
+        else:
+            await update.message.reply_text(f"Ошибка: {verification_result['message']}")
+
+
+    # Команда для начала регистрации
 async def register_handle(update: Update, context: CallbackContext, auth_manager: AuthManager):
-    """Начало регистрации: бот запрашивает полное имя."""
+    """Начало регистрации: бот запрашивает позывной оператора."""
     user = update.effective_user
     logger.info(f"Регистрация начата для пользователя {user.id} ({user.full_name}).")
-    await update.message.reply_text("Пожалуйста, введите ваше полное имя:")
+    await update.message.reply_text("Пожалуйста, введите ваш позывной оператора из приветственного сообщения:")
     return ASK_NAME
 
 # Обработка полного имени пользователя
@@ -212,40 +208,31 @@ async def reset_password_handle(update: Update, context: CallbackContext, auth_m
     user_id = update.effective_user.id
     logger.info(f"Запрос на сброс пароля от пользователя {user_id}.")
 
-    # Генерация нового пароля
-    new_password = auth_manager.generate_password()
-
-    # Хешируем пароль асинхронно
-    hashed_password = await asyncio.to_thread(
-        bcrypt.hashpw, new_password.encode('utf-8'), bcrypt.gensalt()
-    )
-
-    # Обновление пароля в базе данных
     try:
-        await auth_manager.db_manager.update_user_password(user_id, hashed_password)
-        await update.message.reply_text(f"Ваш новый пароль: {new_password}. Пожалуйста, сохраните его в безопасном месте.")
-        logger.info(f"Пароль для пользователя {user_id} успешно сброшен.")
+        # Получаем роль пользователя по user_id
+        role_id = await auth_manager.db_manager.get_user_role(user_id)
+        if not role_id:
+            await update.message.reply_text("Роль пользователя не найдена. Пожалуйста, проверьте свои данные.")
+            logger.warning(f"Роль для пользователя {user_id} не найдена.")
+            return
+
+        # Получаем пароль для этой роли
+        role_password = await auth_manager.db_manager.get_role_password_by_id(role_id)
+        if not role_password:
+            await update.message.reply_text("Не удалось найти пароль для вашей роли. Обратитесь к администратору.")
+            logger.warning(f"Пароль для роли с ID {role_id} не найден.")
+            return
+
+        # Обновляем пароль пользователя на тот, который привязан к его роли
+        await auth_manager.db_manager.update_user_password(user_id, role_password)
+
+        await update.message.reply_text(
+            f"Ваш пароль был успешно сброшен. Новый пароль для вашей роли: {role_password}. Пожалуйста, сохраните его в безопасном месте."
+        )
+        logger.info(f"Пароль для пользователя {user_id} успешно сброшен и установлен в соответствии с ролью {role_id}.")
     except Exception as e:
         logger.error(f"Ошибка при сбросе пароля для пользователя {user_id}: {e}")
         await update.message.reply_text("Произошла ошибка при сбросе пароля. Пожалуйста, попробуйте позже.")
-
-# Команда для проверки пароля (пример использования)
-async def verify_password_handle(update: Update, context: CallbackContext, auth_manager: AuthManager):
-    """Команда для проверки пароля пользователя."""
-    args = context.args
-    if not args:
-        await update.message.reply_text("Пожалуйста, укажите пароль после команды, например: /verify_password your_password")
-        return
-
-    user_id = update.effective_user.id
-    input_password = ' '.join(args).strip()
-
-    verification_result = await auth_manager.verify_password(user_id, input_password)
-    if verification_result["status"] == "success":
-        role = verification_result["role"]
-        await update.message.reply_text(f"Пароль верный. Ваша роль: {role}.")
-    else:
-        await update.message.reply_text(f"Ошибка: {verification_result['message']}")
 
 # Завершение диалога при отмене
 async def cancel_handle(update: Update, context: CallbackContext):
@@ -269,8 +256,3 @@ def setup_auth_handlers(application, db_manager):
         },
         fallbacks=[CommandHandler('cancel', cancel_handle)],
     )
-
-    # Добавляем обработчики в приложение
-    application.add_handler(registration_conv_handler)
-    application.add_handler(CommandHandler('reset_password', partial(reset_password_handle, auth_manager=auth_manager)))
-    application.add_handler(CommandHandler('verify_password', partial(verify_password_handle, auth_manager=auth_manager)))

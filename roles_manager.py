@@ -13,7 +13,11 @@ class RoleManager:
     def create_role(self, role_name, permissions):
         """
         Создание новой роли и назначение ей разрешений.
+        Перед созданием проверяем валидность имени роли и списка разрешений.
         """
+        if not self._validate_role_data(role_name, permissions):
+            return
+        
         try:
             start_time = time.time()
             with self.connection.cursor() as cursor:
@@ -32,6 +36,9 @@ class RoleManager:
         """
         Удаление роли и связанных с ней разрешений.
         """
+        if not self._validate_role_id(role_id):
+            return
+
         try:
             start_time = time.time()
             with self.connection.cursor() as cursor:
@@ -50,6 +57,9 @@ class RoleManager:
         """
         Обновление роли и её разрешений.
         """
+        if not self._validate_role_id(role_id) or not self._validate_role_data(new_name, new_permissions, update=True):
+            return
+
         try:
             start_time = time.time()
             with self.connection.cursor() as cursor:
@@ -85,6 +95,9 @@ class RoleManager:
         """
         Получение информации о роли по её ID.
         """
+        if not self._validate_role_id(role_id):
+            return None
+        
         try:
             start_time = time.time()
             with self.connection.cursor() as cursor:
@@ -97,6 +110,28 @@ class RoleManager:
         except Exception as e:
             logger.error(f"[КРОТ]: Ошибка при получении роли с ID '{role_id}': {e}")
             return None
+
+    def _validate_role_data(self, role_name, permissions, update=False):
+        """
+        Валидация данных роли.
+        Проверка на то, что имя роли не пустое, а разрешения представлены списком.
+        """
+        if not role_name and not update:
+            logger.error(f"[КРОТ]: Имя роли не может быть пустым.")
+            return False
+        if permissions is not None and not isinstance(permissions, list):
+            logger.error(f"[КРОТ]: Разрешения должны быть представлены в виде списка.")
+            return False
+        return True
+
+    def _validate_role_id(self, role_id):
+        """
+        Проверка на валидность role_id.
+        """
+        if not role_id or not isinstance(role_id, int):
+            logger.error(f"[КРОТ]: Недопустимый ID роли: {role_id}")
+            return False
+        return True
 
 # Пример использования
 if __name__ == "__main__":

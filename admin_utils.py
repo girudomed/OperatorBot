@@ -8,6 +8,8 @@ logger = setup_logging()
 
 USERS_LOG = "users.log"
 ROLES_LOG = "roles.json"
+OPERATORS_LOG = "operators.log"
+ADMINS_LOG = "admins.log"
 
 # Загружаем роли из файла roles.json или сохраняем текущие роли, если файл не существует
 def load_roles():
@@ -49,6 +51,19 @@ ROLES = {
     }
 }
 
+# Логирование действий оператора и администратора
+def log_action(username, role, action):
+    """
+    Логирование действий пользователя в зависимости от его роли.
+    Операторы и администраторы имеют разные лог-файлы.
+    """
+    start_time = time.time()
+    log_file = OPERATORS_LOG if role == "Operator" else ADMINS_LOG
+    with open(log_file, "a") as f:
+        f.write(f"{time.ctime()} - {username} ({role}): {action}\n")
+    elapsed_time = time.time() - start_time
+    logger.info(f"[КРОТ]: Действие пользователя {username} ({role}) записано в {log_file} (Время выполнения: {elapsed_time:.4f} сек).")
+
 # Функции для работы с пользователями
 def log_user(user):
     """
@@ -63,6 +78,7 @@ def log_user(user):
             json.dump(users, f)
         elapsed_time = time.time() - start_time
         logger.info(f"[КРОТ]: Пользователь {user.username} добавлен в систему с ролью Operator (Время выполнения: {elapsed_time:.4f} сек).")
+        log_action(user.username, "Operator", "Пользователь зарегистрирован")
 
 def log_request(user, request):
     """
@@ -70,9 +86,10 @@ def log_request(user, request):
     """
     start_time = time.time()
     with open("requests.log", "a") as f:
-        f.write(f"{user.username}: {request}\n")
+        f.write(f"{time.ctime()} - {user.username}: {request}\n")
     elapsed_time = time.time() - start_time
     logger.info(f"[КРОТ]: Запрос от {user.username}: {request} (Время выполнения: {elapsed_time:.4f} сек).")
+    log_action(user.username, get_user_role(user.username), f"Запрос: {request}")
 
 def get_logged_users():
     """
@@ -109,6 +126,7 @@ def log_admin(user):
         json.dump(users, f)
     elapsed_time = time.time() - start_time
     logger.info(f"[КРОТ]: Пользователю {user.username} присвоена роль Developer (Время выполнения: {elapsed_time:.4f} сек).")
+    log_action(user.username, "Developer", "Пользователь назначен администратором")
 
 def remove_user(username):
     """
@@ -122,6 +140,7 @@ def remove_user(username):
             json.dump(users, f)
         elapsed_time = time.time() - start_time
         logger.info(f"[КРОТ]: Пользователь {username} удален из системы (Время выполнения: {elapsed_time:.4f} сек).")
+        log_action(username, "Unknown", "Пользователь удален")
     else:
         logger.warning(f"[КРОТ]: Пользователь {username} не найден.")
 
@@ -139,6 +158,7 @@ def assign_role(username, role):
             json.dump(users, f)
         elapsed_time = time.time() - start_time
         logger.info(f"[КРОТ]: Пользователю {username} присвоена роль {role} (Время выполнения: {elapsed_time:.4f} сек).")
+        log_action(username, role, f"Пользователю назначена роль {role}")
     else:
         raise ValueError(f"Пользователь {username} не найден.")
 

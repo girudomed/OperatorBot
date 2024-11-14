@@ -7,12 +7,8 @@ import time
 # Загрузка переменных окружения из файла .env
 load_dotenv()
 
-# Настройка логирования с ротацией файлов
+# Функция для настройки логирования с ротацией файлов
 def setup_logging(log_file="logs/logs.log", log_level="INFO"):
-    """
-    Инициализация системы логирования для проекта.
-    Логи пишутся в файл с ротацией и выводятся в консоль.
-    """
     log_level = os.getenv("LOG_LEVEL", log_level).upper()
     log_file = os.getenv("LOG_FILE", log_file)
 
@@ -26,20 +22,19 @@ def setup_logging(log_file="logs/logs.log", log_level="INFO"):
             print(f"Ошибка при создании директории для логов: {e}")
             raise
 
-    # Создание логгера с ротацией
-    rotating_handler = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=3)  # 5MB на файл
-    rotating_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
-
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            rotating_handler,  # Логи в файл с ротацией
-            logging.StreamHandler()  # Логи в консоль
-        ]
-    )
     logger = logging.getLogger(__name__)
+
+    # Проверяем, добавлены ли обработчики, чтобы избежать дублирования
+    if not logger.hasHandlers():
+        # Создание логгера с ротацией
+        rotating_handler = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=3)
+        rotating_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+        
+        # Добавляем обработчики
+        logger.addHandler(rotating_handler)
+        logger.addHandler(logging.StreamHandler())
+
+    logger.setLevel(log_level)
     logger.info(f"Логирование инициализировано. Логи сохраняются в файл: {log_file}")
     return logger
 
@@ -66,7 +61,7 @@ required_env_vars = [
 start_time = time.time()
 
 try:
-    check_required_env_vars(required_env_vars)
+    check_required_env_vars(required_env_vars)  # Используем правильную переменную
 except EnvironmentError as e:
     logger.critical(f"Ошибка при проверке переменных окружения: {e}")
     raise
@@ -78,7 +73,7 @@ openai_api_base = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
 # Параметры OpenAI Completion
 openai_completion_options = {
     "temperature": float(os.getenv("OPENAI_TEMPERATURE", 0.7)),
-    "max_tokens": int(os.getenv("OPENAI_MAX_TOKENS", 1000)),
+    "max_tokens": int(os.getenv("OPENAI_MAX_TOKENS", 2000)),
     "top_p": float(os.getenv("OPENAI_TOP_P", 1)),
     "frequency_penalty": float(os.getenv("OPENAI_FREQUENCY_PENALTY", 0)),
     "presence_penalty": float(os.getenv("OPENAI_PRESENCE_PENALTY", 0)),

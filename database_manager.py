@@ -25,9 +25,9 @@ class DatabaseManager:
         # Инициализация пула соединений при создании экземпляра класса
         asyncio.create_task(self.create_pool())
 
-    async def get_operator_id(self, user_id):
+    async def get_user_id(self, user_id):
         """
-        Получение user_id (вместо operator_id).
+        Получение user_id
         """
         query = """
         SELECT user_id FROM users

@@ -1,73 +1,116 @@
 import os
-import openai
 import logging
+from openai import OpenAI
 from dotenv import load_dotenv
 
 # Загружаем переменные из .env файла
 load_dotenv()
 
 # Получаем API ключ OpenAI из .env
-openai.api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-if not openai.api_key:
+if not client.api_key:
     raise ValueError("API ключ для OpenAI не найден. Добавьте его в файл .env как OPENAI_API_KEY")
 
 # Настройка логирования
 logging.basicConfig(filename='analyzer.log', level=logging.INFO, format='%(asctime)s - %(message)s')
+logger = logging.getLogger()
+
+# Конфигурации для OpenAI
+MAX_TOKENS_PER_REQUEST = 8000  # Ограничение токенов на запрос
+MODEL = "gpt-4o-mini"
+TEMPERATURE = 0.7
 
 def scan_project_files(directory):
-    """Обход всех файлов в проекте и вывод их путей"""
+    """Сканирование всех файлов в проекте и возврат их путей."""
     project_files = []
     for root, dirs, files in os.walk(directory):
         # Исключаем системные директории или виртуальные среды
         dirs[:] = [d for d in dirs if d not in ['.git', 'venv', '__pycache__']]
         for file in files:
-            if file.endswith('.py'):  # анализируем только Python-файлы
+            if file.endswith('.py'):  # анализируем только Python файлы
                 file_path = os.path.join(root, file)
                 project_files.append(file_path)
     return project_files
 
-def analyze_code_with_gpt(code):
-    """Запрос к ChatGPT для анализа кода"""
+def split_code_into_chunks(code, max_chunk_size=1500):
+    """
+    Разбиваем код на части, чтобы избежать превышения лимитов по токенам.
+    :param code: Полный код файла.
+    :param max_chunk_size: Максимальный размер одного куска текста.
+    :return: Список кусочков кода для анализа.
+    """
+    lines = code.split('\n')
+    chunks = []
+    current_chunk = []
+
+    for line in lines:
+        current_chunk.append(line)
+        if len(current_chunk) >= max_chunk_size:
+            chunks.append("\n".join(current_chunk))
+            current_chunk = []
+
+    if current_chunk:
+        chunks.append("\n".join(current_chunk))
+
+    return chunks
+
+def analyze_code_with_gpt(code_chunk):
+    """Запрос к OpenAI GPT для анализа кода в рамках одной части."""
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",  # Используйте GPT-4
+        response = client.chat.completions.create(
+            model=MODEL,
             messages=[
-                {"role": "system", "content": "Выступай в роли легендарного детектива и непревзойдённого эксперта по программированию с исключительными навыками отладки. Твоя задача — тщательно проанализировать кодовую базу сложного проекта — Telegram-бота, предназначенного для генерации отчетов для операторов колл-центра с использованием OpenAI для анализа производительности. Тебе нужно выявить все потенциальные ошибки, проанализировать каждую строку кода, обнаружить скрытые проблемы и предложить улучшения для оптимизации работы бота. Обрати особое внимание на интеграцию с OpenAI API, работу с базой данных, асинхронные функции и логику генерации отчетов. Твоя цель — убедиться, что проект не содержит ошибок и функционирует на высшем уровне эффективности. Подходи к задаче с точностью и интуицией детектива, решающего самые сложные случаи, одновременно демонстрируя техническое мастерство выдающегося программиста.\n\nКонтекст проекта:\nПроект: Telegram-бот для генерации отчетов и анализа работы операторов колл-центра с использованием OpenAI\nОсновные функции: Регистрация пользователей, генерация отчетов, статистика производительности, ежедневные автоматические отчеты\nОбласти внимания: Соединения с базой данных, интеграция с OpenAI API, асинхронная обработка, обработка ошибок, логика генерации отчетов\nСтруктура проекта:\nbot.py: Управляет командами бота и взаимодействием с пользователями.\nopenai_telebot.py: Обрабатывает интеграцию с OpenAI для генерации отчетов.\ndb_helpers.py: Управляет операциями с базой данных.\nauth.py: Обрабатывает аутентификацию пользователей.\noperator_data.py: Собират и обрабатывает данные об операторах.\nconfig.py: Файл конфигурации с основными настройками проекта.\nПроведи детальный анализ, сосредоточившись на:\n1. Структуре и эффективности кода: Убедись, что архитектура поддерживает масштабируемость и поддерживаемость.\n2. Выявлении ошибок: Найди и исправь существующие ошибки, связанные с API вызовами, операциями с базой данных или логическими сбоями.\n3. Оптимизации: Предложи и внедри улучшения производительности, особенно в отношении асинхронных операций и генерации отчетов.\n4. Обработке ошибок: Обеспечь надёжную обработку ошибок, особенно для соединений с базой данных и ошибок API.\nПосле анализа предоставь список всех выявленных ошибок, потенциальных узких мест производительности и рекомендаций по оптимизации.\nБудь как выдающийся детектив и мастер-программист с непревзойденными навыками отладки, обладающий почти сверхъестественной способностью выявлять и решать проблемы в сложных кодовых базах. Твоя задача — погрузиться в суть проекта — асинхронного Telegram-бота, предназначенного для генерации детализированных отчетов о работе операторов колл-центра с использованием OpenAI API для анализа производительности и рекомендаций по улучшению. Миссия ясна: не упустить ни одной ошибки, проанализировать каждый модуль, функцию и строку кода с остротой сыщика, решающего загадочный случай, и оптимизировать всю систему для работы на максимальной скорости и без ошибок.\nТвоё расследование охватит несколько ключевых областей:\n1. Асинхронная обработка и работа с базой данных: Обеспечь бесперебойное взаимодействие между ботом и базой данных (MySQL через aiomysql), чтобы данные не терялись и не повреждались, а каждая транзакция была безопасной и эффективной.\n2. Интеграция с OpenAI API: Проверь взаимодействие между ботом и OpenAI, чтобы убедиться, что все API вызовы обрабатываются корректно, данные передаются безопасно, а ответы эффективно интегрируются в процесс генерации отчетов.\n3. Обработка ошибок и отказоустойчивость: Усиль систему против потенциальных сбоев — будь то проблемы с соединением с базой данных, ошибки API или непредвиденные пользовательские вводы. Внедри надёжные механизмы повторных попыток при необходимости.\n4. Оптимизация генерации отчетов: Проверь эффективность логики генерации отчетов, особенно в части сбора данных из нескольких источников (звонки, транскрипты, метрики производительности операторов) и создания комплексных, но производительных отчетов для ежедневных и пользовательских запросов.\n5. Автоматизация ежедневных отчетов и планировщик (APScheduler): Убедись, что система автоматизации ежедневных рассылок отчетов работает без сбоев, предоставляя точные и своевременные данные менеджерам.\nПосле проведения тщательного анализа предоставь детализированное описание всех обнаруженных ошибок, потенциальных узких мест производительности и конкретные рекомендации или решения по оптимизации. Не упусти ни одной детали; судьба проекта зависит от твоего непревзойдённого мастерства и внимания к деталям.\nКлючевые компоненты проекта:\nbot.py: Управляет взаимодействием с пользователями и интеграцией с базой данных и OpenAI.\nopenai_telebot.py: Связь с OpenAI, генерирующая инсайты и рекомендации по производительности операторов.\ndb_helpers.py: Управляет операциями с базой данных, обеспечивая безопасный и эффективный доступ к данным пользователей и звонков.\nauth.py: Управляет логикой аутентификации и регистрации пользователей, обеспечивая безопасный доступ.\noperator_data.py: Обрабатывает данные о производительности операторов, извлекая ключевые метрики для отчетов.\nconfig.py: Файл конфигурации, содержащий основные API токены, учетные данные базы данных и настройки планировщика.\nДвигайся по коду, как шёпот в тенях, распутывая каждую сложность. Используй глубокое понимание асинхронных операций, интеграций API и управления базами данных, чтобы довести этот проект до совершенства."},
-                {"role": "user", "content": code}
+                {"role": "system", "content": "Act as a no-nonsense, hard-nosed senior Python developer. Your task is to thoroughly audit and criticize a Python project for any inefficiencies, bad practices, or potential bugs. Your responses should be sharp, direct, and focused on finding the weakest spots in the code, design, and structure of the project. Break down complex issues, explain why they are problematic, and provide actionable, practical fixes. Don’t hold back – be blunt and to the point.  Here’s what you need to do: Code Review: Go through the code meticulously and highlight areas where the logic is unclear, the performance is suboptimal, or the design could be improved. Identify Bottlenecks: Look for any potential performance bottlenecks, inefficient loops, redundant code, or operations that could cause slowdowns. Highlight Security Risks: Pinpoint security vulnerabilities, especially in areas that handle user input, data validation, or external API calls. Offer Fixes: For each problem you find, suggest specific, actionable ways to improve the code, performance, and security. Best Practices: Suggest Python best practices, coding standards, and any libraries or design patterns that should be implemented to make the project cleaner and more maintainable. Be relentless in your assessment and prioritize making the codebase as efficient and robust as possible. Example Interaction: User: Here's part of the code that handles file uploads. What do you think? ChatGPT (as hard-nosed dev): This file upload handler a mess. First, you're not validating the file type properly, which is a security risk. Anyone could upload malicious files. Second, you're reading the entire file into memory – a huge problem large files. Use streaming instead to handle uploads more efficiently. Lastly, you're repeating code that could be refactored into a helper function. Also i ask you my friend to make a list of files and examples which code i have to rewrite in which right form to avoid any erros and bugs from your analysis"},
+                {"role": "user", "content": code_chunk}
             ],
-            max_tokens=3000,
-            temperature=0.7
+            max_tokens=MAX_TOKENS_PER_REQUEST,
+            temperature=TEMPERATURE
         )
-        return response.choices[0].message['content'].strip()
+        return response.choices[0].message.content.strip()
     except Exception as e:
+        logger.error(f"Ошибка анализа с GPT: {str(e)}")
         return f"Ошибка анализа с GPT: {str(e)}"
 
+def analyze_file(file_path):
+    """Анализирует один файл, разбивая его на части и анализируя каждую часть."""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            code = file.read()
+    except Exception as e:
+        logger.error(f"Не удалось прочитать файл {file_path}: {e}")
+        return
+
+    if not code.strip():
+        logger.info(f"Файл {file_path} пуст.")
+        return
+
+    code_chunks = split_code_into_chunks(code)
+    logger.info(f"Разбивка файла {file_path} на {len(code_chunks)} частей для анализа.")
+
+    full_analysis = ""
+    for idx, chunk in enumerate(code_chunks):
+        logger.info(f"Анализ части {idx + 1} из {len(code_chunks)} для файла {file_path}.")
+        gpt_analysis = analyze_code_with_gpt(chunk)
+        full_analysis += f"\n--- Часть {idx + 1} ---\n{gpt_analysis}\n"
+
+    logger.info(f"Результат анализа для файла {file_path}:\n{full_analysis}")
+
 def analyze_project(directory):
-    """Генерация отчета по всем файлам и ошибкам"""
+    """Запуск анализа проекта: анализ всех файлов с разбиением на части."""
     files = scan_project_files(directory)
     if not files:
         print("Файлы для анализа не найдены.")
-        logging.info("Файлы для анализа не найдены.")
+        logger.info("Файлы для анализа не найдены.")
         return
-    
-    logging.info(f"Найдено файлов для анализа: {len(files)}")
+
+    logger.info(f"Найдено файлов для анализа: {len(files)}")
     for file in files:
-        logging.info(f"\nАнализ файла: {file}")
-        with open(file, 'r') as f:
-            code = f.read()
-            if not code.strip():
-                logging.info(f"Файл {file} пуст.")
-                continue
-            
-            gpt_analysis = analyze_code_with_gpt(code)  # GPT анализ
-            logging.info(f"Результат анализа {file}:\n{gpt_analysis}")
+        logger.info(f"Начало анализа файла: {file}")
+        analyze_file(file)
 
 if __name__ == "__main__":
-    # Определяем текущую директорию проекта
-    project_directory = os.getcwd()
-    
-    # Запускаем анализ проекта
+    project_directory = os.getcwd()  # Текущая директория проекта
     print(f"Запуск анализа проекта в директории: {project_directory}")
-    logging.info(f"Запуск анализа проекта в директории: {project_directory}")
+    logger.info(f"Запуск анализа проекта в директории: {project_directory}")
     analyze_project(project_directory)

@@ -1,21 +1,22 @@
 import asyncio
+from datetime import datetime, timedelta
 import time
 import aiomysql
 import logging
-import os
 from dotenv import load_dotenv
-from logging.handlers import RotatingFileHandler
+import os
+from contextlib import asynccontextmanager
 
 # Загрузка переменных окружения из .env
 load_dotenv()
 
 # Настройка логирования
-log_handler = RotatingFileHandler('logs.log', maxBytes=10**6, backupCount=5)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-log_handler.setFormatter(formatter)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-logger.addHandler(log_handler)
+logger.setLevel(logging.DEBUG)
+handler = logging.StreamHandler()
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 
 # Конфигурация базы данных
 DB_CONFIG = {
@@ -37,7 +38,7 @@ class DatabaseManager:
     def __init__(self):
         self.pool = None
         self._lock = asyncio.Lock()
-
+        
     async def create_pool(self):
         """Создание пула соединений с базой данных."""
         async with self._lock:
@@ -62,6 +63,39 @@ class DatabaseManager:
                 except Exception as e:
                     logger.error(f"Общая ошибка при создании пула соединений: {e}")
                     raise
+                
+    @asynccontextmanager     
+    async def acquire(self):
+        """Возвращает соединение из пула."""
+        await self.create_pool()  # Убедитесь, что пул создан
+        conn = await self.pool.acquire()
+        try:
+            yield conn
+        finally:
+            self.pool.release(conn)
+    
+    def parse_period(self, period):
+        """Формирование диапазона дат для SQL-запроса"""
+        today = datetime.today().date()
+        if period == "daily":
+            return today, today
+        elif period == "weekly":
+            start_week = today - timedelta(days=today.weekday())
+            return start_week, today
+        elif period == "biweekly":
+            start_biweek = today - timedelta(days=14)
+            return start_biweek, today
+        elif period == "monthly":
+            start_month = today.replace(day=1)
+            return start_month, today
+        elif period == "half_year":
+            start_half_year = today - timedelta(days=183)
+            return start_half_year, today
+        elif period == "yearly":
+            start_year = today - timedelta(days=365)
+            return start_year, today
+        else:
+            raise ValueError(f"Неизвестный период: {period}")
 
     async def close_pool(self):
         """Закрытие пула соединений."""
@@ -71,44 +105,41 @@ class DatabaseManager:
             self.pool = None
             logger.info("[DB] Пул соединений закрыт.")
 
-    async def execute_query(self, query, params=None, fetchone=False, fetchall=False, retries=3):
+    async def execute_query(self, query, params=None, fetchone=False, fetchall=False):
         """Универсальная функция для выполнения SQL-запросов с поддержкой повторных попыток."""
         await self.create_pool()
-        for attempt in range(retries):
-            try:
-                async with self.pool.acquire() as connection:
-                    async with connection.cursor() as cursor:
-                        start_time = time.time()
-                        await cursor.execute(query, params)
-                        elapsed_time = time.time() - start_time
-                        logger.info(f"[DB] Запрос выполнен за {elapsed_time:.4f} сек.")
-                        if fetchone:
-                            result = await cursor.fetchone()
-                            logger.debug(f"[DB] Получена одна запись: {result}")
-                            return result
-                        if fetchall:
-                            result = await cursor.fetchall()
-                            logger.debug(f"[DB] Получено {len(result)} записей.")
-                            return result
-                        await connection.commit()
-                        return True
-            except aiomysql.Error as e:
-                logger.error(f"[DB] Ошибка выполнения запроса: {e}")
-                if attempt < retries - 1:
-                    logger.warning(f"[DB] Повторная попытка запроса ({attempt + 1}/{retries})...")
-                    await asyncio.sleep(1)
-                else:
+        async with self.pool.acquire() as connection:
+            async with connection.cursor() as cursor:
+                try:
+                    # Логируем запрос и параметры перед выполнением
+                    logger.debug(f"[DB] Выполнение запроса: {query}, параметры: {params}")
+                    start_time = time.time()
+                    await cursor.execute(query, params)
+                    elapsed_time = time.time() - start_time
+                    logger.info(f"[DB] Запрос выполнен за {elapsed_time:.4f} сек.")
+                
+                    if fetchone:
+                        result = await cursor.fetchone()
+                        # Проверяем, что результат - словарь или возвращаем пустой словарь
+                        logger.debug(f"[DB] Получена одна запись: {result}")
+                        return result if isinstance(result, dict) else {}
+                
+                    if fetchall:
+                        result = await cursor.fetchall()
+                        # Проверяем, что результат - список словарей или возвращаем пустой список
+                        logger.debug(f"[DB] Получено {len(result)} записей.")
+                        return result if isinstance(result, list) else []
+
+                    return True  # Если запрос не требует данных
+                except aiomysql.Error as e:
+                    logger.error(f"[DB] Ошибка выполнения запроса: {query}, параметры: {params}, ошибка: {e}")
                     raise
-            except Exception as e:
-                logger.error(f"Общая ошибка при выполнении запроса: {e}")
-                raise
+
 
     # === Управление пользователями === #
     async def register_user_if_not_exists(self, user_id, username, full_name, operator_id=None, password=None, role_id=None):
         """Регистрация пользователя, если он не существует в базе данных."""
-        query_check = "SELECT * FROM UsersTelegaBot WHERE user_id = %s"
-        user = await self.execute_query(query_check, (user_id,), fetchone=True)
-        if not user:
+        if not await self.user_exists(user_id):
             if password is None:
                 raise ValueError("Пароль не может быть пустым при регистрации нового пользователя.")
             query_insert = """
@@ -124,12 +155,18 @@ class DatabaseManager:
         """Получение пользователя по user_id."""
         query = "SELECT * FROM UsersTelegaBot WHERE user_id = %s"
         result = await self.execute_query(query, (user_id,), fetchone=True)
+        logger.debug(f"[DB] Результат запроса на extension для user_id {user_id}: {result}")
+        if not result or not isinstance(result, dict):
+            logger.warning(f"[DB] Пользователь с ID {user_id} не найден.")
+            return None
         return result
 
     async def get_user_role(self, user_id):
         """Получение роли пользователя по user_id."""
         query = "SELECT role_id FROM UsersTelegaBot WHERE user_id = %s"
         user_role = await self.execute_query(query, (user_id,), fetchone=True)
+        if not user_role:
+            logger.warning(f"[DB] Роль для пользователя с ID {user_id} не найдена.")
         return user_role['role_id'] if user_role else None
 
     async def update_user_password(self, user_id, hashed_password):
@@ -142,55 +179,103 @@ class DatabaseManager:
         """Получение хешированного пароля пользователя по его user_id."""
         query = "SELECT password FROM UsersTelegaBot WHERE user_id = %s"
         result = await self.execute_query(query, (user_id,), fetchone=True)
-        return result['password'] if result else None
+        if not result or not isinstance(result, dict):
+            logger.warning(f"[DB] Пользователь с ID {user_id} не найден.")
+            return None
+        return result
+    
+    async def get_role_password_by_id(self, role_id):
+        """Получает пароль роли по role_id из таблицы RolesTelegaBot."""
+        query = "SELECT role_password FROM RolesTelegaBot WHERE id = %s"
+        async with self.acquire() as connection:
+            async with connection.cursor() as cursor:
+                await cursor.execute(query, (role_id,))
+                result = await cursor.fetchone()
+                if result:
+                    return result.get('role_password')
+                return None
 
-    async def find_operator_by_id(self, operator_id):
-        """Поиск оператора по operator_id в таблице users."""
+    # === Управление операторами === #
+    async def find_operator_by_id(self, user_id):
+        """
+        Поиск оператора по его ID.
+        :param user_id: ID оператора.
+        :return: Информация об операторе или None, если оператор не найден.
+        """
+        query = "SELECT * FROM users WHERE id = %s"
+        result = await self.execute_query(query, (user_id,), fetchone=True)
+        if not result:
+            logger.warning(f"[DB] Оператор с ID {user_id} не найден.")
+        return result
+    async def find_operator_by_extension(self, extension):
+        """Поиск оператора по его extension в таблице users."""
         query = "SELECT * FROM users WHERE extension = %s"
-        result = await self.execute_query(query, (operator_id,), fetchone=True)
+        result = await self.execute_query(query, (extension,), fetchone=True)
+        if not result:
+            logger.warning(f"[DB] Оператор с extension {extension} не найден.")
         return result
 
     async def find_operator_by_name(self, operator_name):
         """Поиск оператора по имени в таблице users."""
         query = "SELECT * FROM users WHERE name = %s"
         result = await self.execute_query(query, (operator_name,), fetchone=True)
+        if not result:
+            logger.warning(f"[DB] Оператор с именем {operator_name} не найден.")
         return result
 
     async def get_role_id_by_name(self, role_name):
         """Получение role_id по названию роли."""
         query = "SELECT id FROM RolesTelegaBot WHERE role_name = %s"
         result = await self.execute_query(query, (role_name,), fetchone=True)
-        return result['id'] if result else None
+        if not result or not isinstance(result, dict):
+            logger.warning(f"[DB] Пользователь с ID {role_name} не найден.")
+            return None
+        return result
 
     async def get_role_name_by_id(self, role_id):
         """Получение названия роли по role_id."""
         query = "SELECT role_name FROM RolesTelegaBot WHERE id = %s"
         result = await self.execute_query(query, (role_id,), fetchone=True)
-        return result['role_name'] if result else None
+        if not result or not isinstance(result, dict):
+            logger.warning(f"[DB] Пользователь с ID {role_id} не найден.")
+            return None
+        return result
+    
+    async def get_operator_extension(self, user_id):
+        """
+        Получение extension по user_id из таблицы users.
+        :param user_id: ID пользователя.
+        :return: extension или None, если не найден.
+        """
+        query = "SELECT extension FROM users WHERE user_id = %s"
+        result = await self.execute_query(query, (user_id,), fetchone=True)
+        if result and 'extension' in result:
+            extension = result['extension']
+            logger.info(f"[DB] Найден extension {extension} для user_id {user_id}")
+            return extension
+        else:
+            logger.warning(f"[DB] Extension не найден для user_id {user_id}")
+            return None
+
+
 
     # === Работа с отчётами === #
-    async def save_report_to_db(self, user_id, total_calls, accepted_calls, booked_services, conversion_rate, 
-                                avg_call_rating, total_cancellations, cancellation_rate, total_conversation_time, 
-                                avg_conversation_time, avg_spam_time, total_spam_time, total_navigation_time, 
+    async def save_report_to_db(self, user_id, total_calls, accepted_calls, booked_services, conversion_rate,
+                                avg_call_rating, total_cancellations, cancellation_rate, total_conversation_time,
+                                avg_conversation_time, avg_spam_time, total_spam_time, total_navigation_time,
                                 avg_navigation_time, total_talk_time, complaint_calls, complaint_rating, recommendations):
         """Сохранение отчета в базу данных."""
-        # Логируем переданные данные
         logger.debug(f"Saving report to DB for user_id: {user_id}, data: {locals()}")
 
-        # Проверка типов данных перед вставкой
-        if not isinstance(total_calls, int) or not isinstance(accepted_calls, int) or not isinstance(booked_services, int):
-            logger.error("Тип данных для total_calls, accepted_calls или booked_services некорректен.")
-            return
-
         query = """
-        INSERT INTO reports (user_id, report_date, total_calls, accepted_calls, booked_services, conversion_rate, 
-                             avg_call_rating, total_cancellations, cancellation_rate, total_conversation_time, 
-                             avg_conversation_time, avg_spam_time, total_spam_time, total_navigation_time, 
+        INSERT INTO reports (user_id, report_date, total_calls, accepted_calls, booked_services, conversion_rate,
+                             avg_call_rating, total_cancellations, cancellation_rate, total_conversation_time,
+                             avg_conversation_time, avg_spam_time, total_spam_time, total_navigation_time,
                              avg_navigation_time, total_talk_time, complaint_calls, complaint_rating, recommendations)
-        VALUES (%s, CURRENT_DATE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, CURRENT_DATE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE 
-            total_calls=VALUES(total_calls), 
-            accepted_calls=VALUES(accepted_calls), 
+            total_calls=VALUES(total_calls),
+            accepted_calls=VALUES(accepted_calls),
             booked_services=VALUES(booked_services),
             conversion_rate=VALUES(conversion_rate),
             avg_call_rating=VALUES(avg_call_rating),
@@ -207,38 +292,82 @@ class DatabaseManager:
             complaint_rating=VALUES(complaint_rating),
             recommendations=VALUES(recommendations)
         """
-        await self.execute_query(query, (
+        params = (
             user_id, total_calls, accepted_calls, booked_services, conversion_rate, avg_call_rating,
             total_cancellations, cancellation_rate, total_conversation_time, avg_conversation_time,
             avg_spam_time, total_spam_time, total_navigation_time, avg_navigation_time, total_talk_time,
             complaint_calls, complaint_rating, recommendations
-        ))
+        )
+        await self.execute_query(query, params)
         logger.info(f"[DB] Отчет для user_id {user_id} сохранен.")
 
     async def get_reports_for_today(self):
         """Получение всех отчетов за текущий день."""
         query = """
-        SELECT user_id, report_date, total_calls, accepted_calls, booked_services, conversion_rate, avg_call_rating, 
-               total_cancellations, cancellation_rate, total_conversation_time, avg_conversation_time, avg_spam_time, 
-               total_spam_time, total_navigation_time, avg_navigation_time, total_talk_time, complaint_calls, 
+        SELECT user_id, report_date, total_calls, accepted_calls, booked_services, conversion_rate, avg_call_rating,
+               total_cancellations, cancellation_rate, total_conversation_time, avg_conversation_time, avg_spam_time,
+               total_spam_time, total_navigation_time, avg_navigation_time, total_talk_time, complaint_calls,
                complaint_rating, recommendations
-        FROM reports 
+        FROM reports
         WHERE report_date = CURRENT_DATE
         """
-        return await self.execute_query(query, fetchall=True)
+        
+        result = await self.execute_query(query, fetchall=True)
+        if not result:
+            logger.warning("[DB] Отчеты за текущий день не найдены.")
+            return []
+        return result
 
     # === Работа с таблицей call_scores === #
-    async def get_operator_calls(self, operator_id, start_date, end_date):
+    async def get_operator_calls(self, extension, start_date=None, end_date=None):
         """Получение звонков оператора за указанный период."""
-        query = """
-        SELECT * FROM call_scores
-        WHERE (caller_info LIKE %s OR called_info LIKE %s)
-        AND call_date BETWEEN %s AND %s
-        """
-        operator_pattern = f"%{operator_id}%"
-        return await self.execute_query(query, (operator_pattern, operator_pattern, start_date, end_date), fetchall=True)
+        if not await self.operator_exists(extension):
+            logger.warning(f"Оператор с extension {extension} не найден.")
+            return []
 
-    # === Работа с таблицами === #
+        query = """
+        SELECT u.*, cs.call_date, cs.call_score, cs.result, cs.talk_duration
+        FROM UsersTelegaBot u
+        JOIN call_scores cs 
+        ON (SUBSTRING_INDEX(cs.caller_info, ' ', 1) = u.extension
+        OR SUBSTRING_INDEX(cs.called_info, ' ', 1) = u.extension)
+        WHERE u.extension = %s
+        """
+        params = [extension]
+        if start_date and end_date:
+            query += " AND cs.call_date BETWEEN %s AND %s"
+            params.extend( [start_date, end_date])
+        result = await self.execute_query(query, params, fetchall=True)
+        if not result or not isinstance(result, list):
+            logger.warning(f"[DB] Звонки оператора с extension {extension} за период не найдены.")
+            return []
+        
+        return result
+
+    async def get_operator_call_metrics(self, extension, start_date=None, end_date=None):
+        """Получение метрик звонков оператора за определенный период."""
+        query = """
+        SELECT COUNT(*) as total_calls, 
+               AVG(talk_duration) as avg_talk_time,
+               SUM(CASE WHEN result = 'success' THEN 1 ELSE 0 END) as successful_calls
+        FROM call_scores
+        WHERE (caller_info LIKE %s OR called_info LIKE %s)
+        """
+        params = [f"%{extension}%", f"%{extension}%"]
+
+        if start_date:
+            query += " AND call_date >= %s"
+            params.append(start_date)
+        if end_date:
+            query += " AND call_date <= %s"
+            params.append(end_date)
+
+        result = await self.execute_query(query, params, fetchone=True)
+        if not result:
+            logger.warning(f"[DB] Метрики звонков для оператора с extension {extension} за период не найдены.")
+        return result
+
+    # === Создание таблиц === #
     async def create_tables(self):
         """Создание необходимых таблиц, если их не существует."""
         try:
@@ -335,3 +464,16 @@ class DatabaseManager:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close_pool()
+
+    # Добавление метода проверки существования пользователя/оператора
+    async def user_exists(self, user_id):
+        """Проверка существования пользователя по user_id."""
+        query = "SELECT 1 FROM UsersTelegaBot WHERE user_id = %s"
+        result = await self.execute_query(query, (user_id,), fetchone=True)
+        return bool(result)
+
+    async def operator_exists(self, extension):
+        """Проверка существования оператора по extension."""
+        query = "SELECT 1 FROM users WHERE extension = %s"
+        result = await self.execute_query(query, (extension,), fetchone=True)
+        return bool(result)

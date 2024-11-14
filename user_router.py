@@ -17,10 +17,8 @@ from telegram.constants import ParseMode
 
 from bot import split_text_into_chunks
 import config
-from operator_data import OperatorData  # Импорт модуля
-from report_generator import ReportGenerator  # Импорт модуля
-from admin_utils import get_user_role, is_authorized  # Импорт функций для работы с уровнями доступа
-
+from operator_data import OperatorData
+from admin_utils import get_user_role, is_authorized
 from logger_utils import setup_logging
 import time  # Для замера времени выполнения
 
@@ -40,7 +38,7 @@ scheduler = AsyncIOScheduler()
 # Помощь / Команды
 HELP_MESSAGE = """Commands:
 /start – Приветствие и инструкция
-/generate_report <operator_id> – Генерация отчета
+/generate_report <user_id> – Генерация отчета
 /request_stats – Запрос текущей статистики
 /help – Показать помощь
 /report_summary – Сводка по отчетам
@@ -100,7 +98,7 @@ async def daily_report():
         operators = await operator_data.get_all_operators_metrics()  # Асинхронный вызов
         for operator in operators:
             recommendations = await report_generator.generate_recommendations(operator)  # Асинхронный вызов
-            report = await report_generator.create_report(operator_id=operator["operator_id"], operator_data=operator, recommendations=recommendations)  # Асинхронный вызов
+            report = await report_generator.create_report(user_id=operator["user_id"], operator_data=operator, recommendations=recommendations)  # Асинхронный вызов
             await bot.send_message(chat_id=config.manager_chat_id, text=report)
         elapsed_time = time.time() - start_time
         logger.info(f"[КРОТ]: Ежедневный отчет успешно отправлен (Время выполнения: {elapsed_time:.4f} сек).")
@@ -146,22 +144,74 @@ async def help_handle(update: Update, context: CallbackContext):
 async def generate_report_handle(update: Update, context: CallbackContext):
     try:
         start_time = time.time()
-        operator_id = update.message.text.split()[1]
-        operator = await operator_data.get_operator_metrics(operator_id)  # Асинхронный вызов
-        if not operator:
-            await update.message.reply_text(f"Оператор с ID {operator_id} не найден.")
+
+        # Парсинг аргументов команды
+        command_args = update.message.text.split()
+
+        # Проверка на минимальное количество аргументов: должно быть хотя бы два (команда и user_id)
+        if len(command_args) < 2:
+            await update.message.reply_text(
+                "Пожалуйста, укажите user_id и опционально период (daily, weekly, monthly и т.д.).",
+                parse_mode=ParseMode.HTML
+            )
             return
 
-        recommendations = await report_generator.generate_recommendations(operator)  # Асинхронный вызов
-        report = await report_generator.create_report(operator_id=operator_id, operator_data=operator, recommendations=recommendations)  # Асинхронный вызов
+        # Извлечение user_id
+        user_id = command_args[1]
+
+        # Если указан период, используем его, иначе по умолчанию "daily"
+        if len(command_args) > 2:
+            period = command_args[2].lower()
+        else:
+            period = "daily"
+
+        # Проверка валидности периода
+        valid_periods = ['daily', 'weekly', 'biweekly', 'monthly', 'half_year', 'yearly']
+        if period not in valid_periods:
+            await update.message.reply_text(
+                f"Некорректный период. Допустимые значения: {', '.join(valid_periods)}.",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        # Получение метрик оператора за указанный период
+        operator = await operator_data.get_operator_metrics(user_id, period)
+        if not operator:
+            await update.message.reply_text(
+                f"Пользователь с ID {user_id} за период {period} не найден.",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        # Генерация рекомендаций и отчета
+        recommendations = await report_generator.generate_recommendations(operator)
+        report = await report_generator.create_report(
+            user_id=user_id, 
+            operator_data=operator, 
+            recommendations=recommendations
+        )
+
+        # Отправка отчета пользователю
         await update.message.reply_text(report, parse_mode=ParseMode.HTML)
+
+        # Логируем успешную генерацию отчета
         elapsed_time = time.time() - start_time
-        logger.info(f"[КРОТ]: Отчет для оператора {operator_id} успешно сгенерирован (Время выполнения: {elapsed_time:.4f} сек).")
+        logger.info(f"[КРОТ]: Отчет для пользователя {user_id} за период {period} успешно сгенерирован (Время выполнения: {elapsed_time:.4f} сек).")
+
     except IndexError:
-        await update.message.reply_text("Пожалуйста, укажите operator_id после команды /generate_report.", parse_mode=ParseMode.HTML)
+        # Если недостаточно аргументов в команде
+        await update.message.reply_text(
+            "Пожалуйста, укажите user_id и период после команды /generate_report.",
+            parse_mode=ParseMode.HTML
+        )
+
     except Exception as e:
+        # Логируем любую непредвиденную ошибку
         logger.error(f"[КРОТ]: Ошибка при генерации отчета: {traceback.format_exc()}")
-        await update.message.reply_text(f"Произошла ошибка: {e}")
+        await update.message.reply_text(
+            f"Произошла ошибка: {e}",
+            parse_mode=ParseMode.HTML
+        )
 
 @authorized(["view_reports"])
 async def report_summary_handle(update: Update, context: CallbackContext):
@@ -189,7 +239,7 @@ async def request_current_stats_handle(update: Update, context: CallbackContext)
             return
 
         report = await report_generator.create_report(
-            operator_id=user_id, 
+            user_id=user_id, 
             operator_data=operator, 
             recommendations="Ваш текущий отчет"
         )
