@@ -12806,3 +12806,92 @@ Alright, let's cut to the chase. This code is a classic case of a few fundamenta
 
 By addressing these points, you’ll enhance the robustness, performance, and security of your `RoleManager` class significantly. Get to it.
 
+2024-11-26 17:52:38,314 - Запуск анализа проекта в директории: /Users/vitalyefimov/Projects/operabot
+2024-11-26 17:52:38,343 - Найдено файлов для анализа: 26
+2024-11-26 17:52:38,343 - Начало анализа файла: /Users/vitalyefimov/Projects/operabot/db_helpers.py
+2024-11-26 17:52:38,362 - Разбивка файла /Users/vitalyefimov/Projects/operabot/db_helpers.py на 11 частей для анализа.
+2024-11-26 17:52:38,363 - Анализ части 1 из 11 для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py.
+2024-11-26 17:52:38,563 - Created a temporary directory at /var/folders/hd/n0gtwj2s46q6ld89lr_x06n80000gn/T/tmpk52c9s0r
+2024-11-26 17:52:38,563 - Writing /var/folders/hd/n0gtwj2s46q6ld89lr_x06n80000gn/T/tmpk52c9s0r/_remote_module_non_scriptable.py
+2024-11-26 17:54:47,923 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 17:54:47,924 - Анализ части 2 из 11 для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py.
+2024-11-26 17:57:01,749 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 17:57:01,751 - Анализ части 3 из 11 для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py.
+2024-11-26 17:58:44,231 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 17:58:44,233 - Анализ части 4 из 11 для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py.
+2024-11-26 18:01:12,106 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 18:01:12,109 - Анализ части 5 из 11 для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py.
+2024-11-26 18:03:54,864 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 18:03:54,867 - Анализ части 6 из 11 для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py.
+2024-11-26 18:06:41,288 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 18:06:41,289 - Анализ части 7 из 11 для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py.
+2024-11-26 18:07:29,237 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 18:07:29,238 - Анализ части 8 из 11 для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py.
+2024-11-26 18:08:03,716 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 18:08:03,718 - Анализ части 9 из 11 для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py.
+2024-11-26 18:10:41,590 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 18:10:41,592 - Анализ части 10 из 11 для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py.
+2024-11-26 18:10:46,838 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 18:10:46,838 - Анализ части 11 из 11 для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py.
+2024-11-26 18:14:29,246 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 18:14:29,250 - Результат анализа для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py сохранён в /Users/vitalyefimov/Projects/operabot/db_helpers.py_analysis.txt
+2024-11-26 18:14:29,251 - Начало анализа файла: /Users/vitalyefimov/Projects/operabot/auth.py
+2024-11-26 18:14:29,292 - Разбивка файла /Users/vitalyefimov/Projects/operabot/auth.py на 13 частей для анализа.
+2024-11-26 18:14:29,293 - Анализ части 1 из 13 для файла /Users/vitalyefimov/Projects/operabot/auth.py.
+2024-11-26 18:17:34,034 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 18:17:34,037 - Анализ части 2 из 13 для файла /Users/vitalyefimov/Projects/operabot/auth.py.
+2024-11-26 18:20:54,846 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 18:20:54,848 - Анализ части 3 из 13 для файла /Users/vitalyefimov/Projects/operabot/auth.py.
+2024-11-26 18:21:22,534 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 18:21:22,535 - Анализ части 4 из 13 для файла /Users/vitalyefimov/Projects/operabot/auth.py.
+2024-11-26 18:24:37,143 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 18:24:37,144 - Анализ части 5 из 13 для файла /Users/vitalyefimov/Projects/operabot/auth.py.
+2024-11-26 18:27:36,476 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 18:27:36,477 - Анализ части 6 из 13 для файла /Users/vitalyefimov/Projects/operabot/auth.py.
+2024-11-26 18:30:42,873 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 18:30:42,876 - Анализ части 7 из 13 для файла /Users/vitalyefimov/Projects/operabot/auth.py.
+2024-11-26 18:33:43,307 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 18:33:43,309 - Анализ части 8 из 13 для файла /Users/vitalyefimov/Projects/operabot/auth.py.
+2024-11-26 18:36:46,601 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 18:36:46,604 - Анализ части 9 из 13 для файла /Users/vitalyefimov/Projects/operabot/auth.py.
+2024-11-26 18:39:46,040 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 18:39:46,042 - Анализ части 10 из 13 для файла /Users/vitalyefimov/Projects/operabot/auth.py.
+2024-11-26 18:42:36,413 - Ошибка анализа с Hugging Face: Numpy is not available
+2024-11-26 18:42:36,416 - Анализ части 11 из 13 для файла /Users/vitalyefimov/Projects/operabot/auth.py.
+2024-11-27 10:00:13,211 - Запуск анализа проекта в директории: /Users/vitalyefimov/Projects/operabot
+2024-11-27 10:00:13,214 - Найдено файлов для анализа: 26
+2024-11-27 10:00:13,214 - Начало анализа файла: /Users/vitalyefimov/Projects/operabot/db_helpers.py
+2024-11-27 10:00:13,235 - Разбивка файла /Users/vitalyefimov/Projects/operabot/db_helpers.py на 3 частей для анализа.
+2024-11-27 10:00:13,235 - Анализ части 1 из 3 для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py.
+2024-11-27 10:00:13,520 - Created a temporary directory at /var/folders/hd/n0gtwj2s46q6ld89lr_x06n80000gn/T/tmplis_knpc
+2024-11-27 10:00:13,521 - Writing /var/folders/hd/n0gtwj2s46q6ld89lr_x06n80000gn/T/tmplis_knpc/_remote_module_non_scriptable.py
+2024-11-27 10:00:13,547 - Ошибка анализа с Hugging Face: Input length of input_ids is 2048, but `max_length` is set to 2048. This can lead to unexpected behavior. You should consider increasing `max_length` or, better yet, setting `max_new_tokens`.
+2024-11-27 10:00:13,548 - Анализ части 2 из 3 для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py.
+2024-11-27 10:00:13,552 - Ошибка анализа с Hugging Face: Input length of input_ids is 2048, but `max_length` is set to 2048. This can lead to unexpected behavior. You should consider increasing `max_length` or, better yet, setting `max_new_tokens`.
+2024-11-27 10:00:13,552 - Анализ части 3 из 3 для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py.
+2024-11-27 10:10:07,562 - Запуск анализа проекта в директории: /Users/vitalyefimov/Projects/operabot
+2024-11-27 10:10:07,562 - Найдено файлов для анализа: 26
+2024-11-27 10:10:07,699 - Начало анализа файла: /Users/vitalyefimov/Projects/operabot/db_helpers.py
+2024-11-27 10:10:07,722 - Разбивка файла /Users/vitalyefimov/Projects/operabot/db_helpers.py на 3 частей для анализа.
+2024-11-27 10:10:07,722 - Анализ части 1 из 3 для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py.
+2024-11-27 10:10:07,968 - Created a temporary directory at /var/folders/hd/n0gtwj2s46q6ld89lr_x06n80000gn/T/tmptfq4uqdg
+2024-11-27 10:10:07,969 - Writing /var/folders/hd/n0gtwj2s46q6ld89lr_x06n80000gn/T/tmptfq4uqdg/_remote_module_non_scriptable.py
+2024-11-27 10:10:08,035 - Ошибка анализа с Hugging Face: Input length of input_ids is 2048, but `max_length` is set to 2048. This can lead to unexpected behavior. You should consider increasing `max_length` or, better yet, setting `max_new_tokens`.
+2024-11-27 10:10:08,036 - Анализ части 2 из 3 для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py.
+2024-11-27 10:10:08,039 - Ошибка анализа с Hugging Face: Input length of input_ids is 2048, but `max_length` is set to 2048. This can lead to unexpected behavior. You should consider increasing `max_length` or, better yet, setting `max_new_tokens`.
+2024-11-27 10:10:08,040 - Анализ части 3 из 3 для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py.
+2024-11-27 10:16:56,694 - Запуск анализа проекта в директории: /Users/vitalyefimov/Projects/operabot
+2024-11-27 10:16:56,695 - Найдено файлов для анализа: 26
+2024-11-27 10:16:56,695 - Начало анализа файла: /Users/vitalyefimov/Projects/operabot/db_helpers.py
+2024-11-27 10:16:56,720 - Разбивка файла /Users/vitalyefimov/Projects/operabot/db_helpers.py на 1 частей для анализа.
+2024-11-27 10:16:56,953 - Анализ части 1 из 1 для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py.
+2024-11-27 10:16:57,332 - Created a temporary directory at /var/folders/hd/n0gtwj2s46q6ld89lr_x06n80000gn/T/tmpe9lxl0tp
+2024-11-27 10:16:57,333 - Writing /var/folders/hd/n0gtwj2s46q6ld89lr_x06n80000gn/T/tmpe9lxl0tp/_remote_module_non_scriptable.py
+2024-11-27 10:20:33,429 - Результат анализа для файла /Users/vitalyefimov/Projects/operabot/db_helpers.py сохранён в /Users/vitalyefimov/Projects/operabot/db_helpers.py_analysis.txt
+2024-11-27 10:20:33,437 - Начало анализа файла: /Users/vitalyefimov/Projects/operabot/auth.py
+2024-11-27 10:20:33,464 - Разбивка файла /Users/vitalyefimov/Projects/operabot/auth.py на 1 частей для анализа.
+2024-11-27 10:20:33,464 - Анализ части 1 из 1 для файла /Users/vitalyefimov/Projects/operabot/auth.py.
+2024-11-27 10:26:22,848 - Результат анализа для файла /Users/vitalyefimov/Projects/operabot/auth.py сохранён в /Users/vitalyefimov/Projects/operabot/auth.py_analysis.txt
+2024-11-27 10:26:22,849 - Начало анализа файла: /Users/vitalyefimov/Projects/operabot/db_manager.py
+2024-11-27 10:26:22,873 - Разбивка файла /Users/vitalyefimov/Projects/operabot/db_manager.py на 1 частей для анализа.
+2024-11-27 10:26:22,873 - Анализ части 1 из 1 для файла /Users/vitalyefimov/Projects/operabot/db_manager.py.

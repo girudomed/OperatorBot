@@ -1,3 +1,7 @@
 .env
 venv/
 venv/lib/python3.11/site-packages/torch/lib/libtorch_cpu.dylib
+# Исключаем файлы моделей Hugging Face
+.cache/huggingface/
+# Исключаем кеш моделей Hugging Face
+models/

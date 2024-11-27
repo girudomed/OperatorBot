@@ -71,8 +71,9 @@ class OpenAIReportGenerator:
         self.operator_data = OperatorData(db_manager)
         self.model = model  # Устанавливаем модель gpt-4o-mini 
         self.permissions_manager = PermissionsManager(db_manager)
+
         self.metrics_calculator = MetricsCalculator(
-            connection=db_manager,
+            db_manager=self.db_manager,
             execute_query=execute_async_query,
             logger=logger
         )
@@ -330,7 +331,9 @@ class OpenAIReportGenerator:
         # Возвращаем данные в виде словаря
         return {
             'call_history': call_history_data,
-            'call_scores': call_scores_data
+            'call_scores': call_scores_data,
+            'accepted_calls': accepted_calls,
+            'missed_calls': missed_calls
         }
     
     async def generate_report(self, connection, user_id, period='daily', date_range=None):
@@ -387,15 +390,27 @@ class OpenAIReportGenerator:
                 logger.warning(f"[КРОТ]: Нет данных по оператору с extension {extension} за период {start_date} - {end_date}")
                 return f"Данные по оператору {operator_name} (extension {extension}) за период {start_date} - {end_date} не найдены."
             logger.info(f"[КРОТ]: Получено {len(operator_data)} записей для оператора с extension {extension}")
+            accepted_calls = operator_data.get('accepted_calls', [])
+            missed_calls = operator_data.get('missed_calls', [])
+            logger.info(f"[КРОТ]: Перед вызовом calculate_operator_metrics: accepted_calls={len(accepted_calls)}, missed_calls={len(missed_calls)}")
+
             call_history_data = list(operator_data.get('call_history', []))
             call_scores_data = list(operator_data.get('call_scores', []))
             combined_call_data = call_history_data + call_scores_data
             # Расчет метрик оператора
             operator_metrics = await self.metrics_calculator.calculate_operator_metrics(
-                connection, extension, start_date, end_date
-            )            
-            if not operator_metrics:
-                return "Ошибка: Метрики оператора не рассчитаны."
+            extension=extension,
+            start_date=start_date,
+            end_date=end_date
+            )
+
+            # Используем метрики для генерации отчёта
+            accepted_calls = operator_metrics.get('accepted_calls')
+            missed_calls = operator_metrics.get('missed_calls')
+
+            if accepted_calls is None or missed_calls is None:
+                self.logger.error("Ошибка: Отсутствуют метрики accepted_calls, missed_calls.")
+                return
 
             ## Обновляем список обязательных метрик
             required_metrics = [

@@ -6,12 +6,15 @@ from dotenv import load_dotenv
 from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
 # Загружаем переменные из .env файла
 load_dotenv()
+import torch
 
 # Получаем API ключ OpenAI из .env
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 if not client.api_key:
     raise ValueError("API ключ для OpenAI не найден. Добавьте его в файл .env как OPENAI_API_KEY")
+
+torch.set_num_threads(1)  # Установите количество потоков в 1
 
 # Настройка логирования
 logging.basicConfig(filename='analyzer.log', level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -46,7 +49,9 @@ Analyze the provided Python code. Your tasks are:
             max_length=2048,
             num_return_sequences=1,
             temperature=0.7,
-            top_p=0.9
+            top_p=0.9,
+            truncation=True,  # Указание усечения
+            pad_token_id=tokenizer.eos_token_id  # Установка токена для заполнения
         )
         generated_text = result[0]['generated_text']
         analysis = generated_text.split("### Analysis and recommendations:")[1].strip()
@@ -78,8 +83,12 @@ def analyze_file(file_path):
     full_analysis = ""
     for idx, chunk in enumerate(code_chunks):
         logger.info(f"Анализ части {idx + 1} из {len(code_chunks)} для файла {file_path}.")
-        hf_analysis = analyze_code_with_hf(chunk)  # Используем Hugging Face модель
-        full_analysis += f"\n--- Часть {idx + 1} ---\n{hf_analysis}\n"
+        try:
+            hf_analysis = analyze_code_with_hf(chunk)
+            full_analysis += f"\n--- Часть {idx + 1} ---\n{hf_analysis}\n"
+        except Exception as e:
+            logger.error(f"Ошибка при анализе части {idx + 1} файла {file_path}: {str(e)}")
+            full_analysis += f"\n--- Часть {idx + 1} ---\nОшибка анализа: {str(e)}\n"
 
     # Сохраняем результаты анализа в отдельный файл
     analysis_file = f"{file_path}_analysis.txt"
@@ -101,20 +110,15 @@ def scan_project_files(directory):
 
 def split_code_into_chunks(code, max_token_size=512):
     """
-    Разбиваем код на части, чтобы не превышать лимит токенов.
+    Разбиваем код на части, чтобы не превышать лимит токенов, и обрабатываем с учётом длины.
     """
-    tokens = tokenizer.tokenize(code)
+    tokens = tokenizer(code, truncation=True, max_length=max_token_size, return_tensors="pt")
     chunks = []
-    current_chunk = []
 
-    for token in tokens:
-        current_chunk.append(token)
-        if len(current_chunk) >= max_token_size:
-            chunks.append(tokenizer.convert_tokens_to_string(current_chunk))
-            current_chunk = []
-
-    if current_chunk:
-        chunks.append(tokenizer.convert_tokens_to_string(current_chunk))
+    # Разделяем на куски и конвертируем обратно в текст
+    for i in range(0, len(tokens["input_ids"][0]), max_token_size):
+        chunk = tokens["input_ids"][0][i : i + max_token_size]
+        chunks.append(tokenizer.decode(chunk, skip_special_tokens=True))
 
     return chunks
 

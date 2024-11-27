@@ -14,7 +14,6 @@ class DBManager:
         """
         self.db_config = db_config
         self.pool = None
-
     async def connect(self):
         """
         Подключение к базе данных и создание пула соединений.

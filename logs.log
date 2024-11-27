@@ -9256,3 +9256,890 @@ Traceback (most recent call last):
   File "/opt/anaconda3/lib/python3.11/asyncio/selector_events.py", line 88, in close
     raise RuntimeError("Cannot close a running event loop")
 RuntimeError: Cannot close a running event loop
+2024-11-27 10:36:11,131 - config - INFO - Логирование инициализировано. Логи сохраняются в файл: logs.log
+2024-11-27 10:36:11,132 - config - INFO - Время отправки отчетов операторам установлено на 18:00
+2024-11-27 10:36:11,132 - config - INFO - Конфигурация загружена успешно за 0.00 секунд.
+2024-11-27 10:36:11 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 10:36:11 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 10:36:11 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 10:36:11 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 10:36:11 - [КРОТ] - KROT - INFO - Бот успешно запущен.
+2024-11-27 10:36:11 - [КРОТ] - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 10:36:11,906 - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 10:36:11 - [КРОТ] - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 10:36:11,907 - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 10:36:11 - [КРОТ] - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 10:36:11,914 - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 10:36:11 - [КРОТ] - KROT - INFO - Запуск бота...
+2024-11-27 10:36:11,924 - KROT - INFO - Запуск бота...
+2024-11-27 10:36:11 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 10:36:11 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 10:36:12 - [КРОТ] - KROT - INFO - Успешное подключение к базе данных.
+2024-11-27 10:36:12 - [КРОТ] - KROT - INFO - Обработчики команд настроены.
+2024-11-27 10:36:12 - [КРОТ] - KROT - INFO - Бот успешно инициализирован.
+2024-11-27 10:36:18 - [КРОТ] - KROT - ERROR - Необработанное исключение
+Traceback (most recent call last):
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 959, in <module>
+    asyncio.run(main())
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 35, in run
+    return loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 90, in run_until_complete
+    return f.result()
+           ^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.11/asyncio/futures.py", line 203, in result
+    raise self._exception.with_traceback(self._exception_tb)
+  File "/opt/anaconda3/lib/python3.11/asyncio/tasks.py", line 277, in __step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 957, in main
+    await bot.run()
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 349, in run
+    await self.application.run_polling()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 881, in run_polling
+    return self.__run(
+           ^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 1109, in __run
+    loop.close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/unix_events.py", line 68, in close
+    super().close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/selector_events.py", line 88, in close
+    raise RuntimeError("Cannot close a running event loop")
+RuntimeError: Cannot close a running event loop
+2024-11-27 12:11:12,074 - config - INFO - Логирование инициализировано. Логи сохраняются в файл: logs.log
+2024-11-27 12:11:12,075 - config - INFO - Время отправки отчетов операторам установлено на 18:00
+2024-11-27 12:11:12,075 - config - INFO - Конфигурация загружена успешно за 0.00 секунд.
+2024-11-27 12:11:12 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 12:11:12 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 12:11:12 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 12:11:12 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 12:11:12 - [КРОТ] - KROT - INFO - Бот успешно запущен.
+2024-11-27 12:11:12 - [КРОТ] - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 12:11:12 - [КРОТ] - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 12:11:12,887 - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 12:11:12,887 - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 12:11:12 - [КРОТ] - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 12:11:12,894 - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 12:11:12 - [КРОТ] - KROT - INFO - Запуск бота...
+2024-11-27 12:11:12,901 - KROT - INFO - Запуск бота...
+2024-11-27 12:11:12 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 12:11:12 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 12:11:13 - [КРОТ] - KROT - INFO - Успешное подключение к базе данных.
+2024-11-27 12:11:13 - [КРОТ] - KROT - INFO - Обработчики команд настроены.
+2024-11-27 12:11:13 - [КРОТ] - KROT - INFO - Бот успешно инициализирован.
+2024-11-27 12:17:46 - [КРОТ] - KROT - INFO - Пользователь 309606681 успешно аутентифицирован как {'role_name': 'Developer'}. (Время выполнения: 0.3702 сек)
+2024-11-27 12:17:46 - [КРОТ] - KROT - INFO - [КРОТ]: Роль пользователя с ID '309606681' успешно получена: Developer (Время выполнения: 0.2321 сек).
+2024-11-27 12:17:47 - [КРОТ] - KROT - INFO - Команды установлены для роли: Developer
+2024-11-27 12:17:47 - [КРОТ] - KROT - INFO - Пользователь 309606681 успешно вошел в систему с ролью {'role_name': 'Developer'}.
+2024-11-27 12:17:49 - [КРОТ] - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 12:17:49 - [КРОТ] - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-19
+2024-11-27 12:17:49 - [КРОТ] - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 12:17:49 - [КРОТ] - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 12:17:51 - [КРОТ] - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 12:27:37 - [КРОТ] - KROT - ERROR - Необработанное исключение
+Traceback (most recent call last):
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 959, in <module>
+    asyncio.run(main())
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 35, in run
+    return loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 90, in run_until_complete
+    return f.result()
+           ^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.11/asyncio/futures.py", line 203, in result
+    raise self._exception.with_traceback(self._exception_tb)
+  File "/opt/anaconda3/lib/python3.11/asyncio/tasks.py", line 277, in __step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 957, in main
+    await bot.run()
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 349, in run
+    await self.application.run_polling()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 881, in run_polling
+    return self.__run(
+           ^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 1109, in __run
+    loop.close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/unix_events.py", line 68, in close
+    super().close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/selector_events.py", line 88, in close
+    raise RuntimeError("Cannot close a running event loop")
+RuntimeError: Cannot close a running event loop
+2024-11-27 12:27:38,930 - config - INFO - Логирование инициализировано. Логи сохраняются в файл: logs.log
+2024-11-27 12:27:38,930 - config - INFO - Время отправки отчетов операторам установлено на 18:00
+2024-11-27 12:27:38,930 - config - INFO - Конфигурация загружена успешно за 0.00 секунд.
+2024-11-27 12:27:39 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 12:27:39 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 12:27:39 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 12:27:39 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 12:27:39 - [КРОТ] - KROT - INFO - Бот успешно запущен.
+2024-11-27 12:27:39 - [КРОТ] - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 12:27:39 - [КРОТ] - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 12:27:39,664 - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 12:27:39,664 - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 12:27:39 - [КРОТ] - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 12:27:39,677 - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 12:27:39 - [КРОТ] - KROT - INFO - Запуск бота...
+2024-11-27 12:27:39,689 - KROT - INFO - Запуск бота...
+2024-11-27 12:27:39 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 12:27:39 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 12:27:40 - [КРОТ] - KROT - INFO - Успешное подключение к базе данных.
+2024-11-27 12:27:40 - [КРОТ] - KROT - INFO - Обработчики команд настроены.
+2024-11-27 12:27:40 - [КРОТ] - KROT - INFO - Бот успешно инициализирован.
+2024-11-27 12:27:53 - [КРОТ] - KROT - INFO - Пользователь 309606681 успешно аутентифицирован как {'role_name': 'Developer'}. (Время выполнения: 0.3566 сек)
+2024-11-27 12:27:53 - [КРОТ] - KROT - INFO - [КРОТ]: Роль пользователя с ID '309606681' успешно получена: Developer (Время выполнения: 0.2477 сек).
+2024-11-27 12:27:54 - [КРОТ] - KROT - INFO - Команды установлены для роли: Developer
+2024-11-27 12:27:54 - [КРОТ] - KROT - INFO - Пользователь 309606681 успешно вошел в систему с ролью {'role_name': 'Developer'}.
+2024-11-27 12:27:55 - [КРОТ] - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 12:27:55 - [КРОТ] - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-19
+2024-11-27 12:27:55 - [КРОТ] - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 12:27:55 - [КРОТ] - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 12:28:32 - [КРОТ] - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 13:15:25 - [КРОТ] - KROT - ERROR - Необработанное исключение
+Traceback (most recent call last):
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 959, in <module>
+    asyncio.run(main())
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 35, in run
+    return loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 90, in run_until_complete
+    return f.result()
+           ^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.11/asyncio/futures.py", line 203, in result
+    raise self._exception.with_traceback(self._exception_tb)
+  File "/opt/anaconda3/lib/python3.11/asyncio/tasks.py", line 277, in __step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 957, in main
+    await bot.run()
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 349, in run
+    await self.application.run_polling()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 881, in run_polling
+    return self.__run(
+           ^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 1109, in __run
+    loop.close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/unix_events.py", line 68, in close
+    super().close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/selector_events.py", line 88, in close
+    raise RuntimeError("Cannot close a running event loop")
+RuntimeError: Cannot close a running event loop
+2024-11-27 13:15:26,934 - config - INFO - Логирование инициализировано. Логи сохраняются в файл: logs.log
+2024-11-27 13:15:26,934 - config - INFO - Время отправки отчетов операторам установлено на 18:00
+2024-11-27 13:15:26,934 - config - INFO - Конфигурация загружена успешно за 0.00 секунд.
+2024-11-27 13:15:27 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:15:27 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:15:27 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:15:27 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:15:27 - [КРОТ] - KROT - INFO - Бот успешно запущен.
+2024-11-27 13:15:27 - [КРОТ] - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:15:27 - [КРОТ] - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 13:15:27,623 - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:15:27,623 - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 13:15:27 - [КРОТ] - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 13:15:27,630 - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 13:15:27 - [КРОТ] - KROT - INFO - Запуск бота...
+2024-11-27 13:15:27,637 - KROT - INFO - Запуск бота...
+2024-11-27 13:15:27 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:15:27 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:15:28 - [КРОТ] - KROT - INFO - Успешное подключение к базе данных.
+2024-11-27 13:15:28 - [КРОТ] - KROT - INFO - Обработчики команд настроены.
+2024-11-27 13:15:28 - [КРОТ] - KROT - INFO - Бот успешно инициализирован.
+2024-11-27 13:17:54 - [КРОТ] - KROT - INFO - Пользователь 309606681 успешно аутентифицирован как {'role_name': 'Developer'}. (Время выполнения: 0.3524 сек)
+2024-11-27 13:17:54 - [КРОТ] - KROT - INFO - [КРОТ]: Роль пользователя с ID '309606681' успешно получена: Developer (Время выполнения: 0.2332 сек).
+2024-11-27 13:17:55 - [КРОТ] - KROT - INFO - Команды установлены для роли: Developer
+2024-11-27 13:17:55 - [КРОТ] - KROT - INFO - Пользователь 309606681 успешно вошел в систему с ролью {'role_name': 'Developer'}.
+2024-11-27 13:17:59 - [КРОТ] - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 13:17:59 - [КРОТ] - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-19
+2024-11-27 13:17:59 - [КРОТ] - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 13:17:59 - [КРОТ] - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 13:18:01 - [КРОТ] - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 13:19:48 - [КРОТ] - KROT - ERROR - Необработанное исключение
+Traceback (most recent call last):
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 959, in <module>
+    asyncio.run(main())
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 35, in run
+    return loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 90, in run_until_complete
+    return f.result()
+           ^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.11/asyncio/futures.py", line 203, in result
+    raise self._exception.with_traceback(self._exception_tb)
+  File "/opt/anaconda3/lib/python3.11/asyncio/tasks.py", line 277, in __step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 957, in main
+    await bot.run()
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 349, in run
+    await self.application.run_polling()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 881, in run_polling
+    return self.__run(
+           ^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 1109, in __run
+    loop.close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/unix_events.py", line 68, in close
+    super().close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/selector_events.py", line 88, in close
+    raise RuntimeError("Cannot close a running event loop")
+RuntimeError: Cannot close a running event loop
+2024-11-27 13:19:49,455 - config - INFO - Логирование инициализировано. Логи сохраняются в файл: logs.log
+2024-11-27 13:19:49,455 - config - INFO - Время отправки отчетов операторам установлено на 18:00
+2024-11-27 13:19:49,455 - config - INFO - Конфигурация загружена успешно за 0.00 секунд.
+2024-11-27 13:19:49 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:19:49 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:19:49 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:19:50 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:19:50 - [КРОТ] - KROT - INFO - Бот успешно запущен.
+2024-11-27 13:19:50 - [КРОТ] - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:19:50 - [КРОТ] - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 13:19:50,321 - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:19:50,321 - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 13:19:50 - [КРОТ] - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 13:19:50,328 - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 13:19:50 - [КРОТ] - KROT - INFO - Запуск бота...
+2024-11-27 13:19:50,336 - KROT - INFO - Запуск бота...
+2024-11-27 13:19:50 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:19:50 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:19:50 - [КРОТ] - KROT - INFO - Успешное подключение к базе данных.
+2024-11-27 13:19:50 - [КРОТ] - KROT - INFO - Обработчики команд настроены.
+2024-11-27 13:19:50 - [КРОТ] - KROT - INFO - Бот успешно инициализирован.
+2024-11-27 13:19:58 - [КРОТ] - KROT - INFO - Пользователь 309606681 успешно аутентифицирован как {'role_name': 'Developer'}. (Время выполнения: 0.3629 сек)
+2024-11-27 13:19:58 - [КРОТ] - KROT - INFO - [КРОТ]: Роль пользователя с ID '309606681' успешно получена: Developer (Время выполнения: 0.2398 сек).
+2024-11-27 13:19:58 - [КРОТ] - KROT - INFO - Команды установлены для роли: Developer
+2024-11-27 13:19:58 - [КРОТ] - KROT - INFO - Пользователь 309606681 успешно вошел в систему с ролью {'role_name': 'Developer'}.
+2024-11-27 13:19:59 - [КРОТ] - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 13:19:59 - [КРОТ] - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-19
+2024-11-27 13:19:59 - [КРОТ] - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 13:19:59 - [КРОТ] - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 13:21:17 - [КРОТ] - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 13:52:09 - [КРОТ] - KROT - ERROR - Необработанное исключение
+Traceback (most recent call last):
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 959, in <module>
+    asyncio.run(main())
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 35, in run
+    return loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 90, in run_until_complete
+    return f.result()
+           ^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.11/asyncio/futures.py", line 203, in result
+    raise self._exception.with_traceback(self._exception_tb)
+  File "/opt/anaconda3/lib/python3.11/asyncio/tasks.py", line 277, in __step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 957, in main
+    await bot.run()
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 349, in run
+    await self.application.run_polling()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 881, in run_polling
+    return self.__run(
+           ^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 1109, in __run
+    loop.close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/unix_events.py", line 68, in close
+    super().close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/selector_events.py", line 88, in close
+    raise RuntimeError("Cannot close a running event loop")
+RuntimeError: Cannot close a running event loop
+2024-11-27 13:52:10,910 - config - INFO - Логирование инициализировано. Логи сохраняются в файл: logs.log
+2024-11-27 13:52:10,910 - config - INFO - Время отправки отчетов операторам установлено на 18:00
+2024-11-27 13:52:10,910 - config - INFO - Конфигурация загружена успешно за 0.00 секунд.
+2024-11-27 13:52:11 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:52:11 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:52:11 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:52:11 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:52:11 - [КРОТ] - KROT - INFO - Бот успешно запущен.
+2024-11-27 13:52:11 - [КРОТ] - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:52:11 - [КРОТ] - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 13:52:11,824 - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 13:52:11,824 - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 13:52:11 - [КРОТ] - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 13:52:11,831 - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 13:52:11 - [КРОТ] - KROT - INFO - Запуск бота...
+2024-11-27 13:52:11,840 - KROT - INFO - Запуск бота...
+2024-11-27 13:52:12 - [КРОТ] - KROT - INFO - Успешное подключение к базе данных.
+2024-11-27 13:52:12 - [КРОТ] - KROT - INFO - Обработчики команд настроены.
+2024-11-27 13:52:12,229 - KROT - INFO - Успешное подключение к базе данных.
+2024-11-27 13:52:12,230 - KROT - INFO - Обработчики команд настроены.
+2024-11-27 13:52:12 - [КРОТ] - KROT - INFO - Бот успешно инициализирован.
+2024-11-27 13:52:12,237 - KROT - INFO - Бот успешно инициализирован.
+2024-11-27 13:52:28 - [КРОТ] - KROT - INFO - Пользователь 309606681 успешно аутентифицирован как {'role_name': 'Developer'}. (Время выполнения: 0.3591 сек)
+2024-11-27 13:52:28,721 - KROT - INFO - Пользователь 309606681 успешно аутентифицирован как {'role_name': 'Developer'}. (Время выполнения: 0.3591 сек)
+2024-11-27 13:52:28 - [КРОТ] - KROT - INFO - [КРОТ]: Роль пользователя с ID '309606681' успешно получена: Developer (Время выполнения: 0.2363 сек).
+2024-11-27 13:52:28,957 - KROT - INFO - [КРОТ]: Роль пользователя с ID '309606681' успешно получена: Developer (Время выполнения: 0.2363 сек).
+2024-11-27 13:52:29 - [КРОТ] - KROT - INFO - Команды установлены для роли: Developer
+2024-11-27 13:52:29,248 - KROT - INFO - Команды установлены для роли: Developer
+2024-11-27 13:52:29 - [КРОТ] - KROT - INFO - Пользователь 309606681 успешно вошел в систему с ролью {'role_name': 'Developer'}.
+2024-11-27 13:52:29,399 - KROT - INFO - Пользователь 309606681 успешно вошел в систему с ролью {'role_name': 'Developer'}.
+2024-11-27 13:52:30 - [КРОТ] - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 13:52:30,151 - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 13:52:30 - [КРОТ] - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-19
+2024-11-27 13:52:30 - [КРОТ] - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 13:52:30,156 - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-19
+2024-11-27 13:52:30 - [КРОТ] - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 13:52:30,156 - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 13:52:30,156 - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 13:52:31 - [КРОТ] - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 13:52:31,556 - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 14:03:58 - [КРОТ] - KROT - ERROR - Необработанное исключение
+Traceback (most recent call last):
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 959, in <module>
+    asyncio.run(main())
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 35, in run
+    return loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 90, in run_until_complete
+    return f.result()
+           ^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.11/asyncio/futures.py", line 203, in result
+    raise self._exception.with_traceback(self._exception_tb)
+  File "/opt/anaconda3/lib/python3.11/asyncio/tasks.py", line 277, in __step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 957, in main
+    await bot.run()
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 349, in run
+    await self.application.run_polling()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 881, in run_polling
+    return self.__run(
+           ^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 1109, in __run
+    loop.close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/unix_events.py", line 68, in close
+    super().close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/selector_events.py", line 88, in close
+    raise RuntimeError("Cannot close a running event loop")
+RuntimeError: Cannot close a running event loop
+2024-11-27 14:03:58,661 - KROT - ERROR - Необработанное исключение
+Traceback (most recent call last):
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 959, in <module>
+    asyncio.run(main())
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 35, in run
+    return loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 90, in run_until_complete
+    return f.result()
+           ^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.11/asyncio/futures.py", line 203, in result
+    raise self._exception.with_traceback(self._exception_tb)
+  File "/opt/anaconda3/lib/python3.11/asyncio/tasks.py", line 277, in __step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 957, in main
+    await bot.run()
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 349, in run
+    await self.application.run_polling()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 881, in run_polling
+    return self.__run(
+           ^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 1109, in __run
+    loop.close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/unix_events.py", line 68, in close
+    super().close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/selector_events.py", line 88, in close
+    raise RuntimeError("Cannot close a running event loop")
+RuntimeError: Cannot close a running event loop
+2024-11-27 14:03:59,956 - config - INFO - Логирование инициализировано. Логи сохраняются в файл: logs.log
+2024-11-27 14:03:59,956 - config - INFO - Время отправки отчетов операторам установлено на 18:00
+2024-11-27 14:03:59,956 - config - INFO - Конфигурация загружена успешно за 0.00 секунд.
+2024-11-27 14:04:00 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:04:00 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:04:00 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:04:00 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:04:00 - [КРОТ] - KROT - INFO - Бот успешно запущен.
+2024-11-27 14:04:00 - [КРОТ] - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:04:00,892 - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:04:00 - [КРОТ] - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 14:04:00,892 - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 14:04:00 - [КРОТ] - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 14:04:00,901 - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 14:04:00 - [КРОТ] - KROT - INFO - Запуск бота...
+2024-11-27 14:04:00,913 - KROT - INFO - Запуск бота...
+2024-11-27 14:04:01 - [КРОТ] - KROT - INFO - Успешное подключение к базе данных.
+2024-11-27 14:04:01,307 - KROT - INFO - Успешное подключение к базе данных.
+2024-11-27 14:04:01 - [КРОТ] - KROT - INFO - Обработчики команд настроены.
+2024-11-27 14:04:01,308 - KROT - INFO - Обработчики команд настроены.
+2024-11-27 14:04:01 - [КРОТ] - KROT - INFO - Бот успешно инициализирован.
+2024-11-27 14:04:01,314 - KROT - INFO - Бот успешно инициализирован.
+2024-11-27 14:04:12 - [КРОТ] - KROT - INFO - Пользователь 309606681 успешно аутентифицирован как {'role_name': 'Developer'}. (Время выполнения: 0.3551 сек)
+2024-11-27 14:04:12,882 - KROT - INFO - Пользователь 309606681 успешно аутентифицирован как {'role_name': 'Developer'}. (Время выполнения: 0.3551 сек)
+2024-11-27 14:04:13 - [КРОТ] - KROT - INFO - [КРОТ]: Роль пользователя с ID '309606681' успешно получена: Developer (Время выполнения: 0.2343 сек).
+2024-11-27 14:04:13,117 - KROT - INFO - [КРОТ]: Роль пользователя с ID '309606681' успешно получена: Developer (Время выполнения: 0.2343 сек).
+2024-11-27 14:04:13 - [КРОТ] - KROT - INFO - Команды установлены для роли: Developer
+2024-11-27 14:04:13,392 - KROT - INFO - Команды установлены для роли: Developer
+2024-11-27 14:04:13 - [КРОТ] - KROT - INFO - Пользователь 309606681 успешно вошел в систему с ролью {'role_name': 'Developer'}.
+2024-11-27 14:04:13,524 - KROT - INFO - Пользователь 309606681 успешно вошел в систему с ролью {'role_name': 'Developer'}.
+2024-11-27 14:04:14 - [КРОТ] - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 14:04:14,673 - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 14:04:14 - [КРОТ] - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-19
+2024-11-27 14:04:14 - [КРОТ] - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 14:04:14,677 - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-19
+2024-11-27 14:04:14 - [КРОТ] - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 14:04:14,677 - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 14:04:14,678 - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 14:04:16 - [КРОТ] - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 14:04:16,097 - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 14:16:07 - [КРОТ] - KROT - ERROR - Необработанное исключение
+Traceback (most recent call last):
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 959, in <module>
+    asyncio.run(main())
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 35, in run
+    return loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 90, in run_until_complete
+    return f.result()
+           ^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.11/asyncio/futures.py", line 203, in result
+    raise self._exception.with_traceback(self._exception_tb)
+  File "/opt/anaconda3/lib/python3.11/asyncio/tasks.py", line 277, in __step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 957, in main
+    await bot.run()
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 349, in run
+    await self.application.run_polling()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 881, in run_polling
+    return self.__run(
+           ^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 1109, in __run
+    loop.close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/unix_events.py", line 68, in close
+    super().close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/selector_events.py", line 88, in close
+    raise RuntimeError("Cannot close a running event loop")
+RuntimeError: Cannot close a running event loop
+2024-11-27 14:16:07,802 - KROT - ERROR - Необработанное исключение
+Traceback (most recent call last):
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 959, in <module>
+    asyncio.run(main())
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 35, in run
+    return loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 90, in run_until_complete
+    return f.result()
+           ^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.11/asyncio/futures.py", line 203, in result
+    raise self._exception.with_traceback(self._exception_tb)
+  File "/opt/anaconda3/lib/python3.11/asyncio/tasks.py", line 277, in __step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 957, in main
+    await bot.run()
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 349, in run
+    await self.application.run_polling()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 881, in run_polling
+    return self.__run(
+           ^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 1109, in __run
+    loop.close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/unix_events.py", line 68, in close
+    super().close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/selector_events.py", line 88, in close
+    raise RuntimeError("Cannot close a running event loop")
+RuntimeError: Cannot close a running event loop
+2024-11-27 14:16:09,103 - config - INFO - Логирование инициализировано. Логи сохраняются в файл: logs.log
+2024-11-27 14:16:09,103 - config - INFO - Время отправки отчетов операторам установлено на 18:00
+2024-11-27 14:16:09,103 - config - INFO - Конфигурация загружена успешно за 0.00 секунд.
+2024-11-27 14:16:09 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:16:09 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:16:09 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:16:09 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:16:09 - [КРОТ] - KROT - INFO - Бот успешно запущен.
+2024-11-27 14:16:09 - [КРОТ] - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:16:09 - [КРОТ] - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 14:16:09,804 - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:16:09,804 - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 14:16:09 - [КРОТ] - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 14:16:09,811 - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 14:16:09 - [КРОТ] - KROT - INFO - Запуск бота...
+2024-11-27 14:16:09,819 - KROT - INFO - Запуск бота...
+2024-11-27 14:16:09 - [КРОТ] - KROT - ERROR - Необработанное исключение
+Traceback (most recent call last):
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 959, in <module>
+    asyncio.run(main())
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 35, in run
+    return loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 90, in run_until_complete
+    return f.result()
+           ^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.11/asyncio/futures.py", line 203, in result
+    raise self._exception.with_traceback(self._exception_tb)
+  File "/opt/anaconda3/lib/python3.11/asyncio/tasks.py", line 277, in __step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 956, in main
+    bot = TelegramBot(config.telegram_token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 169, in __init__
+    self.report_generator = OpenAIReportGenerator(self.db_manager, model="gpt-4o-mini")
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/openai_telebot.py", line 74, in __init__
+    self.metrics_calculator = MetricsCalculator(
+                              ^^^^^^^^^^^^^^^^^^
+TypeError: MetricsCalculator.__init__() missing 1 required positional argument: 'connection'
+2024-11-27 14:16:09,848 - KROT - ERROR - Необработанное исключение
+Traceback (most recent call last):
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 959, in <module>
+    asyncio.run(main())
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 35, in run
+    return loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 90, in run_until_complete
+    return f.result()
+           ^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.11/asyncio/futures.py", line 203, in result
+    raise self._exception.with_traceback(self._exception_tb)
+  File "/opt/anaconda3/lib/python3.11/asyncio/tasks.py", line 277, in __step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 956, in main
+    bot = TelegramBot(config.telegram_token)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 169, in __init__
+    self.report_generator = OpenAIReportGenerator(self.db_manager, model="gpt-4o-mini")
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/openai_telebot.py", line 74, in __init__
+    self.metrics_calculator = MetricsCalculator(
+                              ^^^^^^^^^^^^^^^^^^
+TypeError: MetricsCalculator.__init__() missing 1 required positional argument: 'connection'
+2024-11-27 14:30:25,702 - config - INFO - Логирование инициализировано. Логи сохраняются в файл: logs.log
+2024-11-27 14:30:25,703 - config - INFO - Время отправки отчетов операторам установлено на 18:00
+2024-11-27 14:30:25,703 - config - INFO - Конфигурация загружена успешно за 0.00 секунд.
+2024-11-27 14:30:25 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:30:26 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:30:26 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:30:26 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:30:26 - [КРОТ] - KROT - INFO - Бот успешно запущен.
+2024-11-27 14:30:26 - [КРОТ] - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:30:26 - [КРОТ] - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 14:30:26,446 - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:30:26,446 - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 14:30:26 - [КРОТ] - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 14:30:26,453 - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 14:30:26 - [КРОТ] - KROT - INFO - Запуск бота...
+2024-11-27 14:30:26,461 - KROT - INFO - Запуск бота...
+2024-11-27 14:30:27 - [КРОТ] - KROT - INFO - Успешное подключение к базе данных.
+2024-11-27 14:30:27 - [КРОТ] - KROT - INFO - Обработчики команд настроены.
+2024-11-27 14:30:27,118 - KROT - INFO - Успешное подключение к базе данных.
+2024-11-27 14:30:27,119 - KROT - INFO - Обработчики команд настроены.
+2024-11-27 14:30:27 - [КРОТ] - KROT - INFO - Бот успешно инициализирован.
+2024-11-27 14:30:27,125 - KROT - INFO - Бот успешно инициализирован.
+2024-11-27 14:31:25 - [КРОТ] - KROT - INFO - Пользователь 309606681 успешно аутентифицирован как {'role_name': 'Developer'}. (Время выполнения: 0.3580 сек)
+2024-11-27 14:31:25,197 - KROT - INFO - Пользователь 309606681 успешно аутентифицирован как {'role_name': 'Developer'}. (Время выполнения: 0.3580 сек)
+2024-11-27 14:31:25 - [КРОТ] - KROT - INFO - [КРОТ]: Роль пользователя с ID '309606681' успешно получена: Developer (Время выполнения: 0.2430 сек).
+2024-11-27 14:31:25,442 - KROT - INFO - [КРОТ]: Роль пользователя с ID '309606681' успешно получена: Developer (Время выполнения: 0.2430 сек).
+2024-11-27 14:31:25 - [КРОТ] - KROT - INFO - Команды установлены для роли: Developer
+2024-11-27 14:31:25,797 - KROT - INFO - Команды установлены для роли: Developer
+2024-11-27 14:31:26 - [КРОТ] - KROT - INFO - Пользователь 309606681 успешно вошел в систему с ролью {'role_name': 'Developer'}.
+2024-11-27 14:31:26,030 - KROT - INFO - Пользователь 309606681 успешно вошел в систему с ролью {'role_name': 'Developer'}.
+2024-11-27 14:31:26 - [КРОТ] - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 14:31:26,842 - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 14:31:26 - [КРОТ] - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-19
+2024-11-27 14:31:26,848 - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-19
+2024-11-27 14:31:26 - [КРОТ] - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 14:31:26 - [КРОТ] - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 14:31:26,849 - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 14:31:26,849 - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 14:31:29 - [КРОТ] - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 14:31:29,893 - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 14:43:41 - [КРОТ] - KROT - ERROR - Необработанное исключение
+Traceback (most recent call last):
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 959, in <module>
+    asyncio.run(main())
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 35, in run
+    return loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 90, in run_until_complete
+    return f.result()
+           ^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.11/asyncio/futures.py", line 203, in result
+    raise self._exception.with_traceback(self._exception_tb)
+  File "/opt/anaconda3/lib/python3.11/asyncio/tasks.py", line 277, in __step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 957, in main
+    await bot.run()
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 349, in run
+    await self.application.run_polling()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 881, in run_polling
+    return self.__run(
+           ^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 1109, in __run
+    loop.close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/unix_events.py", line 68, in close
+    super().close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/selector_events.py", line 88, in close
+    raise RuntimeError("Cannot close a running event loop")
+RuntimeError: Cannot close a running event loop
+2024-11-27 14:43:41,350 - KROT - ERROR - Необработанное исключение
+Traceback (most recent call last):
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 959, in <module>
+    asyncio.run(main())
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 35, in run
+    return loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 90, in run_until_complete
+    return f.result()
+           ^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.11/asyncio/futures.py", line 203, in result
+    raise self._exception.with_traceback(self._exception_tb)
+  File "/opt/anaconda3/lib/python3.11/asyncio/tasks.py", line 277, in __step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 957, in main
+    await bot.run()
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 349, in run
+    await self.application.run_polling()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 881, in run_polling
+    return self.__run(
+           ^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 1109, in __run
+    loop.close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/unix_events.py", line 68, in close
+    super().close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/selector_events.py", line 88, in close
+    raise RuntimeError("Cannot close a running event loop")
+RuntimeError: Cannot close a running event loop
+2024-11-27 14:43:42,555 - config - INFO - Логирование инициализировано. Логи сохраняются в файл: logs.log
+2024-11-27 14:43:42,555 - config - INFO - Время отправки отчетов операторам установлено на 18:00
+2024-11-27 14:43:42,555 - config - INFO - Конфигурация загружена успешно за 0.00 секунд.
+2024-11-27 14:43:42 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:43:42 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:43:42 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:43:43 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:43:43 - [КРОТ] - KROT - INFO - Бот успешно запущен.
+2024-11-27 14:43:43 - [КРОТ] - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:43:43 - [КРОТ] - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 14:43:43,208 - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 14:43:43,208 - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 14:43:43 - [КРОТ] - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 14:43:43,214 - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 14:43:43 - [КРОТ] - KROT - INFO - Запуск бота...
+2024-11-27 14:43:43,222 - KROT - INFO - Запуск бота...
+2024-11-27 14:43:43 - [КРОТ] - KROT - INFO - Успешное подключение к базе данных.
+2024-11-27 14:43:43 - [КРОТ] - KROT - INFO - Обработчики команд настроены.
+2024-11-27 14:43:43,612 - KROT - INFO - Успешное подключение к базе данных.
+2024-11-27 14:43:43,612 - KROT - INFO - Обработчики команд настроены.
+2024-11-27 14:43:43 - [КРОТ] - KROT - INFO - Бот успешно инициализирован.
+2024-11-27 14:43:43,615 - KROT - INFO - Бот успешно инициализирован.
+2024-11-27 14:43:54 - [КРОТ] - KROT - INFO - Пользователь 309606681 успешно аутентифицирован как {'role_name': 'Developer'}. (Время выполнения: 0.3832 сек)
+2024-11-27 14:43:54,306 - KROT - INFO - Пользователь 309606681 успешно аутентифицирован как {'role_name': 'Developer'}. (Время выполнения: 0.3832 сек)
+2024-11-27 14:43:54 - [КРОТ] - KROT - INFO - [КРОТ]: Роль пользователя с ID '309606681' успешно получена: Developer (Время выполнения: 0.2397 сек).
+2024-11-27 14:43:54,547 - KROT - INFO - [КРОТ]: Роль пользователя с ID '309606681' успешно получена: Developer (Время выполнения: 0.2397 сек).
+2024-11-27 14:43:54 - [КРОТ] - KROT - INFO - Команды установлены для роли: Developer
+2024-11-27 14:43:54,913 - KROT - INFO - Команды установлены для роли: Developer
+2024-11-27 14:43:55 - [КРОТ] - KROT - INFO - Пользователь 309606681 успешно вошел в систему с ролью {'role_name': 'Developer'}.
+2024-11-27 14:43:55,100 - KROT - INFO - Пользователь 309606681 успешно вошел в систему с ролью {'role_name': 'Developer'}.
+2024-11-27 14:43:55 - [КРОТ] - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 14:43:55,599 - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 14:43:55 - [КРОТ] - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-19
+2024-11-27 14:43:55 - [КРОТ] - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 14:43:55,603 - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-19
+2024-11-27 14:43:55 - [КРОТ] - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 14:43:55,603 - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 14:43:55,604 - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 14:44:24 - [КРОТ] - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 14:44:24,839 - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 14:44:31 - [КРОТ] - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 14:44:31 - [КРОТ] - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-18
+2024-11-27 14:44:31 - [КРОТ] - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 14:44:31,514 - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 14:44:31,515 - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-18
+2024-11-27 14:44:31,516 - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 14:44:31 - [КРОТ] - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 14:44:31,518 - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 14:45:00 - [КРОТ] - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 14:45:00,089 - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 16:30:09 - [КРОТ] - KROT - ERROR - Необработанное исключение
+Traceback (most recent call last):
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 959, in <module>
+    asyncio.run(main())
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 35, in run
+    return loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 90, in run_until_complete
+    return f.result()
+           ^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.11/asyncio/futures.py", line 203, in result
+    raise self._exception.with_traceback(self._exception_tb)
+  File "/opt/anaconda3/lib/python3.11/asyncio/tasks.py", line 277, in __step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 957, in main
+    await bot.run()
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 349, in run
+    await self.application.run_polling()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 881, in run_polling
+    return self.__run(
+           ^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 1109, in __run
+    loop.close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/unix_events.py", line 68, in close
+    super().close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/selector_events.py", line 88, in close
+    raise RuntimeError("Cannot close a running event loop")
+RuntimeError: Cannot close a running event loop
+2024-11-27 16:30:09,962 - KROT - ERROR - Необработанное исключение
+Traceback (most recent call last):
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 959, in <module>
+    asyncio.run(main())
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 35, in run
+    return loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 90, in run_until_complete
+    return f.result()
+           ^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.11/asyncio/futures.py", line 203, in result
+    raise self._exception.with_traceback(self._exception_tb)
+  File "/opt/anaconda3/lib/python3.11/asyncio/tasks.py", line 277, in __step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 957, in main
+    await bot.run()
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 349, in run
+    await self.application.run_polling()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 881, in run_polling
+    return self.__run(
+           ^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 1109, in __run
+    loop.close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/unix_events.py", line 68, in close
+    super().close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/selector_events.py", line 88, in close
+    raise RuntimeError("Cannot close a running event loop")
+RuntimeError: Cannot close a running event loop
+2024-11-27 16:30:11,545 - config - INFO - Логирование инициализировано. Логи сохраняются в файл: logs.log
+2024-11-27 16:30:11,545 - config - INFO - Время отправки отчетов операторам установлено на 18:00
+2024-11-27 16:30:11,545 - config - INFO - Конфигурация загружена успешно за 0.00 секунд.
+2024-11-27 16:30:11 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 16:30:11 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 16:30:11 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 16:30:12 - [КРОТ] - KROT - INFO - [КРОТ]: Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 16:30:12 - [КРОТ] - KROT - INFO - Бот успешно запущен.
+2024-11-27 16:30:12 - [КРОТ] - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 16:30:12,366 - KROT - INFO - Логирование настроено. Логи сохраняются в файл: logs.log
+2024-11-27 16:30:12 - [КРОТ] - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 16:30:12,366 - KROT - INFO - Настройка HTTPXRequest...
+2024-11-27 16:30:12 - [КРОТ] - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 16:30:12,373 - KROT - INFO - Настройка приложения Telegram...
+2024-11-27 16:30:12 - [КРОТ] - KROT - INFO - Запуск бота...
+2024-11-27 16:30:12,380 - KROT - INFO - Запуск бота...
+2024-11-27 16:30:12 - [КРОТ] - KROT - INFO - Успешное подключение к базе данных.
+2024-11-27 16:30:12 - [КРОТ] - KROT - INFO - Обработчики команд настроены.
+2024-11-27 16:30:12,778 - KROT - INFO - Успешное подключение к базе данных.
+2024-11-27 16:30:12,778 - KROT - INFO - Обработчики команд настроены.
+2024-11-27 16:30:12 - [КРОТ] - KROT - INFO - Бот успешно инициализирован.
+2024-11-27 16:30:12,784 - KROT - INFO - Бот успешно инициализирован.
+2024-11-27 16:30:24 - [КРОТ] - KROT - INFO - Пользователь 309606681 успешно аутентифицирован как {'role_name': 'Developer'}. (Время выполнения: 0.3619 сек)
+2024-11-27 16:30:24,048 - KROT - INFO - Пользователь 309606681 успешно аутентифицирован как {'role_name': 'Developer'}. (Время выполнения: 0.3619 сек)
+2024-11-27 16:30:24 - [КРОТ] - KROT - INFO - [КРОТ]: Роль пользователя с ID '309606681' успешно получена: Developer (Время выполнения: 0.2362 сек).
+2024-11-27 16:30:24,285 - KROT - INFO - [КРОТ]: Роль пользователя с ID '309606681' успешно получена: Developer (Время выполнения: 0.2362 сек).
+2024-11-27 16:30:24 - [КРОТ] - KROT - INFO - Команды установлены для роли: Developer
+2024-11-27 16:30:24,578 - KROT - INFO - Команды установлены для роли: Developer
+2024-11-27 16:30:24 - [КРОТ] - KROT - INFO - Пользователь 309606681 успешно вошел в систему с ролью {'role_name': 'Developer'}.
+2024-11-27 16:30:24,734 - KROT - INFO - Пользователь 309606681 успешно вошел в систему с ролью {'role_name': 'Developer'}.
+2024-11-27 16:30:26 - [КРОТ] - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 16:30:26,699 - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 16:30:26 - [КРОТ] - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-19
+2024-11-27 16:30:26 - [КРОТ] - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 16:30:26,703 - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-19
+2024-11-27 16:30:26 - [КРОТ] - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 16:30:26,703 - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 16:30:26,704 - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 16:30:55 - [КРОТ] - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 16:30:55,041 - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 16:31:32 - [КРОТ] - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 16:31:32,813 - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 16:31:32 - [КРОТ] - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-18
+2024-11-27 16:31:32,815 - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-18
+2024-11-27 16:31:32 - [КРОТ] - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 16:31:32 - [КРОТ] - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 16:31:32,816 - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 16:31:32,817 - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 16:31:55 - [КРОТ] - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 16:31:55,674 - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 16:34:18 - [КРОТ] - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 16:34:18,804 - KROT - INFO - Команда /generate_report получена от пользователя 309606681
+2024-11-27 16:34:18 - [КРОТ] - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-18
+2024-11-27 16:34:18 - [КРОТ] - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 16:34:18,806 - KROT - INFO - Кастомный диапазон дат: 2024-11-18 - 2024-11-18
+2024-11-27 16:34:18 - [КРОТ] - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 16:34:18,807 - KROT - INFO - Начата генерация отчета для пользователя 8 за период 'custom'.
+2024-11-27 16:34:18,808 - KROT - INFO - Запрос на генерацию отчета для user_id 8 с периодом custom
+2024-11-27 16:34:40 - [КРОТ] - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 16:34:40,334 - KROT - INFO - Отчет для пользователя 8 успешно сгенерирован и отправлен.
+2024-11-27 16:35:19 - [КРОТ] - KROT - ERROR - Необработанное исключение
+Traceback (most recent call last):
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 959, in <module>
+    asyncio.run(main())
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 35, in run
+    return loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 90, in run_until_complete
+    return f.result()
+           ^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.11/asyncio/futures.py", line 203, in result
+    raise self._exception.with_traceback(self._exception_tb)
+  File "/opt/anaconda3/lib/python3.11/asyncio/tasks.py", line 277, in __step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 957, in main
+    await bot.run()
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 349, in run
+    await self.application.run_polling()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 881, in run_polling
+    return self.__run(
+           ^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 1109, in __run
+    loop.close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/unix_events.py", line 68, in close
+    super().close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/selector_events.py", line 88, in close
+    raise RuntimeError("Cannot close a running event loop")
+RuntimeError: Cannot close a running event loop
+2024-11-27 16:35:19,036 - KROT - ERROR - Необработанное исключение
+Traceback (most recent call last):
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 959, in <module>
+    asyncio.run(main())
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 35, in run
+    return loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/nest_asyncio.py", line 90, in run_until_complete
+    return f.result()
+           ^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.11/asyncio/futures.py", line 203, in result
+    raise self._exception.with_traceback(self._exception_tb)
+  File "/opt/anaconda3/lib/python3.11/asyncio/tasks.py", line 277, in __step
+    result = coro.send(None)
+             ^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 957, in main
+    await bot.run()
+  File "/Users/vitalyefimov/Projects/operabot/bot.py", line 349, in run
+    await self.application.run_polling()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 881, in run_polling
+    return self.__run(
+           ^^^^^^^^^^^
+  File "/Users/vitalyefimov/Projects/operabot/venv/lib/python3.11/site-packages/telegram/ext/_application.py", line 1109, in __run
+    loop.close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/unix_events.py", line 68, in close
+    super().close()
+  File "/opt/anaconda3/lib/python3.11/asyncio/selector_events.py", line 88, in close
+    raise RuntimeError("Cannot close a running event loop")
+RuntimeError: Cannot close a running event loop

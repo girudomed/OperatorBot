@@ -5,11 +5,12 @@ import datetime
 from typing import List, Dict, Any, Optional, Union, Tuple
 import aiomysql
 from db_utils import execute_async_query
+from operator_data import OperatorData
 
 
 class MetricsCalculator:
-    def __init__(self, connection, execute_query, logger=None):
-        self.connection = connection
+    def __init__(self, db_manager, execute_query, logger=None):
+        self.db_manager = db_manager
         self.execute_query = execute_query
         self.logger = logger or logging.getLogger(__name__)
         stream_handler = logging.StreamHandler()
@@ -35,11 +36,12 @@ class MetricsCalculator:
         scores = []
         for call in call_scores_data:
             call_score = call.get('call_score')
-            if call_score and call_score.replace('.', '', 1).isdigit():
+            if call_score and str(call_score).replace('.', '', 1).isdigit():
                 scores.append(float(call_score))
             else:
                 self.logger.warning(f"Некорректное значение call_score: {call_score}")
         avg_score = sum(scores) / len(scores) if scores else 0.0
+        self.logger.info(f"[КРОТ]: Расчитанная средняя оценка: {avg_score:.2f}")
         return avg_score
     
     
@@ -51,12 +53,11 @@ class MetricsCalculator:
         return sum(durations) / len(durations) if durations else 0.0
     
     async def calculate_operator_metrics(
-        self,
-        connection: aiomysql.Connection,
-        extension: str,
-        start_date: Union[str, datetime.date, datetime.datetime],
-        end_date: Union[str, datetime.date, datetime.datetime]
-    ) -> Optional[Dict[str, Union[str, int, float]]]:
+    self,
+    extension: str,
+    start_date: Union[str, datetime.date, datetime.datetime],
+    end_date: Union[str, datetime.date, datetime.datetime]
+) -> Optional[Dict[str, Union[str, int, float]]]:
         """
         Расчет всех метрик оператора на основе данных звонков и дополнительной информации.
         """
@@ -65,102 +66,87 @@ class MetricsCalculator:
         try:
             # Валидация и преобразование дат
             start_datetime, end_datetime = self.validate_date_range(start_date, end_date)
-            start_timestamp = int(start_datetime.timestamp())  # Unix timestamp для call_history
-            end_timestamp = int(end_datetime.timestamp())     # Unix timestamp для call_history
         except (ValueError, TypeError) as e:
             self.logger.error(f"[КРОТ]: Ошибка валидации дат: {e}")
             return None
 
-        # SQL-запросы
-        call_history_query = """
-        SELECT caller_info, called_info, context_start_time, talk_duration
-        FROM call_history
-        WHERE 
-            (caller_info LIKE %s OR called_info LIKE %s)
-            AND context_start_time BETWEEN %s AND %s
-        """
-        call_scores_query = """
-        SELECT caller_info, called_info, call_date, talk_duration, call_category, call_score, result
-        FROM call_scores
-        WHERE 
-            (caller_info LIKE %s OR called_info LIKE %s)
-            AND call_date BETWEEN %s AND %s
-        """
-
-        try:
-            # Параметры запросов
-            params_call_history = (
-                f"%{extension}%", 
-                f"%{extension}%", 
-                start_timestamp, 
-                end_timestamp
-            )
-            params_call_scores = (
-                f"%{extension}%", 
-                f"%{extension}%", 
-                start_datetime.strftime('%Y-%m-%d %H:%M:%S'), 
-                end_datetime.strftime('%Y-%m-%d %H:%M:%S')
-            )
-            # Выполнение запросов
-            call_history_data = await self.execute_query(connection, call_history_query, params_call_history)
-            call_scores_data = await self.execute_query(connection, call_scores_query, params_call_scores)
-
-        except Exception as e:
-            self.logger.error(f"[КРОТ]: Ошибка при выполнении SQL-запроса: {e}")
+        # Получение данных о звонках
+        operator_data_instance = OperatorData(self.db_manager)
+        operator_calls = await operator_data_instance.get_operator_calls(extension, start_date, end_date)
+        if not operator_calls:
+            self.logger.warning(f"[КРОТ]: Данные о звонках не найдены для оператора {extension}")
             return None
 
-        # Проверка данных
-        if not call_history_data and not call_scores_data:
-            self.logger.warning(f"[КРОТ]: Данные о звонках не найдены для периода {start_datetime} - {end_datetime}")
-            return None
+        self.logger.info(f"[КРОТ]: Получено {len(operator_calls)} звонков для оператора {extension}")
 
-        self.logger.info(f"[КРОТ]: Найдено {len(call_history_data)} записей в call_history")
-        self.logger.info(f"[КРОТ]: Найдено {len(call_scores_data)} записей в call_scores")
+        # Разделение на принятые и пропущенные звонки
+        accepted_calls = [call for call in operator_calls if call.get('talk_duration') and float(call['talk_duration']) > 0]
+        missed_calls = [call for call in operator_calls if not call.get('talk_duration') or float(call['talk_duration']) == 0]
 
-        # Расчет общих метрик звонков
-        total_calls = len(call_history_data)
-        accepted_calls = sum(
-            1 for call in call_history_data 
-            if call.get('talk_duration') is not None and float(call.get('talk_duration', 0)) > 0
-        )
-        missed_calls = total_calls - accepted_calls
-        missed_rate = (missed_calls / total_calls) * 100 if total_calls > 0 else 0.0
+        accepted_calls_count = len(accepted_calls)
+        missed_calls_count = len(missed_calls)
+        total_calls = accepted_calls_count + missed_calls_count
+        missed_rate = (missed_calls_count / total_calls) * 100 if total_calls > 0 else 0.0
+
+        self.logger.info(f"[КРОТ]: Всего звонков: {total_calls}")
+        self.logger.info(f"[КРОТ]: Принятых звонков: {accepted_calls_count}")
+        self.logger.info(f"[КРОТ]: Пропущенных звонков: {missed_calls_count}")
+
+        # Продолжайте расчет метрик, используя accepted_calls и missed_calls
 
         # Метрики по записям и конверсии
         booked_calls = sum(
-            1 for call in call_scores_data if call.get('call_category') == 'Запись на услугу'
+            1 for call in accepted_calls if call.get('call_category') == 'Запись на услугу'
         )
+        self.logger.info(f"[КРОТ]: Количество записей на услугу (booked_calls): {booked_calls}")
+
         total_leads = sum(
-            1 for call in call_scores_data if call.get('call_category') in ['Лид без записи', 'Запись на услугу']
+            1 for call in accepted_calls if call.get('call_category') in ['Лид без записи', 'Запись на услугу']
         )
+        self.logger.info(f"[КРОТ]: Общее количество лидов (total_leads): {total_leads}")
+
         conversion_rate_leads = (booked_calls / total_leads) * 100 if total_leads > 0 else 0.0
+        self.logger.info(f"[КРОТ]: Конверсия в запись от желающих записаться (conversion_rate_leads): {conversion_rate_leads:.2f}%")
 
         # Средние оценки звонков
-        avg_call_rating = self.calculate_avg_score(call_scores_data)
+        avg_call_rating = self.calculate_avg_score(accepted_calls)
+        self.logger.info(f"[КРОТ]: Средняя оценка всех разговоров (avg_call_rating): {avg_call_rating:.2f}")
+
         lead_call_scores = [
-            float(call['call_score']) for call in call_scores_data
-            if call.get('call_category') in ['Лид без записи', 'Запись на услугу'] and call.get('call_score') is not None
+            float(call['call_score']) for call in accepted_calls
+            if call.get('call_category') in ['Лид без записи', 'Запись на услугу'] and call.get('call_score')
         ]
         avg_lead_call_rating = sum(lead_call_scores) / len(lead_call_scores) if lead_call_scores else 0.0
+        self.logger.info(f"[КРОТ]: Средняя оценка разговоров для желающих записаться (avg_lead_call_rating): {avg_lead_call_rating:.2f}")
 
         # Метрики по отменам и переносу записей
         total_cancellations = sum(
-            1 for call in call_scores_data if call.get('call_category') == 'Отмена записи'
+            1 for call in accepted_calls if call.get('call_category') == 'Отмена записи'
         )
+        self.logger.info(f"[КРОТ]: Общее количество отмен (total_cancellations): {total_cancellations}")
+
         avg_cancel_score = self.calculate_avg_score(
-            [call for call in call_scores_data if call.get('call_category') == 'Отмена записи']
+            [call for call in accepted_calls if call.get('call_category') == 'Отмена записи']
         )
+        self.logger.info(f"[КРОТ]: Средняя оценка звонков по отмене (avg_cancel_score): {avg_cancel_score:.2f}")
+
         cancellation_reschedules = sum(
-            1 for call in call_scores_data if call.get('call_category') in ['Отмена записи', 'Перенос записи']
+            1 for call in accepted_calls if call.get('call_category') in ['Отмена записи', 'Перенос записи']
         )
+        self.logger.info(f"[КРОТ]: Общее количество отмен и переносов (cancellation_reschedules): {cancellation_reschedules}")
+
         cancellation_rate = (total_cancellations / cancellation_reschedules) * 100 if cancellation_reschedules > 0 else 0.0
+        self.logger.info(f"[КРОТ]: Доля отмен от числа позвонивших отменить или перенести запись (cancellation_rate): {cancellation_rate:.2f}%")
 
         # Общая длительность и среднее время разговора
         total_conversation_time = sum(
-            float(call.get('talk_duration', 0)) for call in call_history_data 
-            if call.get('talk_duration') is not None and float(call.get('talk_duration', 0)) > 10
+            float(call.get('talk_duration', 0)) for call in accepted_calls
+            if call.get('talk_duration') and float(call.get('talk_duration', 0)) > 10
         )
-        avg_conversation_time = total_conversation_time / accepted_calls if accepted_calls > 0 else 0.0
+        self.logger.info(f"[КРОТ]: Общая длительность разговоров (total_conversation_time): {total_conversation_time:.2f} секунд")
+
+        avg_conversation_time = total_conversation_time / accepted_calls_count if accepted_calls_count > 0 else 0.0
+        self.logger.info(f"[КРОТ]: Среднее время разговора (avg_conversation_time): {avg_conversation_time:.2f} секунд")
 
         # Временные метрики по категориям
         predefined_categories = {
@@ -173,35 +159,39 @@ class MetricsCalculator:
             'Резерв': 'avg_time_reservations',
             'Перенос записи': 'avg_time_reschedule',
         }
-        avg_times_by_category = {metric_key: 0.0 for metric_key in predefined_categories.values()}        
+        avg_times_by_category = {metric_key: 0.0 for metric_key in predefined_categories.values()}
         for category_name, metric_key in predefined_categories.items():
             calls_in_category = [
-                call for call in call_scores_data
-                if call.get('call_category') == category_name 
-                and call.get('talk_duration') is not None
-                and float(call.get('talk_duration', 0)) > 3
+                call for call in accepted_calls
+                if call.get('call_category') == category_name
+                and call.get('talk_duration') and float(call.get('talk_duration', 0)) > 3
             ]
+            self.logger.info(f"[КРОТ]: Количество звонков в категории '{category_name}': {len(calls_in_category)}")
             if calls_in_category:
                 total_duration = sum(float(call['talk_duration']) for call in calls_in_category)
                 avg_duration = total_duration / len(calls_in_category)
                 avg_times_by_category[metric_key] = avg_duration
+                self.logger.info(f"[КРОТ]: Среднее время в категории '{category_name}' ({metric_key}): {avg_duration:.2f} секунд")
             else:
-                avg_times_by_category[metric_key] = 0.0
+                self.logger.info(f"[КРОТ]: Нет данных для категории '{category_name}'")
 
         # Жалобы
         complaint_calls = sum(
-            1 for call in call_scores_data if call.get('call_category') == 'Жалоба'
+            1 for call in accepted_calls if call.get('call_category') == 'Жалоба'
         )
+        self.logger.info(f"[КРОТ]: Количество звонков с жалобами (complaint_calls): {complaint_calls}")
+
         complaint_rating = self.calculate_avg_score(
-            [call for call in call_scores_data if call.get('call_category') == 'Жалоба']
+            [call for call in accepted_calls if call.get('call_category') == 'Жалоба']
         )
+        self.logger.info(f"[КРОТ]: Средняя оценка звонков с жалобами (complaint_rating): {complaint_rating:.2f}")
 
         # Агрегация метрик в общий словарь
         operator_metrics = {
             'extension': extension,
             'total_calls': total_calls,
-            'accepted_calls': accepted_calls,
-            'missed_calls': missed_calls,
+            'accepted_calls': accepted_calls_count,
+            'missed_calls': missed_calls_count,
             'missed_rate': missed_rate,
             'booked_calls': booked_calls,
             'conversion_rate_leads': conversion_rate_leads,
@@ -220,8 +210,11 @@ class MetricsCalculator:
         operator_metrics.update(avg_times_by_category)
 
         self.logger.info(f"[КРОТ]: Метрики рассчитаны для оператора с extension {extension}")
+        self.logger.debug(f"[КРОТ]: Итоговые метрики: {operator_metrics}")
+
         return operator_metrics
-    
+        
+
     def calculate_total_duration(
         self, operator_data: List[Dict[str, Any]], category: Optional[str] = None
     ) -> float:        

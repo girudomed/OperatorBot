@@ -3,7 +3,7 @@
 from asyncio.log import logger
 import logging
 import time
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import aiomysql  # Для замера времени
 from logger_utils import setup_logging
@@ -60,7 +60,8 @@ class OperatorData:
         Инициализация с использованием db_manager для взаимодействия с базой данных.
         """
         self.db_manager = db_manager
-        self.logger = setup_logging()
+        self.logger = logger or logging.getLogger(__name__)
+
 
     def parse_period(self, period_str, custom_dates=None):
         """
@@ -125,83 +126,78 @@ class OperatorData:
         except Exception as e:
             raise ValueError(f"Ошибка при обработке периода {period_str}: {e}")
 
-    async def get_operator_metrics(self, user_id, period, custom_dates=None):
+    async def get_operator_calls(self, extension, start_date, end_date) -> List[Dict[str, Any]]:
         """
-        Асинхронное извлечение данных по конкретному оператору на основе его user_id и периода.
-        
-        Аргументы:
-            - user_id: идентификатор пользователя.
-            - period: строка, представляющая период ('daily', 'weekly', 'monthly') или 'custom'.
-            - custom_dates: кортеж строк или объектов datetime (начальная и конечная дата) для кастомного периода.
-
-        Возвращает:
-            - Список словарей с данными звонков, включая все необходимые поля для расчетов метрик.
+        Получает данные о звонках оператора из call_history и call_scores,
+        объединяет их и возвращает полный список звонков.
         """
         try:
-            # Преобразуем период в диапазон дат
-            if period == 'custom' and custom_dates:
-                # Обработка кастомного диапазона
-                if not isinstance(custom_dates, tuple) or len(custom_dates) != 2:
-                    raise ValueError("Для периода 'custom' требуется кортеж из двух дат (start_date, end_date).")
-                period_start, period_end = self.parse_period('custom', custom_dates)
-            elif isinstance(period, str):
-                # Обработка стандартных периодов (daily, weekly и т.д.)
-                period_start, period_end = self.parse_period(period)
-            else:
-                raise ValueError(f"Неверный формат периода: {period}")
+            # Преобразование дат
+            start_datetime = validate_and_format_date(start_date)
+            end_datetime = validate_and_format_date(end_date)
+            end_datetime = end_datetime.replace(hour=23, minute=59, second=59, microsecond=999999)
 
+            # Преобразование дат для call_history (в timestamp)
+            start_timestamp = int(start_datetime.timestamp())
+            end_timestamp = int(end_datetime.timestamp())
 
-            # Логирование параметров запроса
-            self.logger.debug(f"[КРОТ]: Подготовка к запросу данных для user_id={user_id} "
-                            f"с периодом {period_start} - {period_end}.")
+            # Преобразование дат для call_scores (в строковый формат DATETIME)
+            start_datetime_str = start_datetime.strftime('%Y-%m-%d %H:%M:%S')
+            end_datetime_str = end_datetime.strftime('%Y-%m-%d %H:%M:%S')
 
-            # Подготовка SQL-запроса и параметров
-            query = """
-            SELECT 
-                u.user_id,
-                u.extension,
-                cs.call_date,
-                cs.call_score,
-                cs.result,
-                cs.talk_duration,
-                cs.call_category
-            FROM 
-                UsersTelegaBot u
-            JOIN 
-                call_scores cs 
-            ON 
-                u.user_id = CAST(cs.caller_info AS SIGNED)
+            # Получение данных из call_history
+            call_history_query = """
+            SELECT history_id, caller_info, called_info, context_start_time, talk_duration
+            FROM call_history
             WHERE 
-                u.user_id = %s
-            AND 
-                cs.call_date BETWEEN %s AND %s
+                (caller_info LIKE %s OR called_info LIKE %s)
+                AND context_start_time BETWEEN %s AND %s
             """
-            params = [
-            user_id,
-            period_start,
-            period_end
-            ]
+            params_call_history = (
+                f"%{extension}%",
+                f"%{extension}%",
+                start_timestamp,
+                end_timestamp
+            )
+            call_history_data = await self.db_manager.execute_query(call_history_query, params_call_history, fetchall=True)
 
-            # Выполняем запрос
-            start_time = time.time()
-            result = await self.db_manager.execute_query(query, params, fetchall=True)
-            elapsed_time = time.time() - start_time
+            # Получение данных из call_scores
+            call_scores_query = """
+            SELECT history_id, call_category, call_score, result
+            FROM call_scores
+            WHERE 
+                (caller_info LIKE %s OR called_info LIKE %s)
+                AND call_date BETWEEN %s AND %s
+            """
+            params_call_scores = (
+                f"%{extension}%",
+                f"%{extension}%",
+                start_datetime_str,
+                end_datetime_str
+            )
+            call_scores_data = await self.db_manager.execute_query(call_scores_query, params_call_scores, fetchall=True)
 
-            # Логируем результат выполнения запроса
-            if result:
-                self.logger.info(f"[КРОТ]: Успешно извлечены данные для user_id={user_id} "
-                                f"за период {period_start} - {period_end} (время: {elapsed_time:.2f} сек).")
-                self.logger.debug(f"[КРОТ]: Полученные данные (пример): {result[:5]}")
-            else:
-                self.logger.warning(f"[КРОТ]: Данные для user_id={user_id} за период {period_start} - {period_end} отсутствуют.")
+            self.logger.info(f"[КРОТ]: Получено {len(call_history_data)} записей из call_history и {len(call_scores_data)} записей из call_scores для оператора {extension}")
 
-            return result or []
+            # Создание словаря для быстрого доступа к call_scores по history_id
+            call_scores_dict = {row['history_id']: row for row in call_scores_data}
 
-        except ValueError as ve:
-            self.logger.error(f"[КРОТ]: Ошибка преобразования периода {period}: {ve}")
-            return []
+            # Объединение данных
+            combined_calls = []
+            for call in call_history_data:
+                history_id = call['history_id']
+                if history_id in call_scores_dict:
+                    # Объединяем данные
+                    combined_call = {**call, **call_scores_dict[history_id]}
+                else:
+                    # Если нет соответствия в call_scores, добавляем call_category и другие поля как None
+                    combined_call = {**call, 'call_category': None, 'call_score': None, 'result': None}
+                combined_calls.append(combined_call)
+
+            return combined_calls
+
         except Exception as e:
-            self.logger.error(f"[КРОТ]: Ошибка при запросе данных для user_id={user_id}: {e}")
+            self.logger.error(f"[КРОТ]: Ошибка при получении данных звонков для оператора {extension}: {e}")
             return []
 
     async def get_average_talk_duration_by_category(
@@ -339,103 +335,7 @@ class OperatorData:
             self.logger.error(f"[КРОТ]: Ошибка при получении данных по производительности пользователей: {e}")
             return []
 
-    async def get_operator_call_metrics(
-        self,
-        connection,
-        extension,
-        start_date=None,
-        end_date=None
-    ) -> Dict[str, Any]:
-        """
-        Получение метрик звонков оператора за определенный период (с датой начала и конца).
-
-        Аргументы:
-            - connection: соединение с базой данных.
-            - extension: extension оператора.
-            - start_date: начальная дата периода.
-            - end_date: конечная дата периода.
-
-        Возвращает:
-            - Словарь с метриками звонков оператора.
-        """
-        try:
-            # Преобразование дат в корректный формат
-            date_filter = []
-            if start_date:
-                start_date = validate_and_format_date(start_date)
-                date_filter.append(start_date.strftime('%Y-%m-%d %H:%M:%S'))
-            if end_date:
-                end_date = validate_and_format_date(end_date)
-                date_filter.append(end_date.strftime('%Y-%m-%d %H:%M:%S'))
-
-            operator_filter = [f"%{extension}%", f"%{extension}%"]
-
-            # Запросы с преобразованием типов данных
-            booked_services_query = """
-            SELECT COUNT(*) AS booked_services
-            FROM call_scores
-            WHERE (caller_info LIKE %s OR called_info LIKE %s)
-            AND call_category = 'Запись на услугу'
-            """
-            if start_date and end_date:
-                booked_services_query += " AND call_date BETWEEN %s AND %s"
-            elif start_date:
-                booked_services_query += " AND call_date >= %s"
-            elif end_date:
-                booked_services_query += " AND call_date <= %s"
-            booked_services_params = operator_filter + date_filter
-
-            cancellations_query = """
-            SELECT
-                SUM(CASE WHEN call_category = 'Отмена записи' THEN 1 ELSE 0 END) AS total_cancellations,
-                SUM(CASE WHEN call_category = 'Перенос записи' THEN 1 ELSE 0 END) AS total_reschedules,
-                AVG(CASE WHEN call_category = 'Отмена записи' THEN CAST(call_score AS DECIMAL(5,2)) ELSE NULL END) AS avg_cancel_score
-            FROM call_scores
-            WHERE (caller_info LIKE %s OR called_info LIKE %s)
-            AND call_category IN ('Отмена записи', 'Перенос записи')
-            """
-            if start_date and end_date:
-                cancellations_query += " AND call_date BETWEEN %s AND %s"
-            elif start_date:
-                cancellations_query += " AND call_date >= %s"
-            elif end_date:
-                cancellations_query += " AND call_date <= %s"
-            cancellations_params = operator_filter + date_filter
-
-            # Выполнение запросов
-            async with connection.cursor(aiomysql.DictCursor) as cursor:
-                # Записаны на услугу
-                await cursor.execute(booked_services_query, booked_services_params)
-                booked_services = (await cursor.fetchone()).get('booked_services', 0)
-
-                # Отмены и переносы
-                await cursor.execute(cancellations_query, cancellations_params)
-                cancellations = await cursor.fetchone()
-                total_cancellations = cancellations.get('total_cancellations', 0)
-                total_reschedules = cancellations.get('total_reschedules', 0)  # Добавлено извлечение total_reschedules
-                avg_cancel_score = cancellations.get('avg_cancel_score', 0.0)
-
-            # Расчёт дополнительных метрик
-            conversion_rate = (booked_services / total_cancellations * 100) if total_cancellations > 0 else 0.0
-            cancellation_rate = (total_cancellations / (total_cancellations + total_reschedules) * 100) if (total_cancellations + total_reschedules) > 0 else 0.0
-
-            # Сбор метрик
-            metrics = {
-                "booked_services": booked_services,
-                "total_cancellations": total_cancellations,
-                "total_reschedules": total_reschedules,
-                "avg_cancel_score": avg_cancel_score,
-                "conversion_rate": conversion_rate,
-                "cancellation_rate": cancellation_rate,
-            }
-
-            self.logger.info(f"[КРОТ]: Метрики звонков для extension {extension} успешно извлечены.")
-            self.logger.debug(f"[КРОТ]: Результат: {metrics}")
-            return metrics
-
-        except Exception as e:
-            self.logger.error(f"[КРОТ]: Ошибка при извлечении метрик звонков для extension {extension}: {e}")
-            return {}
+    
 # Пример использования модуля
 if __name__ == "__main__":
     import asyncio
