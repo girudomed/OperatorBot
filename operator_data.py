@@ -147,14 +147,13 @@ class OperatorData:
 
             # Получение данных из call_history
             call_history_query = """
-            SELECT history_id, caller_info, called_info, context_start_time, talk_duration
+            SELECT history_id, called_info, context_start_time, talk_duration, transcript
             FROM call_history
             WHERE 
-                (caller_info LIKE %s OR called_info LIKE %s)
+                called_info LIKE %s
                 AND context_start_time BETWEEN %s AND %s
             """
             params_call_history = (
-                f"%{extension}%",
                 f"%{extension}%",
                 start_timestamp,
                 end_timestamp
@@ -166,11 +165,10 @@ class OperatorData:
             SELECT history_id, call_category, call_score, result
             FROM call_scores
             WHERE 
-                (caller_info LIKE %s OR called_info LIKE %s)
+                called_info LIKE %s
                 AND call_date BETWEEN %s AND %s
             """
             params_call_scores = (
-                f"%{extension}%",
                 f"%{extension}%",
                 start_datetime_str,
                 end_datetime_str
@@ -215,7 +213,7 @@ class OperatorData:
         """
         try:
             # Преобразование дат
-            operator_filter = [f"%{extension}%", f"%{extension}%"]
+            operator_filter = [f"%{extension}%"]
             date_filter = []
             
             if start_date:
@@ -231,7 +229,7 @@ class OperatorData:
                 call_category,
                 AVG(CAST(talk_duration AS DECIMAL(10,2))) AS avg_duration
             FROM call_scores
-            WHERE (caller_info LIKE %s OR called_info LIKE %s)
+            WHERE called_info LIKE %s
             AND CAST(talk_duration AS DECIMAL(10,2)) > 10
             """
             if start_date and end_date:
@@ -288,9 +286,9 @@ class OperatorData:
         """
         try:
             query = """
-            SELECT caller_info, called_info, transcript, result, call_date, talk_duration
+            SELECT called_info, transcript, result, call_date, talk_duration
             FROM call_scores
-            WHERE caller_info LIKE %s OR called_info LIKE %s
+            WHERE called_info LIKE %s
             """
             operator_pattern = f"%{str(extension)}%"
             start_time = time.time()

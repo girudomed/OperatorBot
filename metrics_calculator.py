@@ -54,6 +54,8 @@ class MetricsCalculator:
     
     async def calculate_operator_metrics(
     self,
+    call_history_data: List[Dict[str, Any]],
+    call_scores_data: List[Dict[str, Any]],
     extension: str,
     start_date: Union[str, datetime.date, datetime.datetime],
     end_date: Union[str, datetime.date, datetime.datetime]
@@ -79,9 +81,17 @@ class MetricsCalculator:
 
         self.logger.info(f"[КРОТ]: Получено {len(operator_calls)} звонков для оператора {extension}")
 
-        # Разделение на принятые и пропущенные звонки
-        accepted_calls = [call for call in operator_calls if call.get('talk_duration') and float(call['talk_duration']) > 0]
-        missed_calls = [call for call in operator_calls if not call.get('talk_duration') or float(call['talk_duration']) == 0]
+        # Принятые звонки: transcript не NULL
+        accepted_calls = [
+            call for call in operator_calls
+            if call.get('transcript') is not None
+        ]
+
+        # Пропущенные звонки: transcript NULL
+        missed_calls = [
+            call for call in operator_calls
+            if call.get('transcript') is None
+        ]
 
         accepted_calls_count = len(accepted_calls)
         missed_calls_count = len(missed_calls)
@@ -101,7 +111,7 @@ class MetricsCalculator:
         self.logger.info(f"[КРОТ]: Количество записей на услугу (booked_calls): {booked_calls}")
 
         total_leads = sum(
-            1 for call in accepted_calls if call.get('call_category') in ['Лид без записи', 'Запись на услугу']
+            1 for call in accepted_calls if call.get('call_category') in ['Лид']
         )
         self.logger.info(f"[КРОТ]: Общее количество лидов (total_leads): {total_leads}")
 
@@ -114,7 +124,7 @@ class MetricsCalculator:
 
         lead_call_scores = [
             float(call['call_score']) for call in accepted_calls
-            if call.get('call_category') in ['Лид без записи', 'Запись на услугу'] and call.get('call_score')
+            if call.get('call_category') in ['Лид', 'Запись на услугу'] and call.get('call_score')
         ]
         avg_lead_call_rating = sum(lead_call_scores) / len(lead_call_scores) if lead_call_scores else 0.0
         self.logger.info(f"[КРОТ]: Средняя оценка разговоров для желающих записаться (avg_lead_call_rating): {avg_lead_call_rating:.2f}")
@@ -141,7 +151,6 @@ class MetricsCalculator:
         # Общая длительность и среднее время разговора
         total_conversation_time = sum(
             float(call.get('talk_duration', 0)) for call in accepted_calls
-            if call.get('talk_duration') and float(call.get('talk_duration', 0)) > 10
         )
         self.logger.info(f"[КРОТ]: Общая длительность разговоров (total_conversation_time): {total_conversation_time:.2f} секунд")
 
@@ -238,7 +247,7 @@ class MetricsCalculator:
         """
         booked_services = sum(
             1 for call in operator_data 
-            if call.get('call_category') == 'Запись на услугу' and call.get('caller_info') and call.get('called_info')
+            if call.get('call_category') == 'Запись на услугу' and call.get('called_info')
         )
         self.logger.info(f"[КРОТ]: Подсчитано записей на услугу: {booked_services}")
         return booked_services
@@ -261,7 +270,7 @@ class MetricsCalculator:
         """
         leads_and_booked = sum(
     1 for call in operator_data 
-    if call.get('call_category') in ['Запись на услугу', 'Лид без записи']
+    if call.get('call_category') in ['Запись на услугу', 'Лид']
         )
         booked_services = sum(
             1 for call in operator_data 

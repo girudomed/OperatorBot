@@ -22,6 +22,8 @@ from aiohttp import web
 import pdb
 from metrics_calculator import MetricsCalculator
 from db_utils import execute_async_query
+from collections import Counter
+import re
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -257,18 +259,18 @@ class OpenAIReportGenerator:
 
         # Формирование SQL-запросов
         call_history_query = """
-        SELECT history_id, caller_info, called_info, context_start_time, talk_duration
+        SELECT history_id, called_info, context_start_time, talk_duration
         FROM call_history
         WHERE 
-            (caller_info LIKE CONCAT(%s, '%%') OR called_info LIKE CONCAT(%s, '%%'))
+            called_info LIKE CONCAT(%s, '%%')
             AND context_start_time BETWEEN %s AND %s
         """
 
         call_scores_query = """
-        SELECT history_id, caller_info, called_info, call_date, talk_duration, call_category, call_score, result
+        SELECT history_id, called_info, call_date, talk_duration, call_category, call_score, result
         FROM call_scores
         WHERE 
-            (caller_info LIKE CONCAT(%s, '%%') OR called_info LIKE CONCAT(%s, '%%'))
+            called_info LIKE CONCAT(%s, '%%')
             AND call_date BETWEEN %s AND %s
         """
 
@@ -276,13 +278,11 @@ class OpenAIReportGenerator:
             # Параметры для запросов
             params_call_history = (
                 extension,
-                extension,
                 start_timestamp,  # Используем timestamp для call_history
                 end_timestamp     # Используем timestamp для call_history
             )
 
             params_call_scores = (
-                extension,
                 extension,
                 start_datetime_str,  # Используем строковый формат для call_scores
                 end_datetime_str     # Используем строковый формат для call_scores
@@ -399,11 +399,26 @@ class OpenAIReportGenerator:
             combined_call_data = call_history_data + call_scores_data
             # Расчет метрик оператора
             operator_metrics = await self.metrics_calculator.calculate_operator_metrics(
+            call_history_data=call_history_data,
+            call_scores_data=call_scores_data,
             extension=extension,
             start_date=start_date,
             end_date=end_date
             )
+            # Создаём словарь звонков из call_history_data по history_id
+            call_history_dict = {call['history_id']: call for call in call_history_data}
 
+            # Обновляем словарь данными из call_scores_data
+            for score in call_scores_data:
+                history_id = score['history_id']
+                if history_id in call_history_dict:
+                    call_history_dict[history_id].update(score)
+                else:
+                    call_history_dict[history_id] = score  # Если звонка нет в call_history_data, добавляем его
+
+            # Получаем список объединённых данных без дубликатов
+            combined_call_data = list(call_history_dict.values())
+            
             # Используем метрики для генерации отчёта
             accepted_calls = operator_metrics.get('accepted_calls')
             missed_calls = operator_metrics.get('missed_calls')
@@ -481,7 +496,7 @@ class OpenAIReportGenerator:
             return False
         return True
     
-    async def generate_combined_recommendations(self, operator_metrics, operator_data, user_id, name, max_length=700, max_retries=3):
+    async def generate_combined_recommendations(self, operator_metrics, operator_data, user_id, name, max_length=300, max_retries=3):
         """
         Генерация рекомендаций для оператора на основе его метрик и данных.
         """
@@ -521,6 +536,16 @@ class OpenAIReportGenerator:
             logger.error(f"[РЕКОМЕНДАЦИИ]: Отсутствуют обязательные метрики: {', '.join(missing_metrics)}")
             return f"Ошибка: отсутствуют метрики {', '.join(missing_metrics)}"
 
+        # Собираем данные из поля 'result'
+        results = [call.get('result') for call in operator_data if call.get('result')]
+        result_text = '\n'.join(results)
+
+        # Ограничиваем длину result_text, чтобы не превышать лимит токенов
+        max_result_length = 3000  # Установите лимит символов
+        if len(result_text) > max_result_length:
+            result_text = result_text[:max_result_length] + '\n[Данные обрезаны из-за ограничения длины]'
+
+
         # Формируем запрос для генерации рекомендаций
         try:
             coaching_prompt = f"""
@@ -545,29 +570,23 @@ class OpenAIReportGenerator:
             4. Время обработки звонков:
                 - Среднее время разговора по Навигации: {operator_metrics.get('avg_navigation_time', 0):.2f} секунд
                 - Среднее время по Запись на услугу: {operator_metrics.get('avg_service_time', 0):.2f} секунд
+
+            5. Работа с жалобами:
+                - Количество звонков с жалобами: {operator_metrics.get('complaint_calls', 0)}
+                - Средняя оценка звонков с жалобами: {operator_metrics.get('complaint_rating', 0):.2f}   
+       
+            Данные из звонков:
+            {result_text}
+            ### Рекомендации:
+            На основе приведенных метрик и обобщенных данных из звонков предоставь очень краткие персонализированные рекомендации для оператора {name}. Укажи:
+
+            - Сильные и слабые стороны оператора, основываясь на положительных фактах.
+            - Аспекты, которые можно улучшить, с учетом текущих результатов.
+            - Конкретные шаги для повышения эффективности работы.
             """
         except Exception as e:
             logger.error(f"[РЕКОМЕНДАЦИИ]: Ошибка при формировании coaching_prompt: {e}")
             return "Ошибка при подготовке рекомендаций."
-
-        # Добавляем данные по времени обработки по категориям
-        for key, value in operator_metrics.items():
-            if key.startswith('avg_time_') and isinstance(value, (int, float)):
-                category = key.replace('avg_time_', '').replace('_', ' ').capitalize()
-                coaching_prompt += f"        - Среднее время по категории '{category}': {value:.2f} секунд\n"
-
-        coaching_prompt += f"""
-            5. Работа с жалобами:
-                - Количество звонков с жалобами: {operator_metrics.get('complaint_calls', 0)}
-                - Средняя оценка звонков с жалобами: {operator_metrics.get('complaint_rating', 0):.2f}
-
-        ### Рекомендации:
-            На основе сведений о звонках и данных в поле `result` предоставь персонализированные рекомендации оператору {name}.
-                Укажи:
-                - Что оператор делает хорошо, основываясь на положительных фактах.
-                - Какие аспекты можно улучшить с учетом текущих результатов.
-                - Как улучшить конверсию в запись или снизить количество пропущенных звонков, если это необходимо.
-        """
 
         # Разбиение текста на части
         try:
@@ -629,7 +648,7 @@ class OpenAIReportGenerator:
                         model=self.model,
                         messages=[{"role": "user", "content": prompt}],
                         max_tokens=max_tokens,
-                        temperature=0.5,
+                        temperature=0.7,
                     )
                     recommendation = response.choices[0].message.content.strip()
                     full_recommendations.append(recommendation)

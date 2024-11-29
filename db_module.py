@@ -329,8 +329,7 @@ class DatabaseManager:
         SELECT u.*, cs.call_date, cs.call_score, cs.result, cs.talk_duration
         FROM UsersTelegaBot u
         JOIN call_scores cs 
-        ON (SUBSTRING_INDEX(cs.caller_info, ' ', 1) = u.extension
-        OR SUBSTRING_INDEX(cs.called_info, ' ', 1) = u.extension)
+        ON SUBSTRING_INDEX(cs.called_info, ' ', 1) = u.extension)
         WHERE u.extension = %s
         """
         params = [extension]
@@ -350,10 +349,10 @@ class DatabaseManager:
         SELECT COUNT(*) as total_calls, 
                AVG(talk_duration) as avg_talk_time,
                SUM(CASE WHEN result = 'success' THEN 1 ELSE 0 END) as successful_calls
-        FROM call_scores
-        WHERE (caller_info LIKE %s OR called_info LIKE %s)
+        FROM cs.called_info LIKE %s
+        WHERE called_info LIKE %s
         """
-        params = [f"%{extension}%", f"%{extension}%"]
+        params = [f"%{extension}%"]
 
         if start_date:
             query += " AND call_date >= %s"

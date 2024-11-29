@@ -169,7 +169,7 @@ async def get_reports_by_user_and_date(user_id, report_date):
 async def find_operator_by_name_and_extension(operator_name, extension):
     """
     Поиск оператора по имени и extension (частичное совпадение).
-    Связь с call_scores происходит через поля caller_info и called_info, которые содержат extension и имя.
+    Связь с call_scores происходит через поле called_info, которые содержат extension и имя.
     """
     query = """
         SELECT user_id, extension, name
@@ -213,7 +213,7 @@ async def get_operator_calls(user_id, start_date=None, end_date=None):
     query = """
         SELECT cs.call_date, cs.call_score, cs.result, cs.talk_duration 
         FROM call_scores cs
-        JOIN users u ON cs.caller_info LIKE CONCAT('%', u.extension, '%') OR cs.called_info LIKE CONCAT('%', u.extension, '%')
+        JOIN users u ON cs.called_info LIKE CONCAT('%', u.extension, '%')
         WHERE u.user_id = %s
     """
     params = [user_id]
@@ -232,6 +232,7 @@ async def get_operator_calls(user_id, start_date=None, end_date=None):
         logger.error(f"[DB] Ошибка при получении звонков для user_id {user_id}: {e}")
         return None
 
+######**Вот тут у тебя идет или вход или исход, join обьединяет таблицы и ищет данные из них непосредственно**
 async def get_operator_call_metrics(user_id, start_date=None, end_date=None):
     """Получение метрик звонков оператора за определенный период."""
     query = """
@@ -239,7 +240,7 @@ async def get_operator_call_metrics(user_id, start_date=None, end_date=None):
                AVG(talk_duration) as avg_talk_time,
                SUM(CASE WHEN result = 'success' THEN 1 ELSE 0 END) as successful_calls
         FROM call_scores cs
-        JOIN users u ON cs.caller_info LIKE CONCAT('%', u.extension, '%') OR cs.called_info LIKE CONCAT('%', u.extension, '%')
+        JOIN users u ON cs.called_info LIKE CONCAT('%', u.extension, '%')
         WHERE u.user_id = %s
     """
     params = [user_id]
