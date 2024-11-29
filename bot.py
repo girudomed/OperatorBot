@@ -925,7 +925,7 @@ class TelegramBot:
         """
         Отправляет сгенерированный пароль заведующей регистратуры через Telegram.
         Получает юзернейм заведующей регистратуры с role_id 5 из базы данных.
-         """
+        """
         # Извлекаем юзернейм заведующей с role_id = 5
         query = "SELECT username FROM UsersTelegaBot WHERE role_id = 5 LIMIT 1"
         async with self.db_manager.acquire() as conn:

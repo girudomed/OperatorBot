@@ -3,6 +3,8 @@ import datetime
 import asyncio
 from asyncio import Semaphore
 import logging
+from logging.handlers import RotatingFileHandler
+
 import traceback
 import sys
 import time  # Для замера времени
@@ -37,7 +39,29 @@ sentry_sdk.init(
 )
 
 # Настройка логирования
+log_file = "logs.log"
+log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+# RotatingFileHandler с ограничением на количество строк
+# Ориентировочно, одна строка логов занимает около 100 символов
+max_log_size = 70000 * 100  # 70,000 строк по 100 символов каждая
+backup_count = 5  # Сохраняем до 5 резервных копий
+
+file_handler = RotatingFileHandler(
+    log_file, maxBytes=max_log_size, backupCount=backup_count, encoding='utf-8'
+)
+file_handler.setFormatter(log_formatter)
+file_handler.setLevel(logging.INFO)
+
+# Консольный обработчик для дублирования логов
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(log_formatter)
+console_handler.setLevel(logging.INFO)
+
+# Конфигурация основного логгера
 logger = logging.getLogger(__name__)
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
 logger.setLevel(logging.INFO)
 
 # Глобальный обработчик исключений
@@ -497,145 +521,164 @@ class OpenAIReportGenerator:
             return False
         return True
     
-    async def generate_combined_recommendations(self, operator_metrics, operator_data, user_id, name, max_length=300, max_retries=3):
+    async def generate_combined_recommendations(self, operator_metrics, operator_data, user_id, name, max_length=1500, max_retries=3, batch_size=5000):
         """
         Генерация рекомендаций для оператора на основе его метрик и данных.
         """
-        logger.info("[РЕКОМЕНДАЦИИ]: Начало генерации рекомендаций для оператора.")
-        logger.debug(f"[РЕКОМЕНДАЦИИ]: Метрики оператора: {operator_metrics}")
-        logger.debug(f"[РЕКОМЕНДАЦИИ]: Данные звонков оператора (количество записей): {len(operator_data)}")
-
-        # Определяем даты из данных оператора
-        dates = []
-        for call in operator_data:
-            call_date_value = call.get('call_date') or call.get('context_start_time')
-            if call_date_value:
-                try:
-                    if isinstance(call_date_value, datetime.datetime):
-                        call_date = call_date_value
-                    elif isinstance(call_date_value, datetime.date):
-                        call_date = datetime.datetime.combine(call_date_value, datetime.time.min)
-                    elif isinstance(call_date_value, str):
-                        call_date = datetime.datetime.strptime(call_date_value, '%Y-%m-%d %H:%M:%S')
-                    else:
-                        continue  # Пропускаем записи с неверным типом даты
-                    dates.append(call_date)
-                except ValueError as e:
-                    logger.warning(f"[РЕКОМЕНДАЦИИ]: Пропущена запись с некорректной датой: {call_date_value}. Ошибка: {e}")
-        start_date, end_date = ("неизвестно", "неизвестно") if not dates else (min(dates).strftime('%Y-%m-%d'), max(dates).strftime('%Y-%m-%d'))
-
-        # Проверка обязательных метрик
-        required_metrics = [
-            'total_calls', 'accepted_calls', 'missed_calls', 'booked_calls',
-            'conversion_rate_leads', 'avg_call_rating', 'avg_lead_call_rating',
-            'total_cancellations', 'avg_cancel_score', 'cancellation_rate',
-            'complaint_calls', 'complaint_rating', 'avg_conversation_time',
-            'avg_navigation_time', 'avg_service_time'
-        ]
-        missing_metrics = [metric for metric in required_metrics if metric not in operator_metrics]
-        if missing_metrics:
-            logger.error(f"[РЕКОМЕНДАЦИИ]: Отсутствуют обязательные метрики: {', '.join(missing_metrics)}")
-            return f"Ошибка: отсутствуют метрики {', '.join(missing_metrics)}"
-
-        # Собираем данные из поля 'result'
-        results = [call.get('result') for call in operator_data if call.get('result')]
-        result_text = '\n'.join(results)[:3000]
-
-
-        # Формируем запрос для генерации рекомендаций
         try:
+            logger.info("[РЕКОМЕНДАЦИИ]: Начало генерации рекомендаций для оператора.")
+            logger.debug(f"[РЕКОМЕНДАЦИИ]: Метрики оператора: {operator_metrics}")
+            logger.debug(f"[РЕКОМЕНДАЦИИ]: Данные звонков оператора (количество записей): {len(operator_data)}")
+
+            # Определяем даты из данных оператора
+            dates = []
+            for call in operator_data:
+                call_date_value = call.get('call_date') or call.get('context_start_time')
+                if call_date_value:
+                    try:
+                        if isinstance(call_date_value, datetime.datetime):
+                            call_date = call_date_value
+                        elif isinstance(call_date_value, datetime.date):
+                            call_date = datetime.datetime.combine(call_date_value, datetime.time.min)
+                        elif isinstance(call_date_value, str):
+                            call_date = datetime.datetime.strptime(call_date_value, '%Y-%m-%d %H:%M:%S')
+                        else:
+                            continue  # Пропускаем записи с неверным типом даты
+                        dates.append(call_date)
+                    except ValueError as e:
+                        logger.warning(f"[РЕКОМЕНДАЦИИ]: Пропущена запись с некорректной датой: {call_date_value}. Ошибка: {e}")
+            start_date, end_date = ("неизвестно", "неизвестно") if not dates else (min(dates).strftime('%Y-%m-%d'), max(dates).strftime('%Y-%m-%d'))
+
+            # Проверка обязательных метрик
+            required_metrics = [
+                'total_calls', 'accepted_calls', 'missed_calls', 'booked_calls',
+                'conversion_rate_leads', 'avg_call_rating', 'avg_lead_call_rating',
+                'total_cancellations', 'avg_cancel_score', 'cancellation_rate',
+                'complaint_calls', 'complaint_rating', 'avg_conversation_time',
+                'avg_navigation_time', 'avg_service_time'
+            ]
+            missing_metrics = [metric for metric in required_metrics if metric not in operator_metrics]
+            if missing_metrics:
+                logger.error(f"[РЕКОМЕНДАЦИИ]: Отсутствуют обязательные метрики: {', '.join(missing_metrics)}")
+                return f"Ошибка: отсутствуют метрики {', '.join(missing_metrics)}"
+
+            # Подготовка данных из 'result'
+            results = [call.get('result') for call in operator_data if call.get('result')]
+            result_text = '\n'.join(results)[:10000] if results else ""
+            if not result_text:
+                logger.warning("[РЕКОМЕНДАЦИИ]: Нет данных в поле 'result' для генерации.")
+                return "Нет данных для анализа."
+
+            # Разбиение данных на пакеты
+            batches = self.split_into_batches(result_text, batch_size)
+            logger.info(f"[РЕКОМЕНДАЦИИ]: Данные разбиты на {len(batches)} пакетов для обработки.")
+
+            # Формирование промпта
             coaching_prompt = f"""
-            📊 Отчет за период: {start_date} — {end_date}
-
-            1. Общая статистика по звонкам:
-                - Всего звонков: {operator_metrics.get('total_calls', 0)}
-                - Принято звонков: {operator_metrics.get('accepted_calls', 0)}
-                - Пропущенные звонки: {operator_metrics.get('missed_calls', 0)}
-                - Записаны на услугу: {operator_metrics.get('booked_calls', 0)}
-                - Конверсия в запись: {operator_metrics.get('conversion_rate_leads', 0):.2f}%
-
-            2. Качество обработки звонков:
-                - Средняя оценка всех разговоров: {operator_metrics.get('avg_call_rating', 0):.2f}
-                - Средняя оценка разговоров для желающих записаться: {operator_metrics.get('avg_lead_call_rating', 0):.2f}
-
-            3. Анализ отмен:
-                - Всего отмен: {operator_metrics.get('total_cancellations', 0)}
-                - Средняя оценка звонков по отмене: {operator_metrics.get('avg_cancel_score', 0):.2f}
-                - Доля отмен: {operator_metrics.get('cancellation_rate', 0):.2f}%
-
-            4. Время обработки звонков:
-                - Среднее время разговора по Навигации: {operator_metrics.get('avg_navigation_time', 0):.2f} секунд
-                - Среднее время по Запись на услугу: {operator_metrics.get('avg_service_time', 0):.2f} секунд
-
-            5. Работа с жалобами:
-                - Количество звонков с жалобами: {operator_metrics.get('complaint_calls', 0)}
-                - Средняя оценка звонков с жалобами: {operator_metrics.get('complaint_rating', 0):.2f}   
-       
-            Данные из звонков:
+            Данные звонков:
             {result_text}
+            
             ### Рекомендации:
-            На основе приведенных метрик и обобщенных данных из звонков предоставь очень краткие персонализированные рекомендации для оператора {name}. Укажи:
+            На основе приведенных данных предоставь краткие персонализированные рекомендации для оператора {name}, проанализировав все данные звонков, осознавая, что рекомендации это среднее и ты оцениваешь много данных и даешь краткую выжимку. Укажи:
 
-            - Сильные и слабые стороны оператора, основываясь на положительных фактах.
-            - Аспекты, которые можно улучшить, с учетом текущих результатов.
+            - Сильные и слабые стороны оператора.
+            - Аспекты, которые можно улучшить.
             - Конкретные шаги для повышения эффективности работы.
             """
+            logger.debug("[РЕКОМЕНДАЦИИ]: Промпт сформирован.")
+
+            # Разбиение промпта на части
+            sub_requests = self.split_into_batches(coaching_prompt, max_length)
+            logger.debug(f"[РЕКОМЕНДАЦИИ]: Промпт разбит на {len(sub_requests)} блоков.")
+
+            # Обработка запросов
+            partial_recommendations = await self.process_requests(sub_requests, max_retries, max_length)
+            if partial_recommendations.startswith("Ошибка"):
+                logger.error(f"[РЕКОМЕНДАЦИИ]: Ошибка при обработке рекомендаций: {partial_recommendations}")
+                return "Ошибка при обработке рекомендаций."
+
+            # Объединение промежуточных рекомендаций
+            combined_recommendations = partial_recommendations  # Уже строка
+            logger.info("[РЕКОМЕНДАЦИИ]: Промежуточные рекомендации объединены.")
+
+            # Финальный запрос для обобщения
+            final_prompt = f"""
+            На основе всех рекомендаций ниже, предоставь краткий и связный итоговый вывод для оператора {name}:
+            {combined_recommendations}
+            """
+            logger.info("[РЕКОМЕНДАЦИИ]: Финальный запрос для обобщения подготовлен.")
+
+            # Отправка финального запроса
+            final_recommendation = await self.process_requests([final_prompt], max_retries, max_length)
+            if final_recommendation.startswith("Ошибка"):
+                logger.error(f"[РЕКОМЕНДАЦИИ]: Ошибка при обработке финальной рекомендации: {final_recommendation}")
+                return "Ошибка при обработке финальной рекомендации."
+
+            logger.info("[РЕКОМЕНДАЦИИ]: Генерация финальной рекомендации завершена успешно.")
+            return final_recommendation  # Возвращаем финальный объединённый ответ
+
         except Exception as e:
-            logger.error(f"[РЕКОМЕНДАЦИИ]: Ошибка при формировании coaching_prompt: {e}")
-            return "Ошибка при подготовке рекомендаций."
+            logger.error(f"[РЕКОМЕНДАЦИИ]: Ошибка при генерации рекомендаций: {e}", exc_info=True)
+            return f"Ошибка при генерации рекомендаций: {e}"
+    def split_into_batches(self, text, max_length):
+        """
+        Разделяет текст на части, не превышающие max_length символов.
+        """
+        return [text[i:i+max_length] for i in range(0, len(text), max_length)]
 
-        # Разбиение текста на части
-        try:
-            sub_requests = wrap(coaching_prompt, width=max_length)
-            logger.debug(f"[РЕКОМЕНДАЦИИ]: Текст перед разбиением: {coaching_prompt[:500]}...")
-            logger.debug(f"[РЕКОМЕНДАЦИИ]: Разбито на {len(sub_requests)} частей. Пример первого блока: {sub_requests[0]}")
-        except Exception as e:
-            logger.error(f"[РЕКОМЕНДАЦИИ]: Ошибка при разбиении текста: {e}")
-            return "Ошибка при подготовке рекомендаций."
-        if any(len(req) > max_length for req in sub_requests):
-            logger.error("[РЕКОМЕНДАЦИИ]: Один из блоков превышает допустимую длину.")
-            return "Ошибка: Некорректное разбиение текста."
-        
-        semaphore = Semaphore(5)  # Ограничение на количество одновременных запросов
+    async def send_request(self, sub_request, semaphore, batch_index, max_retries, max_length):
+        """
+        Отправка запроса к OpenAI с поддержкой повторных попыток.
+        """
+        async with semaphore:
+            logger.info(f"[РЕКОМЕНДАЦИИ]: Отправка пакета {batch_index + 1}: {sub_request[:500]}...")
+            for attempt in range(max_retries):
+                try:
+                    response = await self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[{"role": "user", "content": sub_request}],
+                        max_tokens=max_length,
+                    )
+                    if not response.choices or not response.choices[0].message or not response.choices[0].message.content:
+                        raise ValueError(f"Пустой ответ от OpenAI для пакета {batch_index + 1}")
+                    result = response.choices[0].message.content.strip()
+                    logger.debug(f"[РЕКОМЕНДАЦИИ]: Ответ OpenAI для пакета {batch_index + 1}: {result[:500]}")
+                    return result  # Успех: выходим из цикла
+                except Exception as e:
+                    logger.error(
+                        f"[РЕКОМЕНДАЦИИ]: Ошибка при обработке пакета {batch_index + 1}: {e}. "
+                        f"Попытка {attempt + 1}/{max_retries}"
+                    )
+                    await asyncio.sleep(2 ** attempt)  # Экспоненциальная задержка
+            # Если все попытки неудачны, возвращаем сообщение об ошибке
+            logger.error(f"[РЕКОМЕНДАЦИИ]: Не удалось обработать пакет {batch_index + 1} после {max_retries} попыток.")
+            return f"Ошибка: Не удалось получить рекомендации для пакета {batch_index + 1}."
+    async def process_requests(self, sub_requests, max_retries, max_length):
+        """
+        Обработка запросов к OpenAI API с использованием семафора.
+        """
+        if not sub_requests:
+            logger.error("[РЕКОМЕНДАЦИИ]: Нет подзапросов для обработки.")
+            return "Ошибка: Нет данных для обработки."
 
-        async def send_request(sub_request, semaphore):
-            async with semaphore:
-                logger.info(f"[РЕКОМЕНДАЦИИ]: Отправка запроса: {sub_request[:50]}...")
-                for attempt in range(max_retries):
-                    try:
-                        response = await self.client.chat.completions.create(
-                            model=self.model,
-                            messages=[{"role": "user", "content": sub_request}],
-                            max_tokens=max_length
-                        )
-                        return response.choices[0].message.content.strip()
-                    except Exception as e:
-                        logger.error(f"[РЕКОМЕНДАЦИИ]: Ошибка API: {e}. Попытка {attempt + 1}")
-                        await asyncio.sleep(2 ** attempt)  # Задержка перед повтором
-                return f"Ошибка: Не удалось получить рекомендации после {max_retries} попыток."
-
-        # Собираем результаты с обработкой исключений
-        semaphore = Semaphore(5)  # Ограничение на количество одновременных запросов
-        tasks = [send_request(req, semaphore) for req in sub_requests]
+        semaphore = Semaphore(5)  # Ограничение параллелизма
+        tasks = [
+            self.send_request(req, semaphore, idx, max_retries, max_length)
+            for idx, req in enumerate(sub_requests)
+        ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Обработка результатов
-        successful_results = []
-        for result in results:
-            if isinstance(result, Exception):
-                logger.error(f"[РЕКОМЕНДАЦИИ]: Ошибка в одной из задач: {result}")
-            else:
-                successful_results.append(result)
-
-        # Проверка успешных результатов
+        # Фильтруем успешные результаты
+        successful_results = [result for result in results if not isinstance(result, Exception)]
         if not successful_results:
             logger.error("[РЕКОМЕНДАЦИИ]: Все запросы завершились с ошибками.")
-            return "Ошибка: Все запросы завершились с ошибками."
-
-        # Возвращаем успешные результаты
-        return "\n".join(successful_results)
+            return ["Ошибка: Все запросы завершились с ошибками."]
+        
+        final_results = "\n".join(successful_results)
+        logger.debug(f"[РЕКОМЕНДАЦИИ]: Итоговые объединённые рекомендации: {final_results[:500]}")
+        return final_results
     
-    async def request_with_retries(self, text_packet, max_retries=3, max_tokens=1000):
+    async def request_with_retries(self, text_packet, max_retries=3, max_tokens=2500):
         """
         Запрос к ChatGPT с поддержкой динамической разбивки `text_packet` на подзапросы,
         поддержкой повторных попыток и лимитом по токенам.
@@ -815,18 +858,14 @@ class OpenAIReportGenerator:
     """
 
         # Добавляем рекомендации
-        report += """
-    6. Рекомендации:
-    """
-        report += recommendations if recommendations else "Рекомендации не были сгенерированы."
-
+        if recommendations :
+            report += f"\nРекомендации:\n{recommendations[:3000]}..."  # Ограничение длины
         # Логируем успешное создание отчета
         logger.info(f"[КРОТ]: Отчет успешно отформатирован для оператора {name} с extension {get_metric('extension')}.")
-
         return report
         
-    ##Тут все запросы в таблицу report. Метод отвечает за сохранение данных в таблицу. Метод сохранения данных в таблицу reports
-    ## Метод сохранения данных в таблицу reports
+    ##*Тут все запросы в таблицу report. Метод отвечает за сохранение данных в таблицу. Метод сохранения данных в таблицу reports*
+    ## *Метод сохранения данных в таблицу reports*
     async def save_report_to_db(
         self,
         connection: Any,  # Используйте aiomysql.Connection, если импорт доступен
@@ -930,6 +969,8 @@ class OpenAIReportGenerator:
             'report_date': report_date,
             'recommendations': recommendations
         })
+        
+        metrics_values = {key: operator_metrics.get(key, 'Нет данных') for key in required_metrics}
 
         # Логирование параметров для вставки
         logger.debug(f"[КРОТ]: Параметры для отчета: {metrics_values}")
