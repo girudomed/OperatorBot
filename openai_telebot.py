@@ -1,6 +1,7 @@
 #opeanai_telebot.py
 import datetime
 import asyncio
+from asyncio import Semaphore
 import logging
 import traceback
 import sys
@@ -538,12 +539,7 @@ class OpenAIReportGenerator:
 
         # Собираем данные из поля 'result'
         results = [call.get('result') for call in operator_data if call.get('result')]
-        result_text = '\n'.join(results)
-
-        # Ограничиваем длину result_text, чтобы не превышать лимит токенов
-        max_result_length = 3000  # Установите лимит символов
-        if len(result_text) > max_result_length:
-            result_text = result_text[:max_result_length] + '\n[Данные обрезаны из-за ограничения длины]'
+        result_text = '\n'.join(results)[:3000]
 
 
         # Формируем запрос для генерации рекомендаций
@@ -590,37 +586,54 @@ class OpenAIReportGenerator:
 
         # Разбиение текста на части
         try:
-            sub_requests = wrap(coaching_prompt, width=max_length, break_long_words=False, break_on_hyphens=False)
+            sub_requests = wrap(coaching_prompt, width=max_length)
+            logger.debug(f"[РЕКОМЕНДАЦИИ]: Текст перед разбиением: {coaching_prompt[:500]}...")
+            logger.debug(f"[РЕКОМЕНДАЦИИ]: Разбито на {len(sub_requests)} частей. Пример первого блока: {sub_requests[0]}")
         except Exception as e:
             logger.error(f"[РЕКОМЕНДАЦИИ]: Ошибка при разбиении текста: {e}")
             return "Ошибка при подготовке рекомендаций."
+        if any(len(req) > max_length for req in sub_requests):
+            logger.error("[РЕКОМЕНДАЦИИ]: Один из блоков превышает допустимую длину.")
+            return "Ошибка: Некорректное разбиение текста."
+        
+        semaphore = Semaphore(5)  # Ограничение на количество одновременных запросов
 
-        full_recommendations = []
-        for sub_request in sub_requests:
-            for attempt in range(max_retries):
-                try:
-                    response = await self.client.chat.completions.create(
-                        model=self.model,
-                        messages=[{"role": "user", "content": sub_request}],
-                        max_tokens=max_length
-                    )
-                    full_recommendations.append(response.choices[0].message.content.strip())
-                    break
-                except OpenAIError as e:
-                    logger.warning(f"[РЕКОМЕНДАЦИИ]: Ошибка: {e}")
-                except Exception as e:
-                    logger.error(f"[РЕКОМЕНДАЦИИ]: Непредвиденная ошибка: {e}")
+        async def send_request(sub_request, semaphore):
+            async with semaphore:
+                logger.info(f"[РЕКОМЕНДАЦИИ]: Отправка запроса: {sub_request[:50]}...")
+                for attempt in range(max_retries):
+                    try:
+                        response = await self.client.chat.completions.create(
+                            model=self.model,
+                            messages=[{"role": "user", "content": sub_request}],
+                            max_tokens=max_length
+                        )
+                        return response.choices[0].message.content.strip()
+                    except Exception as e:
+                        logger.error(f"[РЕКОМЕНДАЦИИ]: Ошибка API: {e}. Попытка {attempt + 1}")
+                        await asyncio.sleep(2 ** attempt)  # Задержка перед повтором
+                return f"Ошибка: Не удалось получить рекомендации после {max_retries} попыток."
+
+        # Собираем результаты с обработкой исключений
+        semaphore = Semaphore(5)  # Ограничение на количество одновременных запросов
+        tasks = [send_request(req, semaphore) for req in sub_requests]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Обработка результатов
+        successful_results = []
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"[РЕКОМЕНДАЦИИ]: Ошибка в одной из задач: {result}")
             else:
-                full_recommendations.append("Не удалось получить рекомендации для части запроса.")
+                successful_results.append(result)
 
-        # Проверяем итоговые рекомендации
-        if not full_recommendations:
-            logger.error("[РЕКОМЕНДАЦИИ]: Рекомендации не удалось сгенерировать.")
-            return "Ошибка при генерации рекомендаций."
+        # Проверка успешных результатов
+        if not successful_results:
+            logger.error("[РЕКОМЕНДАЦИИ]: Все запросы завершились с ошибками.")
+            return "Ошибка: Все запросы завершились с ошибками."
 
-        recommendations = "\n".join(full_recommendations)
-        logger.info("[РЕКОМЕНДАЦИИ]: Генерация рекомендаций завершена успешно.")
-        return recommendations
+        # Возвращаем успешные результаты
+        return "\n".join(successful_results)
     
     async def request_with_retries(self, text_packet, max_retries=3, max_tokens=1000):
         """
