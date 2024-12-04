@@ -106,12 +106,12 @@ class MetricsCalculator:
 
         # Метрики по записям и конверсии
         booked_calls = sum(
-            1 for call in accepted_calls if call.get('call_category') == 'Запись на услугу'
+            1 for call in accepted_calls if call.get('call_category') == 'Запись на услугу (успешная)'
         )
         self.logger.info(f"[КРОТ]: Количество записей на услугу (booked_calls): {booked_calls}")
 
         total_leads = sum(
-            1 for call in accepted_calls if call.get('call_category') in ['Лид']
+            1 for call in accepted_calls if call.get('call_category') in ['Лид (без записи)']
         )
         self.logger.info(f"[КРОТ]: Общее количество лидов (total_leads): {total_leads}")
 
@@ -124,7 +124,7 @@ class MetricsCalculator:
 
         lead_call_scores = [
             float(call['call_score']) for call in accepted_calls
-            if call.get('call_category') in ['Лид', 'Запись на услугу'] and call.get('call_score')
+            if call.get('call_category') in ['Лид (без записи)', 'Запись на услугу (успешная)'] and call.get('call_score')
         ]
         avg_lead_call_rating = sum(lead_call_scores) / len(lead_call_scores) if lead_call_scores else 0.0
         self.logger.info(f"[КРОТ]: Средняя оценка разговоров для желающих записаться (avg_lead_call_rating): {avg_lead_call_rating:.2f}")
@@ -160,7 +160,7 @@ class MetricsCalculator:
         # Временные метрики по категориям
         predefined_categories = {
             'Навигация': 'avg_navigation_time',
-            'Запись на услугу': 'avg_service_time',
+            'Запись на услугу (успешная)': 'avg_service_time',
             'Спам': 'avg_time_spam',
             'Напоминание о приеме': 'avg_time_reminder',
             'Отмена записи': 'avg_time_cancellation',
@@ -243,11 +243,11 @@ class MetricsCalculator:
         return sum(durations)
     def calculate_booked_services(self, operator_data):
         """
-        Подсчет количества записей на услугу по категории 'Запись на услугу' в call_category.
+        Подсчет количества записей на услугу по категории 'Запись на услугу (успешная)' в call_category.
         """
         booked_services = sum(
             1 for call in operator_data 
-            if call.get('call_category') == 'Запись на услугу' and call.get('called_info')
+            if call.get('call_category') == 'Запись на услугу (успешная)' and call.get('called_info')
         )
         self.logger.info(f"[КРОТ]: Подсчитано записей на услугу: {booked_services}")
         return booked_services
@@ -270,11 +270,11 @@ class MetricsCalculator:
         """
         leads_and_booked = sum(
     1 for call in operator_data 
-    if call.get('call_category') in ['Запись на услугу', 'Лид']
+    if call.get('call_category') in ['Запись на услугу (успешная)', 'Лид (без записи)']
         )
         booked_services = sum(
             1 for call in operator_data 
-            if call.get('call_category') == 'Запись на услугу'
+            if call.get('call_category') == 'Запись на услугу (успешная)'
         )
         if leads_and_booked == 0:
             self.logger.warning(f"[КРОТ]: Нет данных для расчета конверсии.")

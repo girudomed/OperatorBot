@@ -28,7 +28,7 @@ from telegram.constants import ParseMode
 import config
 from logger_utils import setup_logging
 from operator_data import OperatorData
-from openai_telebot import OpenAIReportGenerator #импорт класса тут из опенаителебота
+from openai_telebot import OpenAIReportGenerator, create_async_connection #импорт класса тут из опенаителебота
 from permissions_manager import PermissionsManager
 from db_module import DatabaseManager
 from auth import AuthManager, setup_auth_handlers
@@ -337,7 +337,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("report_summary", self.report_summary_handle))
         self.application.add_handler(CommandHandler("settings", self.settings_handle))
         self.application.add_handler(CommandHandler("debug", self.debug_handle))
-        
+        self.application.add_handler(CommandHandler("report_summary", self.report_summary_handle))
         # Обработчик ошибок
         self.application.add_error_handler(self.error_handle)
         logger.info(f"Обработчики команд настроены.")
@@ -685,41 +685,63 @@ class TelegramBot:
             await update.message.reply_text("Произошла ошибка при получении статистики.")
             
     async def report_summary_handle(self, update: Update, context: CallbackContext):
-        """Обработчик команды /report_summary для сводки по всем пользователям."""
+        """Обработчик команды /report_summary для генерации сводного отчёта."""
         user_id = update.effective_user.id
         logger.info(f"Команда /report_summary получена от пользователя {user_id}")
+        
+        # Проверяем права доступа пользователя
+        current_user_role = await self.permissions_manager.get_user_role(user_id)
+        if current_user_role not in ['Admin', 'Developer', 'SuperAdmin', 'Head of Registry', 'Founder', 'Marketing Director']:
+            await update.message.reply_text("У вас нет прав для просмотра сводного отчёта.")
+            return
 
-        try:
-            # Получаем данные по всем операторам
-            operators = await self.operator_data.get_all_operators_metrics()
-            if not operators:
-                await update.message.reply_text("Нет данных для отчета.")
+        # Проверка наличия аргументов
+        if len(context.args) < 1:
+            await update.message.reply_text(
+                "Пожалуйста, укажите период (daily, weekly, monthly, yearly или custom). "
+                "Для custom укажите диапазон дат в формате DD/MM/YYYY-DD/MM/YYYY. "
+                "Пример: /report_summary custom 01/10/2024-25/11/2024"
+            )
+            return
+
+        period = context.args[0].lower()
+
+        # Обработка кастомного периода
+        if period == 'custom':
+            if len(context.args) < 2:
+                await update.message.reply_text(
+                    "Для custom периода укажите диапазон дат в формате DD/MM/YYYY-DD/MM/YYYY. "
+                    "Пример: /report_summary custom 01/10/2024-25/11/2024"
+                )
                 return
+            date_range_str = context.args[1]
+            try:
+                start_date_str, end_date_str = date_range_str.split('-')
+                start_date = datetime.strptime(start_date_str.strip(), "%d/%m/%Y")
+                end_date = datetime.strptime(end_date_str.strip(), "%d/%m/%Y")
+            except ValueError:
+                await update.message.reply_text("Ошибка: Неверный формат дат. Ожидается DD/MM/YYYY-DD/MM/YYYY.")
+                return
+        else:
+            start_date, end_date = self.report_generator.get_date_range(period)
 
-            # Создаем задачи для генерации отчетов
-            tasks = [
-                self.generate_and_send_report(op['user_id'], "daily") for op in operators
-            ]
-            reports_data = await asyncio.gather(*tasks, return_exceptions=True)
+        # Устанавливаем соединение с БД
+        connection = await create_async_connection()
+        if not connection:
+            await update.message.reply_text("Ошибка подключения к базе данных.")
+            return
 
-            # Фильтруем ошибки и форматируем успешные отчеты
-            report_texts = []
-            for report_data in reports_data:
-                if isinstance(report_data, Exception):
-                    logger.error(f"Ошибка при генерации отчета: {report_data}")
-                    continue
-                if isinstance(report_data, str):
-                    report_texts.append(report_data)
-                else:
-                    logger.warning("Получен некорректный формат данных отчета.")
+        # Создаём экземпляр генератора отчётов
+        report_generator = OpenAIReportGenerator(self.db_manager)
 
-            # Формируем полный текст отчета
-            full_report = "\n".join(report_texts)
-            await self.send_long_message(update.effective_chat.id, full_report)
-            logger.info("Сводка по всем пользователям успешно отправлена.")
-        except Exception as e:
-            logger.error(f"Ошибка при создании сводки по пользователям: {e}")
-            await update.message.reply_text("Произошла ошибка при создании сводки.")
+        # Генерируем сводный отчёт
+        report = await report_generator.generate_summary_report(connection, start_date, end_date)
+
+        # Отправляем отчёт пользователю
+        await self.send_long_message(update.effective_chat.id, report)
+
+        # Закрываем соединение
+        connection.close()
 
 
     async def settings_handle(self, update: Update, context: CallbackContext):

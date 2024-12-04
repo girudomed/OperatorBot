@@ -863,6 +863,167 @@ class OpenAIReportGenerator:
         # Логируем успешное создание отчета
         logger.info(f"[КРОТ]: Отчет успешно отформатирован для оператора {name} с extension {get_metric('extension')}.")
         return report
+    
+    def aggregate_metrics(self, all_metrics):
+        """
+        Агрегирует метрики всех операторов.
+        :param all_metrics: список метрик каждого оператора.
+        :return: словарь с суммарными метриками.
+        """
+        # Инициализируем словарь для суммарных метрик
+        summary = {
+        'total_calls': 0,
+        'accepted_calls': 0,
+        'missed_calls': 0,
+        'booked_calls': 0,
+        'total_cancellations': 0,
+        'complaint_calls': 0,
+        'total_conversation_time': 0.0,
+        'avg_call_rating_list': [],
+        'avg_lead_call_rating_list': [],
+        'avg_cancel_score_list': [],
+        'cancellation_rate_list': [],
+            # Добавьте другие необходимые метрики
+        }
+
+        for metrics in all_metrics:
+            summary['total_calls'] += metrics.get('total_calls', 0)
+            summary['accepted_calls'] += metrics.get('accepted_calls', 0)
+            summary['missed_calls'] += metrics.get('missed_calls', 0)
+            summary['booked_calls'] += metrics.get('booked_calls', 0)
+            summary['total_cancellations'] += metrics.get('total_cancellations', 0)
+            summary['complaint_calls'] += metrics.get('complaint_calls', 0)
+            summary['total_conversation_time'] += metrics.get('total_conversation_time', 0.0)
+            
+            # Сбор оценок для вычисления среднего
+            avg_call_rating = metrics.get('avg_call_rating')
+            if avg_call_rating is not None:
+                summary['avg_call_rating_list'].append(avg_call_rating)
+            avg_lead_call_rating = metrics.get('avg_lead_call_rating')
+            if avg_lead_call_rating is not None:
+                    summary['avg_lead_call_rating_list'].append(avg_lead_call_rating)
+            avg_cancel_score = metrics.get('avg_cancel_score')
+            if avg_cancel_score is not None:
+                summary['avg_cancel_score_list'].append(avg_cancel_score)
+            
+            cancellation_rate = metrics.get('cancellation_rate')
+            if cancellation_rate is not None:
+                summary['cancellation_rate_list'].append(cancellation_rate)
+        
+        # Рассчитываем средние значения
+        num_ratings = len(summary['avg_call_rating_list'])
+        summary['avg_call_rating'] = sum(summary['avg_call_rating_list']) / num_ratings if num_ratings > 0 else 0.0
+        del summary['avg_call_rating_list']
+
+        num_lead_ratings = len(summary['avg_lead_call_rating_list'])
+        summary['avg_lead_call_rating'] = sum(summary['avg_lead_call_rating_list']) / num_lead_ratings if num_lead_ratings > 0 else 0.0
+        del summary['avg_lead_call_rating_list']
+
+        num_cancel_scores = len(summary['avg_cancel_score_list'])
+        summary['avg_cancel_score'] = sum(summary['avg_cancel_score_list']) / num_cancel_scores if num_cancel_scores > 0 else 0.0
+        del summary['avg_cancel_score_list']
+
+        num_cancellation_rates = len(summary['cancellation_rate_list'])
+        summary['cancellation_rate'] = sum(summary['cancellation_rate_list']) / num_cancellation_rates if num_cancellation_rates > 0 else 0.0
+        del summary['cancellation_rate_list']
+
+        return summary
+
+    async def generate_summary_report(self, connection, start_date, end_date):
+        """
+        Генерирует сводный отчёт по всем операторам за указанный период.
+        """
+        logger.info("[КРОТ]: Начата генерация сводного отчёта по всем операторам.")
+
+        try:
+            # Получаем список всех операторов
+            operators_query = "SELECT user_id, name, extension FROM users WHERE extension IS NOT NULL"
+            async with connection.cursor() as cursor:
+                await cursor.execute(operators_query)
+                operators = await cursor.fetchall()
+
+            if not operators:
+                logger.warning("[КРОТ]: Не найдено ни одного оператора с указанным extension.")
+                return "Не найдено ни одного оператора для формирования сводного отчёта."
+
+            all_metrics = []
+
+            # Собираем метрики для каждого оператора
+            for operator in operators:
+                user_id = operator['user_id']
+                name = operator['name']
+                extension = operator['extension']
+
+                # Получаем данные оператора
+                operator_data = await self.get_operator_data(connection, extension, start_date, end_date)
+                if not operator_data:
+                    logger.warning(f"[КРОТ]: Данные не найдены для оператора {name} (extension {extension}).")
+                    continue
+
+                call_history_data = operator_data.get('call_history', [])
+                call_scores_data = operator_data.get('call_scores', [])
+
+                # Расчитываем метрики оператора
+                operator_metrics = await self.metrics_calculator.calculate_operator_metrics(
+                    call_history_data=call_history_data,
+                    call_scores_data=call_scores_data,
+                    extension=extension,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+
+                if operator_metrics:
+                    operator_metrics['name'] = name
+                    all_metrics.append(operator_metrics)
+                else:
+                    logger.warning(f"[КРОТ]: Метрики не найдены для оператора {name} (extension {extension}).")
+
+            if not all_metrics:
+                return "Не удалось собрать метрики ни для одного оператора."
+
+            # Агрегация метрик
+            summary_metrics = self.aggregate_metrics(all_metrics)
+
+            # Формирование отчёта
+            report = self.create_summary_report(summary_metrics, start_date, end_date)
+            logger.info("[КРОТ]: Сводный отчёт успешно сформирован.")
+            return report
+
+        except Exception as e:
+            logger.error(f"[КРОТ]: Ошибка при генерации сводного отчёта: {e}")
+            return f"Ошибка при генерации сводного отчёта: {e}"
+        
+
+    def create_summary_report(self, summary_metrics, start_date, end_date):
+        """
+        Формирует текст сводного отчёта.
+        :param summary_metrics: словарь с суммарными метриками.
+        :return: текст отчёта.
+        """
+        report_date = f"{start_date.strftime('%Y-%m-%d')} - {end_date.strftime('%Y-%m-%d')}"
+        report = f"""
+    📊 **Сводный отчёт за период {report_date}**
+
+    1. **Общая статистика по всем операторам:**
+    - Всего звонков: {summary_metrics['total_calls']}
+    - Принято звонков: {summary_metrics['accepted_calls']}
+    - Пропущено звонков: {summary_metrics['missed_calls']}
+    - Записаны на услугу: {summary_metrics['booked_calls']}
+    - Всего отмен: {summary_metrics['total_cancellations']}
+    - Жалобы: {summary_metrics['complaint_calls']}
+
+    2. **Качество обслуживания:**
+    - Средняя оценка разговоров: {summary_metrics['avg_call_rating']:.2f}
+    - Средняя оценка разговоров для желающих записаться: {summary_metrics['avg_lead_call_rating']:.2f}
+    - Средняя оценка звонков по отмене: {summary_metrics['avg_cancel_score']:.2f}
+    - Доля отмен: {summary_metrics['cancellation_rate']:.2f}%
+    - Общее время разговоров: {summary_metrics['total_conversation_time']:.2f} секунд
+
+    """
+        # Удаляем лишние пустые строки
+        report = '\n'.join([line.strip() for line in report.strip().split('\n') if line.strip()])
+        return report
+
         
     ##*Тут все запросы в таблицу report. Метод отвечает за сохранение данных в таблицу. Метод сохранения данных в таблицу reports*
     ## *Метод сохранения данных в таблицу reports*
@@ -897,12 +1058,16 @@ class OpenAIReportGenerator:
         logger.info(f"[КРОТ]: Начало сохранения отчета для пользователя {user_id} ({name}). Период: {period}, Дата: {report_date}")
 
         # Приведение user_id к целому числу
-        try:
-            user_id = int(user_id)
-        except ValueError as e:
-            logger.error(f"[КРОТ]: Ошибка приведения user_id к целому числу: {e}")
-            return "Ошибка: user_id должен быть целым числом."
-
+        if user_id is not None:
+            try:
+                user_id = int(user_id)
+            except ValueError as e:
+                logger.error(f"[КРОТ]: Ошибка приведения user_id к целому числу: {e}")
+                return "Ошибка: user_id должен быть целым числом."
+            
+        else:
+            user_id = -1  # Используем -1 или другое специальное значение для сводных отчётов
+            
         # Проверка обязательных параметров
         if not report_text or not recommendations:
             logger.error(f"[КРОТ]: report_text или recommendations пусты для user_id {user_id}.")
