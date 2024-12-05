@@ -105,17 +105,17 @@ class MetricsCalculator:
         # Продолжайте расчет метрик, используя accepted_calls и missed_calls
 
         # Метрики по записям и конверсии
-        booked_calls = sum(
+        booked_services = sum(
             1 for call in accepted_calls if call.get('call_category') == 'Запись на услугу (успешная)'
         )
-        self.logger.info(f"[КРОТ]: Количество записей на услугу (booked_calls): {booked_calls}")
+        self.logger.info(f"[КРОТ]: Количество записей на услугу (booked_services): {booked_services}")
 
         total_leads = sum(
             1 for call in accepted_calls if call.get('call_category') in ['Лид (без записи)']
         )
         self.logger.info(f"[КРОТ]: Общее количество лидов (total_leads): {total_leads}")
 
-        conversion_rate_leads = (booked_calls / total_leads) * 100 if total_leads > 0 else 0.0
+        conversion_rate_leads = (booked_services / total_leads) * 100 if total_leads > 0 else 0.0
         self.logger.info(f"[КРОТ]: Конверсия в запись от желающих записаться (conversion_rate_leads): {conversion_rate_leads:.2f}%")
 
         # Средние оценки звонков
@@ -202,7 +202,7 @@ class MetricsCalculator:
             'accepted_calls': accepted_calls_count,
             'missed_calls': missed_calls_count,
             'missed_rate': missed_rate,
-            'booked_calls': booked_calls,
+            'booked_services': booked_services,
             'conversion_rate_leads': conversion_rate_leads,
             'avg_call_rating': avg_call_rating,
             'avg_lead_call_rating': avg_lead_call_rating,
