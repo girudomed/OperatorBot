@@ -8,7 +8,7 @@ import html
 import json
 import re
 from datetime import datetime, timedelta
-from logging.handlers import RotatingFileHandler
+from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 import httpx
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -42,7 +42,7 @@ from telegram.constants import ParseMode
 import queue  # Добавлено для Queue
 from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 import fcntl
-
+from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 
 lock_file = '/tmp/bot.lock'
 fp = open(lock_file, 'w')
@@ -62,35 +62,41 @@ print(f"Загруженный токен: {telegram_token}")  # Отладоч�
 # Убедитесь, что `token` является строкой
 if not isinstance(telegram_token, str):
     raise TypeError("Значение токена должно быть строкой")
-# Настройка логирования
+# Создаем очередь для логов
 log_queue = queue.Queue(-1)
-logger = logging.getLogger('KROT')
+
+# Настраиваем корневой логгер
+logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-log_file="logs.log",
-log_level=logging.DEBUG,
-max_bytes=10 * 1024 * 1024,  # 10 MB
-backup_count=5,
-max_log_lines=70000  # Лимит строк
-telegram_chat_id=309606681 ###мой телеграм чат айди
-logger.info("Бот успешно запущен.")
-stream_handler = logging.StreamHandler()
-stream_handler.setLevel(logging.DEBUG)  # Отображение всех уровней
-stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-logger.addHandler(stream_handler)
 
-# Настройка обработчика для записи логов в файл
-log_handler = RotatingFileHandler('logs.log', maxBytes=10**6, backupCount=10)
-log_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+# Настраиваем обработчик для записи логов в файл с ротацией
+log_file = 'logs.log'
+max_log_lines = 150000
+average_line_length = 100
+max_bytes = max_log_lines * average_line_length
+backup_count = 0
 
-# Настройка QueueHandler и QueueListener для многопоточного логирования
+file_handler = RotatingFileHandler(
+    log_file, maxBytes=max_bytes, backupCount=backup_count, encoding='utf-8'
+)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+file_handler.setLevel(logging.INFO)
+
+# Настраиваем QueueHandler и QueueListener
 queue_handler = QueueHandler(log_queue)
-logger.addHandler(queue_handler)
-listener = QueueListener(log_queue, log_handler)
+listener = QueueListener(log_queue, file_handler)
 listener.start()
 
-logger.info("Логирование настроено. Логи сохраняются в файл: logs.log")
+logger.addHandler(queue_handler)
+
+# Настройка обработчика для консоли
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+console_handler.setLevel(logging.INFO)
+logger.addHandler(console_handler)
+
+# Обработчик необработанных исключений
 def log_uncaught_exceptions(exc_type, exc_value, exc_traceback):
-    """Обработчик необработанных исключений."""
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return

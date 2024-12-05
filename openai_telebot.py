@@ -30,7 +30,12 @@ import re
 
 # Загрузка переменных окружения
 load_dotenv()
+#Глобальный логер делаем в bot.py, а тут ссылаемся на логирование
+# Получаем логгер для текущего модуля
+logger = logging.getLogger(__name__)
 
+# Проверяем, что сообщения из этого модуля логируются
+logger.info("Логгер в openai_telebot.py настроен и работает.")
 # Настройка Sentry
 sentry_sdk.init(
     dsn=os.getenv("SENTRY_DSN"),
@@ -39,30 +44,30 @@ sentry_sdk.init(
 )
 
 # Настройка логирования
-log_file = "logs.log"
-log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+#log_file = "logs.log"
+###log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
 # RotatingFileHandler с ограничением на количество строк
 # Ориентировочно, одна строка логов занимает около 100 символов
-max_log_size = 70000 * 100  # 70,000 строк по 100 символов каждая
-backup_count = 5  # Сохраняем до 5 резервных копий
+##max_log_size = 70000 * 100  # 70,000 строк по 100 символов каждая
+#backup_count = 5  # Сохраняем до 5 резервных копий
 
-file_handler = RotatingFileHandler(
-    log_file, maxBytes=max_log_size, backupCount=backup_count, encoding='utf-8'
-)
-file_handler.setFormatter(log_formatter)
-file_handler.setLevel(logging.INFO)
+#file_handler = RotatingFileHandler(
+# log_file, maxBytes=max_log_size, backupCount=backup_count, encoding='utf-8'
+#)
+#file_handler.setFormatter(log_formatter)
+##file_handler.setLevel(logging.INFO)
 
 # Консольный обработчик для дублирования логов
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(log_formatter)
-console_handler.setLevel(logging.INFO)
+#console_handler = logging.StreamHandler()
+#console_handler.setFormatter(log_formatter)
+#console_handler.setLevel(logging.INFO)
 
 # Конфигурация основного логгера
-logger = logging.getLogger(__name__)
-logger.addHandler(file_handler)
-logger.addHandler(console_handler)
-logger.setLevel(logging.INFO)
+#logger = logging.getLogger(__name__)
+#logger.addHandler(file_handler)
+#logger.addHandler(console_handler)
+#logger.setLevel(logging.INFO)
 
 # Глобальный обработчик исключений
 def setup_global_error_handler():
