@@ -116,7 +116,69 @@ telegram_token = "YOUR_BOT_TOKEN"
 logger.info("Настройка приложения Telegram...")
 app = ApplicationBuilder().token(telegram_token).request(httpx_request).rate_limiter(AIORateLimiter()).build()
 
-# Запуск long polling
+#Задачи
+MAX_CONCURRENT_TASKS = 3
+task_queue = asyncio.Queue()
+
+async def worker(queue: asyncio.Queue, bot_instance):
+    while True:
+        task = await queue.get()
+        user_id = task["user_id"]
+        report_type = task["report_type"]
+        period = task["period"]
+        chat_id = task["chat_id"]
+        date_range = task["date_range"]
+
+        try:
+            # Открываем соединение с БД через async with
+            async with bot_instance.db_manager.acquire() as connection:
+                report = await bot_instance.report_generator.generate_report(
+                    connection,
+                    user_id,
+                    period=period,
+                    date_range=date_range
+                )
+
+            # Теперь report либо содержит текст отчета, либо сообщение об ошибке, если данных нет
+            if report and not report.startswith("Ошибка:"):
+                # Отчет успешно сгенерирован
+                await bot_instance.send_long_message(chat_id, report)
+                logger.info(f"Отчет для user_id={user_id} отправлен.")
+            else:
+                # Если вернулось None или строка с "Ошибка", информируем пользователя
+                if not report:
+                    # В случае если вообще ничего не вернулось
+                    message = "Ошибка при извлечении данных оператора или данных нет."
+                else:
+                    # report уже содержит текст ошибки, например "Ошибка..." 
+                    message = report  
+                await bot_instance.application.bot.send_message(chat_id=chat_id, text=message)
+                logger.info(f"Нет данных или ошибка для user_id={user_id}. Сообщение пользователю: {message}")
+
+        except Exception as e:
+            logger.error(f"Ошибка при обработке задачи для user_id={user_id}: {e}")
+            await bot_instance.application.bot.send_message(
+                chat_id=chat_id,
+                text="Произошла ошибка при генерации отчета. Попробуйте позже."
+            )
+        finally:
+            queue.task_done()
+            logger.info(f"Воркеры завершили обработку задачи: {task}")
+
+async def add_task(bot_instance, user_id, report_type, period, chat_id, date_range=None):
+    task = {
+        "user_id": user_id,
+        "report_type": report_type,
+        "period": period,
+        "chat_id": chat_id,
+        "date_range": date_range
+    }
+    await task_queue.put(task)
+    logger.info(f"Задача добавлена в очередь для user_id={user_id}, {report_type}, {period}.")
+    await bot_instance.application.bot.send_message(
+        chat_id=chat_id,
+        text="Ваш запрос поставлен в очередь на обработку."
+    )
 
 # Чтение конфигурации из .env файла
 db_config = {
@@ -182,8 +244,12 @@ class TelegramBot:
         self.setup_handlers()
         if not self.scheduler.running:
             self.scheduler.start()
-        self.scheduler.add_job(self.send_daily_reports, 'cron', hour=18, minute=0)
-        logger.info("Бот успешно инициализирован.")    
+        self.scheduler.add_job(self.send_daily_reports, 'cron', hour=6, minute=00)
+        logger.info("Ежедневная задача для отправки отчетов добавлена в планировщик.")
+        # Запуск воркеров
+        for _ in range(MAX_CONCURRENT_TASKS):
+            asyncio.create_task(worker(task_queue, self))
+        logger.info(f"Запущено {MAX_CONCURRENT_TASKS} воркеров для обработки очереди задач.")
 
     async def setup_db_connection(self, retries=3, delay=2):
         """Настройка подключения к базе данных с повторными попытками."""
@@ -198,8 +264,7 @@ class TelegramBot:
                     await asyncio.sleep(delay * (attempt + 1))
                 else:
                     raise
-                
-                
+
     async def get_help_message(self, user_id):
         """Возвращает текст помощи в зависимости от роли пользователя."""
         current_user_role = await self.permissions_manager.get_user_role(user_id)
@@ -510,7 +575,6 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Ошибка при проверке пароля роли для пользователя с ID {user_id}: {e}")
             return False, "Ошибка при проверке пароля."
-            
 
     def parse_period(self, period_str):
         """Парсинг периода из строки. Возвращает дату или диапазон."""
@@ -597,6 +661,15 @@ class TelegramBot:
                     "Пример: /generate_report 2 custom 20/11/2024-25/11/2024"
                 )
                 return
+            date_range_str = context.args[2]  # "11/11/2024-11/12/2024"
+
+            report = await self.report_generator.generate_report(
+                connection, target_user_id, period='custom', date_range=date_range_str
+            )
+        else:
+            report = await self.report_generator.generate_report(
+                connection, target_user_id, period=period_str
+            )
 
             try:
                 # Парсинг диапазона дат
@@ -769,20 +842,39 @@ class TelegramBot:
         )
         await update.message.reply_text(settings_message)
 
-    async def send_daily_reports(self):
-        """Отправка ежедневных отчетов в конце рабочего дня."""
-        logger.info("Начата отправка ежедневных отчетов.")
-        try:
-            operators = await self.operator_data.get_all_operators_metrics()
-            tasks = [
-                self.generate_and_send_report(operator['user_id'], "daily")
-                for operator in operators
-            ]
-            await asyncio.gather(*tasks, return_exceptions=True)
-            logger.info("Ежедневные отчеты успешно отправлены.")
-        except Exception as e:
-            logger.error(f"Ошибка при отправке ежедневных отчетов: {e}")
 
+    from datetime import datetime, timedelta
+
+    async def send_daily_reports(self):
+        """Отправка ежедневных отчетов за предыдущий день."""
+        logger.info("Начата постановка задач на ежедневные отчеты для нескольких операторов.")
+        try:
+            # Список руководителей
+            managers = [309606681]  # Укажите chat_id руководителей
+            # Список операторов, по которым нужно сформировать отчеты
+            operator_ids = [2, 5, 6, 8, 9, 10]
+
+            # Формируем даты за предыдущий день
+            yesterday = datetime.now() - timedelta(days=1)
+            date_str = yesterday.strftime('%d/%m/%Y')
+            date_range = f"{date_str}-{date_str}"
+
+            # Для каждого руководителя добавляем задачи для каждого оператора
+            for manager_chat_id in managers:
+                for op_id in operator_ids:
+                    await add_task(
+                    bot_instance=self,
+                    user_id=op_id,
+                    report_type="custom",  # указываете что это custom период
+                    period="custom",       # строго 'custom', без лишних слов
+                    chat_id=manager_chat_id,
+                    date_range=date_range # новый аргумент
+                )
+                    logger.info(f"Задача на отчет для оператора {op_id} за {date_range} добавлена.")
+            logger.info("Все задачи на ежедневные отчеты успешно поставлены в очередь.")
+        except Exception as e:
+            logger.error(f"Ошибка при постановке задач на ежедневные отчеты: {e}")
+            
     async def generate_and_send_report(self, user_id, period):
         """Генерация и отправка отчета для конкретного пользователя."""
         try:
@@ -869,27 +961,21 @@ class TelegramBot:
         :param chunk_size: Максимальный размер части сообщения (по умолчанию 4096 символов).
         """
         # Экранирование текста для HTML
-        escaped_message = html.escape(message)
+        message_chunks = [message[i:i + chunk_size] for i in range(0, len(message), chunk_size)]
         # Разбиваем сообщение на части, если оно длинное
-        for i in range(0, len(message), chunk_size):
-            chunk = message[i:i + chunk_size]
+        for chunk in message_chunks:
             try:
-                # Логируем отправляемую часть
-                logger.info(f"Отправка части сообщения: {chunk[:50]}... (длина: {len(chunk)})")
-                # Отправляем каждую часть сообщения отдельно
-                await self.application.bot.send_message(chat_id=chat_id, text=chunk)
+                # Экранируем текст, если используется HTML
+                chunk = html.escape(chunk)  # Если используется HTML
+                await self.application.bot.send_message(chat_id=chat_id, text=chunk, parse_mode=ParseMode.HTML)
                 await asyncio.sleep(0.1)  # Небольшая задержка между отправками
             except Exception as e:
                 logger.error(f"Ошибка при отправке части сообщения: {e}")
-                # Попробуйте отправить сообщение об ошибке в Telegram
-            try:
                 await self.application.bot.send_message(
                     chat_id=chat_id,
                     text="Произошла ошибка при отправке длинного сообщения. Пожалуйста, попробуйте позже."
                 )
-            except Exception as inner_e:
-                logger.error(f"Ошибка при отправке уведомления об ошибке: {inner_e}")
-            break
+                break
     
     async def error_handle(self, update: Update, context: CallbackContext):
         """Централизованная обработка ошибок."""
