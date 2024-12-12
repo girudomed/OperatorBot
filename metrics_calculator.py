@@ -111,11 +111,11 @@ class MetricsCalculator:
         self.logger.info(f"[КРОТ]: Количество записей на услугу (booked_services): {booked_services}")
 
         total_leads = sum(
-            1 for call in accepted_calls if call.get('call_category') in ['Лид (без записи)']
+            1 for call in accepted_calls if call.get('call_category') in ['Лид (без записи)', 'Запись на услугу (успешная)']
         )
         self.logger.info(f"[КРОТ]: Общее количество лидов (total_leads): {total_leads}")
 
-        conversion_rate_leads = (booked_services / total_leads) * 100 if total_leads > 0 else 0.0
+        conversion_rate_leads = (booked_services / accepted_calls_count) * 100 if total_leads > 0 else 0.0
         self.logger.info(f"[КРОТ]: Конверсия в запись от желающих записаться (conversion_rate_leads): {conversion_rate_leads:.2f}%")
 
         # Средние оценки звонков

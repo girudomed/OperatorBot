@@ -9,8 +9,6 @@ import json
 import re
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
-import httpx
-
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import httpx
 from telegram import Update, BotCommand
@@ -42,7 +40,7 @@ from telegram.constants import ParseMode
 import queue  # Добавлено для Queue
 from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 import fcntl
-from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
+from telegram.ext import Application
 
 lock_file = '/tmp/bot.lock'
 fp = open(lock_file, 'w')
@@ -103,18 +101,22 @@ def log_uncaught_exceptions(exc_type, exc_value, exc_traceback):
     logger.error("Необработанное исключение", exc_info=(exc_type, exc_value, exc_traceback))
 
 sys.excepthook = log_uncaught_exceptions
+
 # Настройка минимальных параметров для HTTPXRequest
 logger.info("Настройка HTTPXRequest...")
 httpx_request = HTTPXRequest(
-    connection_pool_size=50,     # Размер пула соединений
-    read_timeout=10.0,           # Таймаут на чтение
-    write_timeout=10.0,          # Таймаут на запись
-    connect_timeout=5.0          # Таймаут на подключение
+    connection_pool_size=100,  # Размер пула соединений
+    read_timeout=10.0,         # Таймаут на чтение
+    write_timeout=10.0,        # Таймаут на запись
+    connect_timeout=5.0        # Таймаут на подключение
 )
 
-# Инициализация бота
+# Инициализация приложения Telegram
+telegram_token = "YOUR_BOT_TOKEN"
 logger.info("Настройка приложения Telegram...")
 app = ApplicationBuilder().token(telegram_token).request(httpx_request).rate_limiter(AIORateLimiter()).build()
+
+# Запуск long polling
 
 # Чтение конфигурации из .env файла
 db_config = {
@@ -131,7 +133,6 @@ HELP_MESSAGE = """Команды:
         /start – Приветствие и инструкция
         /register – Регистрация нового пользователя
         /generate_report [user_id] [period] – Генерация отчета
-        /request_stats – Запрос текущей статистики
         /help – Показать помощь
         /report_summary – Сводка по отчетам
         /settings – Показать настройки
@@ -145,13 +146,12 @@ HELP_MESSAGE = """Команды:
         7	 ПП Ст.админ
         8	 Ресепшн ГВ
         9	 Ресепшн ПП
-        10	 Энже
 
-        Пример: "/generate_report 2 yearly"
-
+        Для генерации отчета по операторам с рекомендациями используйте команду: "/generate_report 5 custom 01/10/2024-25/11/2024", где custom является важной переменной после главной команды, также дата должна строго быть в таком формате
+        Для генерации отчета по всем операторам без упоминании позывного без рекомендацией используйте команду: "/report_summary custom 01/10/2024-25/11/2024"
         Если вы нажали не ту команду, то выполните команду "/cancel"
         
-        Сначала необходимо зайти в бота через команду /login введя пароль
+        Сначала необходимо зайти в бота через команду /login введя пароль 
             
         По вопросам работы бота обращаться в отдел маркетинга Гирудомед.
     
@@ -868,21 +868,28 @@ class TelegramBot:
         :param message: Текст сообщения для отправки.
         :param chunk_size: Максимальный размер части сообщения (по умолчанию 4096 символов).
         """
+        # Экранирование текста для HTML
+        escaped_message = html.escape(message)
         # Разбиваем сообщение на части, если оно длинное
         for i in range(0, len(message), chunk_size):
             chunk = message[i:i + chunk_size]
             try:
+                # Логируем отправляемую часть
+                logger.info(f"Отправка части сообщения: {chunk[:50]}... (длина: {len(chunk)})")
                 # Отправляем каждую часть сообщения отдельно
                 await self.application.bot.send_message(chat_id=chat_id, text=chunk)
                 await asyncio.sleep(0.1)  # Небольшая задержка между отправками
             except Exception as e:
                 logger.error(f"Ошибка при отправке части сообщения: {e}")
-                # В случае ошибки отправляем сообщение об ошибке и прерываем отправку
+                # Попробуйте отправить сообщение об ошибке в Telegram
+            try:
                 await self.application.bot.send_message(
                     chat_id=chat_id,
                     text="Произошла ошибка при отправке длинного сообщения. Пожалуйста, попробуйте позже."
                 )
-                break
+            except Exception as inner_e:
+                logger.error(f"Ошибка при отправке уведомления об ошибке: {inner_e}")
+            break
     
     async def error_handle(self, update: Update, context: CallbackContext):
         """Централизованная обработка ошибок."""
