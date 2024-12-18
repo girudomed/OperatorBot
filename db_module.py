@@ -263,7 +263,7 @@ class DatabaseManager:
     async def save_report_to_db(self, user_id, total_calls, accepted_calls, booked_services, conversion_rate,
                                 avg_call_rating, total_cancellations, cancellation_rate, total_conversation_time,
                                 avg_conversation_time, avg_spam_time, total_spam_time, total_navigation_time,
-                                avg_navigation_time, total_talk_time, complaint_calls, complaint_rating, recommendations):
+                                avg_navigation_time, complaint_calls, complaint_rating, recommendations):
         """Сохранение отчета в базу данных."""
         logger.debug(f"Saving report to DB for user_id: {user_id}, data: {locals()}")
 
@@ -271,8 +271,8 @@ class DatabaseManager:
         INSERT INTO reports (user_id, report_date, total_calls, accepted_calls, booked_services, conversion_rate,
                              avg_call_rating, total_cancellations, cancellation_rate, total_conversation_time,
                              avg_conversation_time, avg_spam_time, total_spam_time, total_navigation_time,
-                             avg_navigation_time, total_talk_time, complaint_calls, complaint_rating, recommendations)
-        VALUES (%s, CURRENT_DATE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                             avg_navigation_time, complaint_calls, complaint_rating, recommendations)
+        VALUES (%s, CURRENT_DATE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE 
             total_calls=VALUES(total_calls),
             accepted_calls=VALUES(accepted_calls),
@@ -287,7 +287,6 @@ class DatabaseManager:
             total_spam_time=VALUES(total_spam_time),
             total_navigation_time=VALUES(total_navigation_time),
             avg_navigation_time=VALUES(avg_navigation_time),
-            total_talk_time=VALUES(total_talk_time),
             complaint_calls=VALUES(complaint_calls),
             complaint_rating=VALUES(complaint_rating),
             recommendations=VALUES(recommendations)
@@ -295,7 +294,7 @@ class DatabaseManager:
         params = (
             user_id, total_calls, accepted_calls, booked_services, conversion_rate, avg_call_rating,
             total_cancellations, cancellation_rate, total_conversation_time, avg_conversation_time,
-            avg_spam_time, total_spam_time, total_navigation_time, avg_navigation_time, total_talk_time,
+            avg_spam_time, total_spam_time, total_navigation_time, avg_navigation_time,
             complaint_calls, complaint_rating, recommendations
         )
         await self.execute_query(query, params)
@@ -306,7 +305,7 @@ class DatabaseManager:
         query = """
         SELECT user_id, report_date, total_calls, accepted_calls, booked_services, conversion_rate, avg_call_rating,
                total_cancellations, cancellation_rate, total_conversation_time, avg_conversation_time, avg_spam_time,
-               total_spam_time, total_navigation_time, avg_navigation_time, total_talk_time, complaint_calls,
+               total_spam_time, total_navigation_time, avg_navigation_time, complaint_calls,
                complaint_rating, recommendations
         FROM reports
         WHERE report_date = CURRENT_DATE
@@ -412,7 +411,6 @@ class DatabaseManager:
                 total_spam_time INT,
                 total_navigation_time INT,
                 avg_navigation_time INT,
-                total_talk_time INT,
                 complaint_calls INT,
                 complaint_rating FLOAT,
                 recommendations TEXT,

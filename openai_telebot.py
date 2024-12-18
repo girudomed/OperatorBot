@@ -463,7 +463,7 @@ class OpenAIReportGenerator:
             'conversion_rate_leads', 'avg_call_rating', 'avg_lead_call_rating',
             'total_cancellations', 'avg_cancel_score', 'cancellation_rate',
             'complaint_calls', 'complaint_rating', 'avg_conversation_time',
-            'avg_navigation_time', 'avg_service_time'
+            'avg_navigation_time', 'avg_service_time', 'total_leads'
             ]
             missing_metrics = [metric for metric in required_metrics if metric not in operator_metrics]
             if missing_metrics:
@@ -518,7 +518,7 @@ class OpenAIReportGenerator:
             'extension', 'empathy_score', 'understanding_score', 'response_quality_score',
             'problem_solving_score', 'call_closing_score', 'total_call_score',
             'conversion_rate_leads', 'avg_complaint_time', 'avg_service_time',
-            'avg_navigation_time', 'total_calls', 'accepted_calls', 'total_talk_time'
+            'avg_navigation_time', 'total_calls', 'accepted_calls', 'total_conversation_time', 'total_leads'
         ]
         missing_fields = [field for field in required_fields if field not in operator_metrics]
         if missing_fields:
@@ -560,7 +560,7 @@ class OpenAIReportGenerator:
                 'conversion_rate_leads', 'avg_call_rating', 'avg_lead_call_rating',
                 'total_cancellations', 'avg_cancel_score', 'cancellation_rate',
                 'complaint_calls', 'complaint_rating', 'avg_conversation_time',
-                'avg_navigation_time', 'avg_service_time'
+                'avg_navigation_time', 'avg_service_time', 'total_leads'
             ]
             missing_metrics = [metric for metric in required_metrics if metric not in operator_metrics]
             if missing_metrics:
@@ -789,7 +789,7 @@ class OpenAIReportGenerator:
         'conversion_rate_leads', 'avg_call_rating', 'avg_lead_call_rating',
         'total_cancellations', 'avg_cancel_score', 'cancellation_rate',
         'complaint_calls', 'complaint_rating', 'avg_conversation_time',
-        'avg_navigation_time', 'avg_service_time', 'extension'
+        'avg_navigation_time', 'avg_service_time', 'extension', 'total_leads'
         ]
         
         missing_metrics = [metric for metric in required_metrics if metric not in operator_metrics]
@@ -816,6 +816,7 @@ class OpenAIReportGenerator:
         - Пропущено звонков: {get_metric('missed_calls', 'Нет данных')}
         - Записаны на услугу: {get_metric('booked_services', 'Нет данных')}
         - Конверсия в запись от желающих записаться: {format_metric('conversion_rate_leads')}%
+        - Общее количество лидов {get_metric('total_leads', 'Нет данных')}
     """
 
         # Качество обработки звонков
@@ -878,6 +879,7 @@ class OpenAIReportGenerator:
         # Инициализируем словарь для суммарных метрик
         summary = {
         'total_calls': 0,
+        'total_leads': 0,
         'accepted_calls': 0,
         'missed_calls': 0,
         'booked_services': 0,
@@ -897,6 +899,7 @@ class OpenAIReportGenerator:
 
         for metrics in all_metrics:
             summary['total_calls'] += metrics.get('total_calls', 0)
+            summary['total_leads'] += metrics.get('total_leads', 0)
             summary['accepted_calls'] += metrics.get('accepted_calls', 0)
             summary['missed_calls'] += metrics.get('missed_calls', 0)
             summary['booked_services'] += metrics.get('booked_services', 0)
@@ -1066,6 +1069,7 @@ class OpenAIReportGenerator:
         - Всего звонков: {summary_metrics['total_calls']}
         - Принято звонков: {summary_metrics['accepted_calls']}
         - Пропущено звонков: {summary_metrics['missed_calls']}
+        - Записаны на услугу: {summary_metrics['total_leads']}
         - Записаны на услугу: {summary_metrics['booked_services']}
         - Всего отмен: {summary_metrics['total_cancellations']}
         - Жалобы: {summary_metrics['complaint_calls']}
@@ -1136,7 +1140,7 @@ class OpenAIReportGenerator:
             'conversion_rate_leads', 'avg_call_rating', 'avg_lead_call_rating',
             'total_cancellations', 'avg_cancel_score', 'cancellation_rate',
             'complaint_calls', 'complaint_rating', 'avg_conversation_time',
-            'avg_navigation_time', 'avg_service_time'
+            'avg_navigation_time', 'avg_service_time', 'total_leads'
         ]
 
         # Проверка наличия всех обязательных метрик
@@ -1165,6 +1169,7 @@ class OpenAIReportGenerator:
                 'accepted_calls': safe_int(operator_metrics.get('accepted_calls', 0)),
                 'missed_calls': safe_int(operator_metrics.get('missed_calls', 0)),
                 'booked_services': safe_int(operator_metrics.get('booked_services', 0)),
+                'total_leads': safe_int(operator_metrics.get('total_leads', 0)),
                 'conversion_rate_leads': safe_float(operator_metrics.get('conversion_rate_leads', 0)),
                 'avg_call_rating': safe_float(operator_metrics.get('avg_call_rating', 0)),
                 'avg_lead_call_rating': safe_float(operator_metrics.get('avg_lead_call_rating', 0)),
@@ -1178,7 +1183,6 @@ class OpenAIReportGenerator:
                 'avg_service_time': safe_float(operator_metrics.get('avg_service_time', 0)),
                 'total_conversation_time': safe_float(operator_metrics.get('total_conversation_time', 0.0)),
                 'missed_rate': safe_float(operator_metrics.get('missed_rate', 0)),
-                'cancellation_reschedules': safe_int(operator_metrics.get('cancellation_reschedules', 0)),
                 'avg_time_spam': safe_float(operator_metrics.get('avg_time_spam', 0)),
                 'avg_time_reminder': safe_float(operator_metrics.get('avg_time_reminder', 0)),
                 'avg_time_cancellation': safe_float(operator_metrics.get('avg_time_cancellation', 0)),

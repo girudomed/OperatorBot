@@ -115,7 +115,7 @@ class MetricsCalculator:
         )
         self.logger.info(f"[КРОТ]: Общее количество лидов (total_leads): {total_leads}")
 
-        conversion_rate_leads = (booked_services / accepted_calls_count) * 100 if total_leads > 0 else 0.0
+        conversion_rate_leads = (booked_services / accepted_calls_count) * 100
         self.logger.info(f"[КРОТ]: Конверсия в запись от желающих записаться (conversion_rate_leads): {conversion_rate_leads:.2f}%")
 
         # Средние оценки звонков
@@ -126,7 +126,9 @@ class MetricsCalculator:
             float(call['call_score']) for call in accepted_calls
             if call.get('call_category') in ['Лид (без записи)', 'Запись на услугу (успешная)'] and call.get('call_score')
         ]
-        avg_lead_call_rating = sum(lead_call_scores) / len(lead_call_scores) if lead_call_scores else 0.0
+        avg_lead_call_rating = self.calculate_avg_score([
+            call for call in accepted_calls if call.get('call_category') in ['Лид (без записи)', 'Запись на услугу (успешная)']
+        ])
         self.logger.info(f"[КРОТ]: Средняя оценка разговоров для желающих записаться (avg_lead_call_rating): {avg_lead_call_rating:.2f}")
 
         # Метрики по отменам и переносу записей
@@ -140,12 +142,7 @@ class MetricsCalculator:
         )
         self.logger.info(f"[КРОТ]: Средняя оценка звонков по отмене (avg_cancel_score): {avg_cancel_score:.2f}")
 
-        cancellation_reschedules = sum(
-            1 for call in accepted_calls if call.get('call_category') in ['Отмена записи', 'Перенос записи']
-        )
-        self.logger.info(f"[КРОТ]: Общее количество отмен и переносов (cancellation_reschedules): {cancellation_reschedules}")
-
-        cancellation_rate = (total_cancellations / cancellation_reschedules) * 100 if cancellation_reschedules > 0 else 0.0
+        cancellation_rate = self.calculate_cancellation_rate(accepted_calls)
         self.logger.info(f"[КРОТ]: Доля отмен от числа позвонивших отменить или перенести запись (cancellation_rate): {cancellation_rate:.2f}%")
 
         # Общая длительность и среднее время разговора
@@ -199,6 +196,7 @@ class MetricsCalculator:
         operator_metrics = {
             'extension': extension,
             'total_calls': total_calls,
+            'total_leads': total_leads,
             'accepted_calls': accepted_calls_count,
             'missed_calls': missed_calls_count,
             'missed_rate': missed_rate,
@@ -269,8 +267,8 @@ class MetricsCalculator:
         Подсчет конверсии в запись от желающих записаться.
         """
         leads_and_booked = sum(
-    1 for call in operator_data 
-    if call.get('call_category') in ['Запись на услугу (успешная)', 'Лид (без записи)']
+            1 for call in operator_data 
+            if call.get('call_category') in ['Запись на услугу (успешная)', 'Лид (без записи)']
         )
         booked_services = sum(
             1 for call in operator_data 
