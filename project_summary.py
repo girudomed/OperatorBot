@@ -114,3 +114,5 @@ if __name__ == "__main__":
     print(f"Запуск анализа проекта в директории: {project_directory}")
     logger.info(f"Запуск анализа проекта в директории: {project_directory}")
     analyze_project(project_directory)
+
+

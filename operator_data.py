@@ -3,7 +3,7 @@
 from asyncio.log import logger
 import logging
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import aiomysql  # Для замера времени
 from logger_utils import setup_logging
@@ -11,6 +11,7 @@ import datetime
 from datetime import timedelta
 import traceback
 from typing import Union
+from db_module import DatabaseManager
 
 logger = logging.getLogger("operator_data")
 
@@ -59,6 +60,8 @@ class OperatorData:
         """
         Инициализация с использованием db_manager для взаимодействия с базой данных.
         """
+        if not hasattr(db_manager, "acquire"):
+            raise AttributeError("Переданный db_manager не имеет метода 'acquire'")
         self.db_manager = db_manager
         self.logger = logger or logging.getLogger(__name__)
 
@@ -332,6 +335,85 @@ class OperatorData:
         except Exception as e:
             self.logger.error(f"[КРОТ]: Ошибка при получении данных по производительности пользователей: {e}")
             return []
+        
+    async def get_operator_by_name(self, name: str) -> Optional[dict]:
+        """
+        Возвращает оператора по имени из базы данных, включая user_id и другие данные.
+
+        Args:
+            name (str): Имя оператора.
+
+        Returns:
+            dict: Данные оператора (user_id, name) или None, если оператор не найден.
+        """
+        if not name or not isinstance(name, str):
+            self.logger.error(f"Некорректное имя оператора: {name}")
+            return None
+
+        query = """
+            SELECT user_id, name
+            FROM users
+            WHERE name = %s
+            LIMIT 1
+        """
+        try:
+            # Устанавливаем соединение с базой данных
+            async with self.db_manager.acquire() as connection:
+                async with connection.cursor(aiomysql.DictCursor) as cursor:
+                    # Выполняем SQL-запрос
+                    self.logger.debug(f"Выполнение SQL-запроса: {query} с параметром: {name}")
+                    await cursor.execute(query, (name,))
+                    # Получаем одну строку результата
+                    result = await cursor.fetchone()
+
+                    # Проверка результата
+                    if not result:
+                        self.logger.info(f"Оператор с именем '{name}' не найден в базе данных.")
+                        return None
+
+                    # Логирование полученных данных
+                    self.logger.info(f"Оператор найден: {result}")
+
+                    # Возвращаем данные в формате словаря
+                    return {
+                        "user_id": result.get("user_id"),
+                        "name": result.get("name"),
+                    }
+        except aiomysql.MySQLError as db_error:
+            self.logger.error(f"MySQL ошибка: {db_error}", exc_info=True)
+            return None
+        except Exception as e:
+            self.logger.error(f"Неизвестная ошибка: {e}", exc_info=True)
+            return None
+    async def get_operator_by_id(self, user_id: int) -> Optional[dict]:
+        """
+        Возвращает оператора по user_id из базы данных.
+
+        Args:
+            user_id (int): ID пользователя (оператора).
+
+        Returns:
+            dict: Данные оператора или None, если оператор не найден.
+        """
+        query = """
+            SELECT user_id, name
+            FROM users
+            WHERE user_id = %s
+            LIMIT 1
+        """
+        try:
+            async with self.db_manager.acquire() as connection:
+                async with connection.cursor(aiomysql.DictCursor) as cursor:
+                    await cursor.execute(query, (user_id,))
+                    result = await cursor.fetchone()
+                    if not result:
+                        self.logger.warning(f"Оператор с user_id '{user_id}' не найден в базе данных.")
+                        return None
+                    self.logger.info(f"Оператор найден: {result}")
+                    return result
+        except Exception as e:
+            self.logger.error(f"Ошибка при выполнении запроса get_operator_by_id: {e}", exc_info=True)
+            return None
 
     
 # Пример использования модуля

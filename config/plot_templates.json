@@ -1,0 +1,98 @@
+{
+    "templates": {
+        "line_chart": {
+            "type": "line",
+            "xlabel": "Дата",
+            "ylabel": "Значение",
+            "grid": true,
+            "legend_position": "upper right",
+            "figure": {
+                "figsize": [10, 6],
+                "dpi": 100
+            }
+        },
+        "bar_chart": {
+            "type": "bar",
+            "xlabel": "Дата",
+            "ylabel": "Значение",
+            "grid": true,
+            "legend_position": "upper right",
+            "figure": {
+                "figsize": [12, 6],
+                "dpi": 100
+            }
+        }
+    },
+    "metrics": {
+        "avg_call_rating": {
+            "label": "Средний рейтинг звонков",
+            "color": "#2ecc71",
+            "line_style": "-",
+            "marker": "o",
+            "aggregation": "mean",
+            "format": ".2f"
+        },
+        "total_calls": {
+            "label": "Всего звонков",
+            "color": "#3498db",
+            "line_style": "--",
+            "marker": "s",
+            "aggregation": "sum",
+            "format": "d"
+        },
+        "accepted_calls": {
+            "label": "Принятые звонки",
+            "color": "#9b59b6",
+            "line_style": "-.",
+            "marker": "^",
+            "aggregation": "sum",
+            "format": "d"
+        },
+        "booked_services": {
+            "label": "Забронированные услуги",
+            "color": "#f1c40f",
+            "line_style": ":",
+            "marker": "D",
+            "aggregation": "sum",
+            "format": "d"
+        },
+        "complaint_calls": {
+            "label": "Жалобы",
+            "color": "#e74c3c",
+            "line_style": "--",
+            "marker": "v",
+            "aggregation": "sum",
+            "format": "d"
+        },
+        "conversion_rate": {
+            "label": "Конверсия",
+            "color": "#1abc9c",
+            "line_style": "-",
+            "marker": "*",
+            "aggregation": "mean",
+            "format": ".2f"
+        }
+    },
+    "plot_configs": {
+        "operator_progress": {
+            "template": "line_chart",
+            "title_template": "Прогресс оператора {operator_name} за {period}",
+            "metrics": [
+                "avg_call_rating",
+                "total_calls",
+                "accepted_calls",
+                "booked_services",
+                "complaint_calls",
+                "conversion_rate"
+            ]
+        },
+        "all_operators": {
+            "template": "line_chart",
+            "title_template": "Прогресс всех операторов за {period}",
+            "metrics": [
+                "avg_call_rating",
+                "conversion_rate"
+            ]
+        }
+    }
+}

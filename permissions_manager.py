@@ -249,3 +249,52 @@ class PermissionsManager:
         except Exception as e:
             logger.error(f"[КРОТ]: Ошибка при получении списка пользователей для роли '{role_name}': {e}")
             return []
+    async def can_view_operator(self, user_id: int, operator_id: int) -> bool:
+        """
+        Проверяет, имеет ли пользователь доступ к просмотру данных оператора.
+
+        Args:
+            user_id (int): ID пользователя, запрашивающего доступ.
+            operator_id (int): ID оператора, к которому запрашивается доступ.
+
+        Returns:
+            bool: True, если доступ разрешен, иначе False.
+        """
+        role_query = """
+            SELECT r.permission
+            FROM UsersTelegaBot u
+            JOIN PermissionsTelegaBot r ON u.role_id = r.role_id
+            WHERE u.user_id = %s
+        """
+        try:
+            async with self.db_manager.acquire() as connection:
+                async with connection.cursor() as cursor:
+                    # Получаем разрешения пользователя
+                    await cursor.execute(role_query, (user_id,))
+                    permissions = await cursor.fetchall()
+                    if permissions:
+                        # Проверяем, есть ли full_access
+                        for permission in permissions:
+                            if permission['permission'] == 'full_access':
+                                return True
+            return False
+        except Exception as e:
+            print(f"Ошибка в can_view_operator: {e}")
+            return False
+    async def can_view_periods(self, user_id: int) -> bool:
+        """
+        Проверяет, может ли пользователь просматривать периоды.
+
+        :param user_id: ID пользователя.
+        :return: True, если доступ разрешён, иначе False.
+        """
+        try:
+            # Добавьте логику проверки, например, по роли пользователя
+            user_role = await self.get_user_role(user_id)
+            if user_role in ["Developer", "Admin", "SuperAdmin", "Manager"]:
+                return True
+            else:
+                return False
+        except Exception as e:
+            logger.error(f"Ошибка при проверке прав на просмотр периодов для пользователя {user_id}: {e}")
+            return False

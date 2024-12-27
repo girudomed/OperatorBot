@@ -38,11 +38,13 @@ class DatabaseManager:
     def __init__(self):
         self.pool = None
         self._lock = asyncio.Lock()
-        
+        self.logger = logging.getLogger(__name__)  # Добавляем логгер
+
     async def create_pool(self):
         """Создание пула соединений с базой данных."""
         async with self._lock:
             if not self.pool:
+                self.logger.info("Создание пула соединений.")
                 try:
                     logger.info("Попытка подключения к базе данных.")
                     self.pool = await aiomysql.create_pool(
@@ -53,7 +55,7 @@ class DatabaseManager:
                         db=DB_CONFIG["db"],
                         autocommit=True,
                         minsize=1,
-                        maxsize=10,
+                        maxsize=50,
                         cursorclass=aiomysql.DictCursor
                     )
                     logger.info("[DB] Пул соединений успешно создан.")
@@ -67,35 +69,44 @@ class DatabaseManager:
     @asynccontextmanager     
     async def acquire(self):
         """Возвращает соединение из пула."""
-        await self.create_pool()  # Убедитесь, что пул создан
-        conn = await self.pool.acquire()
+        if not self.pool:  # Проверяем, что пул создан
+            raise RuntimeError("Пул соединений не инициализирован. Вызовите create_pool() перед использованием acquire().")
         try:
+            conn = await self.pool.acquire()
             yield conn
+        except aiomysql.Error as e:
+            self.logger.error(f"Ошибка при получении соединения: {e}", exc_info=True)
+            raise
         finally:
-            self.pool.release(conn)
+            if conn:
+                self.pool.release(conn)
     
     def parse_period(self, period):
         """Формирование диапазона дат для SQL-запроса"""
-        today = datetime.today().date()
-        if period == "daily":
-            return today, today
-        elif period == "weekly":
-            start_week = today - timedelta(days=today.weekday())
-            return start_week, today
-        elif period == "biweekly":
-            start_biweek = today - timedelta(days=14)
-            return start_biweek, today
-        elif period == "monthly":
-            start_month = today.replace(day=1)
-            return start_month, today
-        elif period == "half_year":
-            start_half_year = today - timedelta(days=183)
-            return start_half_year, today
-        elif period == "yearly":
-            start_year = today - timedelta(days=365)
-            return start_year, today
-        else:
-            raise ValueError(f"Неизвестный период: {period}")
+        try:
+            today = datetime.today().date()
+            if period == "daily":
+                return today, today
+            elif period == "weekly":
+                start_week = today - timedelta(days=today.weekday())
+                return start_week, today
+            elif period == "biweekly":
+                start_biweek = today - timedelta(days=14)
+                return start_biweek, today
+            elif period == "monthly":
+                start_month = today.replace(day=1)
+                return start_month, today
+            elif period == "half_year":
+                start_half_year = today - timedelta(days=183)
+                return start_half_year, today
+            elif period == "yearly":
+                start_year = today - timedelta(days=365)
+                return start_year, today
+            else:
+                raise ValueError(f"Неизвестный период: {period}")
+        except Exception as e:
+            self.logger.error(f"Ошибка при разборе периода: {e}", exc_info=True)
+            raise
 
     async def close_pool(self):
         """Закрытие пула соединений."""

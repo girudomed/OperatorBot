@@ -1069,7 +1069,7 @@ class OpenAIReportGenerator:
         - Всего звонков: {summary_metrics['total_calls']}
         - Принято звонков: {summary_metrics['accepted_calls']}
         - Пропущено звонков: {summary_metrics['missed_calls']}
-        - Записаны на услугу: {summary_metrics['total_leads']}
+        - Общее количество лидов: {summary_metrics['total_leads']}
         - Записаны на услугу: {summary_metrics['booked_services']}
         - Всего отмен: {summary_metrics['total_cancellations']}
         - Жалобы: {summary_metrics['complaint_calls']}

@@ -45,12 +45,25 @@ class MetricsCalculator:
         return avg_score
     
     
-    def calculate_avg_duration(self, operator_data, category=None):
-        durations = [
-            float(call['talk_duration']) for call in operator_data
-            if call.get('call_category') == category and call.get('talk_duration') and float(call['talk_duration']) > 10
-        ]
-        return sum(durations) / len(durations) if durations else 0.0
+    def calculate_avg_duration(operator_data, category=None) -> float:
+        """
+        Расчет средней длительности звонков.
+        """
+        MIN_VALID_DURATION = 10  # минимальная валидная длительность звонка
+        
+        durations = []
+        for call in operator_data:
+            if not (category is None or call.get('call_category') == category):
+                continue
+                
+            try:
+                duration = float(call.get('talk_duration', 0))
+                if duration >= MIN_VALID_DURATION:
+                    durations.append(duration)
+            except (ValueError, TypeError):
+                logging.warning(f"Некорректная длительность звонка: {call.get('talk_duration')}")
+        
+        return round(sum(durations) / len(durations), 2) if durations else 0.0
     
     async def calculate_operator_metrics(
     self,

@@ -1,3 +1,4 @@
+#config.py
 import os
 from dotenv import load_dotenv
 import logging
@@ -7,11 +8,11 @@ import time
 # Загрузка переменных окружения из файла .env
 load_dotenv()
 
+
 # Функция для настройки логирования с ротацией файлов
 def setup_logging(log_file="logs.log", log_level="INFO"):
     log_level = os.getenv("LOG_LEVEL", log_level).upper()
     log_file = os.getenv("LOG_FILE", log_file)
-
     # Проверка и создание директории для логов
     log_dir = os.path.dirname(log_file)
     if log_dir and not os.path.exists(log_dir):
@@ -43,6 +44,16 @@ logger = setup_logging()
 
 # Функция для проверки переменных окружения
 def check_required_env_vars(required_vars):
+    logger.debug(f"OPENAI_API_KEY: {os.getenv('OPENAI_API_KEY')}")
+    logger.debug(f"TELEGRAM_BOT_TOKEN: {os.getenv('TELEGRAM_BOT_TOKEN')}")
+    logger.debug(f"DB_HOST: {os.getenv('DB_HOST')}")
+    logger.debug(f"DB_USER: {os.getenv('DB_USER')}")
+    logger.debug(f"DB_PASSWORD: {os.getenv('DB_PASSWORD')}")
+    logger.debug(f"DB_NAME: {os.getenv('DB_NAME')}")
+    logger.debug(f"DB_PORT: {os.getenv('DB_PORT')}")
+    logger.debug(f"LOG_LEVEL: {os.getenv('LOG_LEVEL')}")
+    logger.debug(f"LOG_FILE: {os.getenv('LOG_FILE')}")
+    logger.debug(f"REPORT_SEND_TIME: {os.getenv('REPORT_SEND_TIME')}")
     """
     Проверка наличия обязательных переменных окружения.
     Если какая-то переменная отсутствует, поднимается исключение.
