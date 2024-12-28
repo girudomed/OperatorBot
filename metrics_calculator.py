@@ -128,8 +128,11 @@ class MetricsCalculator:
         )
         self.logger.info(f"[КРОТ]: Общее количество лидов (total_leads): {total_leads}")
 
-        conversion_rate_leads = (booked_services / accepted_calls_count) * 100
-        self.logger.info(f"[КРОТ]: Конверсия в запись от желающих записаться (conversion_rate_leads): {conversion_rate_leads:.2f}%")
+        if accepted_calls_count == 0:
+            conversion_rate_leads = 0.0
+        else:
+            conversion_rate_leads = (booked_services / accepted_calls_count) * 100
+            self.logger.info(f"[КРОТ]: Конверсия в запись от желающих записаться (conversion_rate_leads): {conversion_rate_leads:.2f}%")
 
         # Средние оценки звонков
         avg_call_rating = self.calculate_avg_score(accepted_calls)
@@ -306,6 +309,6 @@ class MetricsCalculator:
             self.logger.warning("[КРОТ]: Отсутствуют данные для расчета доли отмен.")
             cancellation_rate = 0.0
         else:
-            cancellation_rate = (cancellations / total) * 100
-        self.logger.info(f"[КРОТ]: Доля отмен: {cancellation_rate}%")
+            cancellation_rate = (cancellations / total) * 100 if total > 0 else 0.0        
+            self.logger.info(f"[КРОТ]: Доля отмен: {cancellation_rate}%")
         return cancellation_rate

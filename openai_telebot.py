@@ -813,7 +813,7 @@ class OpenAIReportGenerator:
     1. Общая статистика по звонкам:
         - Принято звонков: {get_metric('accepted_calls', 'Нет данных')}
         - Всего звонков: {get_metric('total_calls', 'Нет данных')}
-        - Пропущено звонков: {get_metric('missed_calls', 'Нет данных')}
+        - Пропущено звонков по всем операторам: {get_metric('missed_calls', 'Нет данных')}
         - Записаны на услугу: {get_metric('booked_services', 'Нет данных')}
         - Конверсия в запись от желающих записаться: {format_metric('conversion_rate_leads')}%
         - Общее количество лидов {get_metric('total_leads', 'Нет данных')}
@@ -1068,7 +1068,7 @@ class OpenAIReportGenerator:
         1. **Общая статистика по всем операторам:**
         - Всего звонков: {summary_metrics['total_calls']}
         - Принято звонков: {summary_metrics['accepted_calls']}
-        - Пропущено звонков: {summary_metrics['missed_calls']}
+        - Пропущено звонков по всем операторам: {summary_metrics['missed_calls']}
         - Общее количество лидов: {summary_metrics['total_leads']}
         - Записаны на услугу: {summary_metrics['booked_services']}
         - Всего отмен: {summary_metrics['total_cancellations']}

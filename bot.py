@@ -177,6 +177,11 @@ MAX_CONCURRENT_TASKS = 3
 task_queue = asyncio.Queue()
 
 
+async def start_workers(bot_instance):
+    for i in range(MAX_CONCURRENT_TASKS):
+        asyncio.create_task(worker(task_queue, bot_instance))
+
+
 async def worker(queue: asyncio.Queue, bot_instance):
     while True:
         task = await queue.get()
@@ -187,46 +192,55 @@ async def worker(queue: asyncio.Queue, bot_instance):
         date_range = task["date_range"]
 
         try:
-            # Открываем соединение с БД через async with
             async with bot_instance.db_manager.acquire() as connection:
                 report = await bot_instance.report_generator.generate_report(
                     connection, user_id, period=period, date_range=date_range
                 )
 
-            # Теперь report либо содержит текст отчета, либо сообщение об ошибке, если данных нет
-            if report and not report.startswith("Ошибка:"):
-                # Отчет успешно сгенерирован
-                await bot_instance.send_long_message(chat_id, report)
-                logger.info(f"Отчет для user_id={user_id} отправлен.")
-            else:
-                # Если вернулось None или строка с "Ошибка", информируем пользователя
-                if not report:
-                    # В случае если вообще ничего не вернулось
-                    message = "Ошибка при извлечении данных оператора или данных нет."
+            # Вот тут проблема:
+            # bot_instance.send_long_message(chat_id, report)
+            # -> если chat_id=None -> BadRequest
+
+            if chat_id is not None:
+                # ... тогда отправим сообщение
+                if report and not report.startswith("Ошибка:"):
+                    await bot_instance.send_long_message(chat_id, report)
                 else:
-                    # report уже содержит текст ошибки, например "Ошибка..."
-                    message = report
-                await bot_instance.application.bot.send_message(
-                    chat_id=chat_id, text=message
-                )
-                logger.info(
-                    f"Нет данных или ошибка для user_id={user_id}. Сообщение пользователю: {message}"
+                    msg = report or "Ошибка или нет данных"
+                    await bot_instance.application.bot.send_message(
+                        chat_id=chat_id, text=msg
+                    )
+                logger.info(f"Отчёт для user_id={user_id} отправлен (или ошибка).")
+            else:
+                # chat_id=None => это оператор => ничего не отправляем
+                logger.debug(
+                    f"chat_id=None, это оператор {user_id}. "
+                    f"Отчёт сгенерирован и сохранён (без отправки в чат)."
                 )
 
         except Exception as e:
-            logger.error(f"Ошибка при обработке задачи для user_id={user_id}: {e}")
-            await bot_instance.application.bot.send_message(
-                chat_id=chat_id,
-                text="Произошла ошибка при генерации отчета. Попробуйте позже.",
+            logger.error(
+                f"Ошибка при обработке задачи для user_id={user_id}: {e}", exc_info=True
             )
+            if chat_id:
+                await bot_instance.application.bot.send_message(
+                    chat_id=chat_id,
+                    text="Произошла ошибка при генерации отчёта. Попробуйте позже.",
+                )
         finally:
             queue.task_done()
             logger.info(f"Воркеры завершили обработку задачи: {task}")
 
 
 async def add_task(
-    bot_instance, user_id, report_type, period, chat_id, date_range=None
+    bot_instance, user_id, report_type, period, chat_id=None, date_range=None
 ):
+    """
+    Добавляет задачу в очередь на генерацию отчёта.
+    Если chat_id=None, значит это оператор, которому не нужно отправлять сообщение в Telegram.
+    Если chat_id - int, значит это менеджер, которому можно отправить "Ваш запрос поставлен в очередь".
+    """
+    # Формируем задачу
     task = {
         "user_id": user_id,
         "report_type": report_type,
@@ -236,11 +250,22 @@ async def add_task(
     }
     await task_queue.put(task)
     logger.info(
-        f"Задача добавлена в очередь для user_id={user_id}, {report_type}, {period}."
+        f"Задача добавлена в очередь для user_id={user_id}, report_type={report_type}, period={period}."
     )
-    await bot_instance.application.bot.send_message(
-        chat_id=chat_id, text="Ваш запрос поставлен в очередь на обработку."
-    )
+
+    # Если есть chat_id (менеджер) — отправим уведомление
+    if isinstance(chat_id, int):
+        try:
+            await bot_instance.application.bot.send_message(
+                chat_id=chat_id, text="Ваш запрос поставлен в очередь на обработку."
+            )
+        except Exception as e:
+            logger.warning(
+                f"Ошибка отправки уведомления chat_id={chat_id} (user_id={user_id}): {e}"
+            )
+    else:
+        # Оператору не отправляем, но и не пишем в лог как ошибку
+        logger.debug(f"chat_id=None для user_id={user_id}, уведомление не требуется.")
 
 
 # Чтение конфигурации из .env файла
@@ -292,21 +317,24 @@ def split_text_into_chunks(text, chunk_size=4096):
 
 class ErrorSeverity(Enum):
     """Уровни серьезности ошибок."""
+
     DEBUG = "debug"
     INFO = "info"
     WARNING = "warning"
     ERROR = "error"
     CRITICAL = "critical"
 
+
 class ErrorContext:
     """Контекст ошибки для расширенной обработки."""
+
     def __init__(
         self,
         error: Exception,
         severity: ErrorSeverity,
         user_id: Union[int, str],
         function_name: str,
-        additional_data: Dict[str, Any] = None
+        additional_data: Dict[str, Any] = None,
     ):
         self.error = error
         self.severity = severity
@@ -324,18 +352,20 @@ class ErrorContext:
             "user_id": self.user_id,
             "function": self.function_name,
             "timestamp": self.timestamp.isoformat(),
-            "additional_data": self.additional_data
+            "additional_data": self.additional_data,
         }
+
 
 class BotError(Exception):
     """Базовый класс для ошибок бота."""
+
     def __init__(
         self,
         message: str,
         user_message: str = None,
         severity: ErrorSeverity = ErrorSeverity.ERROR,
         details: Dict[str, Any] = None,
-        retry_allowed: bool = True
+        retry_allowed: bool = True,
     ):
         super().__init__(message)
         self.user_message = user_message or message
@@ -352,32 +382,29 @@ class BotError(Exception):
             for key, value in self.details.items():
                 message += f"• {key}: {value}\n"
         return message
-    
-    
+
 
 class RetryableError(BotError):
     """Ошибка, которую можно повторить."""
+
     def __init__(
         self,
         message: str,
         user_message: str = None,
         max_retries: int = 3,
         retry_delay: float = 1.0,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(message, user_message, **kwargs)
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.retry_count = 0
 
+
 class RateLimitError(RetryableError):
     """Ошибка превышения лимита запросов."""
-    def __init__(
-        self,
-        message: str,
-        reset_time: datetime = None,
-        **kwargs
-    ):
+
+    def __init__(self, message: str, reset_time: datetime = None, **kwargs):
         super().__init__(message, **kwargs)
         self.reset_time = reset_time
 
@@ -389,12 +416,13 @@ class RateLimitError(RetryableError):
                 message += f"\n\nПопробуйте снова через {int(wait_time)} секунд."
         return message
 
+
 class ErrorHandler:
     """Класс для централизованной обработки ошибок."""
 
     def __init__(self, bot_instance):
         self.bot = bot_instance
-        self.logger = logging.getLogger('bot')
+        self.logger = logging.getLogger("bot")
         self._error_configs = self._get_default_error_configs()
         self._notification_rules = self._get_default_notification_rules()
         self._retry_policies = self._get_default_retry_policies()
@@ -422,35 +450,35 @@ class ErrorHandler:
                 "severity": ErrorSeverity.WARNING,
                 "log_level": "warning",
                 "retry_count": 0,
-                "notify_admin": False
+                "notify_admin": False,
             },
             PermissionError: {
                 "message": "🚫 Недостаточно прав",
                 "severity": ErrorSeverity.WARNING,
                 "log_level": "warning",
                 "retry_count": 0,
-                "notify_admin": False
+                "notify_admin": False,
             },
             ValidationError: {
                 "message": "⚠️ Некорректные данные",
                 "severity": ErrorSeverity.WARNING,
                 "log_level": "warning",
                 "retry_count": 0,
-                "notify_admin": False
+                "notify_admin": False,
             },
             DataProcessingError: {
                 "message": "🔄 Ошибка обработки данных",
                 "severity": ErrorSeverity.ERROR,
                 "log_level": "error",
                 "retry_count": 2,
-                "notify_admin": True
+                "notify_admin": True,
             },
             VisualizationError: {
                 "message": "📊 Ошибка создания графика",
                 "severity": ErrorSeverity.ERROR,
                 "log_level": "error",
                 "retry_count": 1,
-                "notify_admin": True
+                "notify_admin": True,
             },
             RateLimitError: {
                 "message": "⏳ Превышен лимит запросов",
@@ -458,15 +486,15 @@ class ErrorHandler:
                 "log_level": "info",
                 "retry_count": 3,
                 "retry_delay": 5.0,
-                "notify_admin": False
+                "notify_admin": False,
             },
             ExternalServiceError: {
                 "message": "🌐 Ошибка внешнего сервиса",
                 "severity": ErrorSeverity.ERROR,
                 "log_level": "error",
                 "retry_count": 2,
-                "notify_admin": True
-            }
+                "notify_admin": True,
+            },
         }
 
     def _get_default_notification_rules(self) -> Dict[ErrorSeverity, Dict[str, Any]]:
@@ -474,24 +502,24 @@ class ErrorHandler:
         return {
             ErrorSeverity.DEBUG: {
                 "notify_admin": False,
-                "notification_format": "simple"
+                "notification_format": "simple",
             },
             ErrorSeverity.INFO: {
                 "notify_admin": False,
-                "notification_format": "simple"
+                "notification_format": "simple",
             },
             ErrorSeverity.WARNING: {
                 "notify_admin": False,
-                "notification_format": "detailed"
+                "notification_format": "detailed",
             },
             ErrorSeverity.ERROR: {
                 "notify_admin": True,
-                "notification_format": "detailed"
+                "notification_format": "detailed",
             },
             ErrorSeverity.CRITICAL: {
                 "notify_admin": True,
-                "notification_format": "full"
-            }
+                "notification_format": "full",
+            },
         }
 
     def _get_default_retry_policies(self) -> Dict[Type[Exception], Dict[str, Any]]:
@@ -501,26 +529,24 @@ class ErrorHandler:
                 "max_retries": 3,
                 "base_delay": 5.0,
                 "max_delay": 30.0,
-                "exponential_backoff": True
+                "exponential_backoff": True,
             },
             DataProcessingError: {
                 "max_retries": 2,
                 "base_delay": 1.0,
                 "max_delay": 5.0,
-                "exponential_backoff": False
+                "exponential_backoff": False,
             },
             ExternalServiceError: {
                 "max_retries": 2,
                 "base_delay": 2.0,
                 "max_delay": 10.0,
-                "exponential_backoff": True
-            }
+                "exponential_backoff": True,
+            },
         }
 
     def update_error_config(
-        self,
-        error_type: Type[Exception],
-        config: Dict[str, Any]
+        self, error_type: Type[Exception], config: Dict[str, Any]
     ) -> None:
         """Обновляет конфигурацию для определенного типа ошибки."""
         if error_type in self.error_configs:
@@ -528,36 +554,31 @@ class ErrorHandler:
         else:
             self.error_configs[error_type] = config
 
-    def get_error_config(
-        self,
-        error: Exception
-    ) -> Dict[str, Any]:
+    def get_error_config(self, error: Exception) -> Dict[str, Any]:
         """Получает конфигурацию для конкретной ошибки."""
         error_type = type(error)
-        
+
         # Ищем точное совпадение
         if error_type in self.error_configs:
             return self.error_configs[error_type]
-        
+
         # Ищем по иерархии классов
         for err_type, config in self.error_configs.items():
             if isinstance(error, err_type):
                 return config
-        
+
         # Возвращаем конфигурацию по умолчанию
         return {
             "message": "❌ Произошла ошибка",
             "severity": ErrorSeverity.ERROR,
             "log_level": "error",
             "retry_count": 0,
-            "notify_admin": True
+            "notify_admin": True,
         }
 
     async def handle_error(
-    self,
-    error: Exception,
-    context: Dict[str, Any]
-) -> Tuple[str, bool]:
+        self, error: Exception, context: Dict[str, Any]
+    ) -> Tuple[str, bool]:
         """
         Обрабатывает ошибку согласно конфигурации.
 
@@ -586,7 +607,7 @@ class ErrorHandler:
                 severity=severity,
                 user_id=context.get("user_id", "Unknown"),
                 function_name=context.get("function_name", "Unknown"),
-                additional_data=context
+                additional_data=context,
             )
             logging.debug(f"Созданный контекст ошибки: {error_context.to_dict()}")
 
@@ -595,7 +616,10 @@ class ErrorHandler:
             self._log_error(error_context, config)
 
             # Уведомление администратора, если требуется
-            if config.get("notify_admin", False) or self.notification_rules[severity]["notify_admin"]:
+            if (
+                config.get("notify_admin", False)
+                or self.notification_rules[severity]["notify_admin"]
+            ):
                 logging.info("Уведомление администратора об ошибке.")
                 await self._notify_admin(error_context)
             else:
@@ -618,15 +642,11 @@ class ErrorHandler:
             # Возврат общего сообщения для пользователя
             return "Произошла непредвиденная ошибка. Попробуйте позже.", False
 
-    def _log_error(
-        self,
-        error_context: ErrorContext,
-        config: Dict[str, Any]
-    ) -> None:
+    def _log_error(self, error_context: ErrorContext, config: Dict[str, Any]) -> None:
         """Логирует ошибку с учетом конфигурации."""
         log_level = config["log_level"]
         log_message = json.dumps(error_context.to_dict(), indent=2)
-        
+
         if hasattr(self.logger, log_level):
             log_func = getattr(self.logger, log_level)
             log_func(log_message, exc_info=True)
@@ -635,8 +655,10 @@ class ErrorHandler:
 
     async def _notify_admin(self, error_context: ErrorContext) -> None:
         """Уведомляет администратора об ошибке."""
-        notification_format = self.notification_rules[error_context.severity]["notification_format"]
-        
+        notification_format = self.notification_rules[error_context.severity][
+            "notification_format"
+        ]
+
         if notification_format == "simple":
             message = (
                 f"🚨 {error_context.severity.value.upper()}\n"
@@ -657,11 +679,7 @@ class ErrorHandler:
 
         await self.bot.notify_admin(message)
 
-    def _format_user_message(
-        self,
-        error: Exception,
-        config: Dict[str, Any]
-    ) -> str:
+    def _format_user_message(self, error: Exception, config: Dict[str, Any]) -> str:
         """Форматирует сообщение об ошибке для пользователя."""
         if isinstance(error, BotError):
             message = error.get_user_message()
@@ -670,7 +688,7 @@ class ErrorHandler:
 
         if isinstance(error, RetryableError):
             message += f"\n\nПопытка {error.retry_count + 1}/{error.max_retries}"
-            
+
         if isinstance(error, RateLimitError) and error.reset_time:
             wait_time = (error.reset_time - datetime.now()).total_seconds()
             if wait_time > 0:
@@ -681,7 +699,7 @@ class ErrorHandler:
     def get_retry_policy(self, error: Exception) -> Dict[str, Any]:
         """
         Получает политику повторных попыток для ошибки.
-        
+
         Args:
             error: Возникшая ошибка
 
@@ -689,29 +707,25 @@ class ErrorHandler:
             Dict[str, Any]: Политика повторных попыток
         """
         error_type = type(error)
-        
+
         # Проверяем точное совпадение
         if error_type in self.retry_policies:
             return self.retry_policies[error_type]
-        
+
         # Проверяем по иерархии классов
         for err_type, policy in self.retry_policies.items():
             if isinstance(error, err_type):
                 return policy
-        
+
         # Возвращаем политику по умолчанию
         return {
             "max_retries": 0,
             "base_delay": 1.0,
             "max_delay": 5.0,
-            "exponential_backoff": False
+            "exponential_backoff": False,
         }
 
-    def calculate_retry_delay(
-        self,
-        policy: Dict[str, Any],
-        retry_count: int
-    ) -> float:
+    def calculate_retry_delay(self, policy: Dict[str, Any], retry_count: int) -> float:
         """
         Вычисляет задержку для повторной попытки.
 
@@ -724,7 +738,7 @@ class ErrorHandler:
         """
         base_delay = policy["base_delay"]
         max_delay = policy["max_delay"]
-        
+
         if policy["exponential_backoff"]:
             delay = base_delay * (2 ** (retry_count - 1))
         else:
@@ -733,10 +747,7 @@ class ErrorHandler:
         return min(delay, max_delay)
 
     async def handle_retry(
-        self,
-        error: Exception,
-        retry_count: int,
-        context: Dict[str, Any]
+        self, error: Exception, retry_count: int, context: Dict[str, Any]
     ) -> Tuple[bool, float]:
         """
         Обрабатывает логику повторных попыток.
@@ -756,7 +767,7 @@ class ErrorHandler:
             return False, 0.0
 
         delay = self.calculate_retry_delay(policy, retry_count + 1)
-        
+
         # Логируем информацию о повторной попытке
         self.logger.info(
             f"Retry {retry_count + 1}/{max_retries} for {context['function_name']}. "
@@ -768,11 +779,14 @@ class ErrorHandler:
     def handle_bot_exceptions(func: Callable):
         """
         Декоратор для обработки исключений с использованием ErrorHandler.
-        
+
         Использует конфигурацию на уровне класса через ErrorHandler.
         """
+
         @wraps(func)
-        async def wrapper(self, update: Update, context: CallbackContext, *args, **kwargs):
+        async def wrapper(
+            self, update: Update, context: CallbackContext, *args, **kwargs
+        ):
             retry_count = 0
             logging.info(f"Начало выполнения функции {func.__name__}.")
 
@@ -788,31 +802,53 @@ class ErrorHandler:
 
                 except Exception as e:
                     # Логируем информацию об ошибке
-                    logging.error(f"Исключение в функции {func.__name__}: {e}", exc_info=True)
+                    logging.error(
+                        f"Исключение в функции {func.__name__}: {e}", exc_info=True
+                    )
 
                     # Формируем контекст ошибки
                     error_context = {
-                        "user_id": update.effective_user.id if update and update.effective_user else "Unknown",
-                        "chat_id": update.effective_chat.id if update and update.effective_chat else None,
+                        "user_id": (
+                            update.effective_user.id
+                            if update and update.effective_user
+                            else "Unknown"
+                        ),
+                        "chat_id": (
+                            update.effective_chat.id
+                            if update and update.effective_chat
+                            else None
+                        ),
                         "function_name": func.__name__,
-                        "command": context.args[0] if context and context.args else None,
-                        "retry_count": retry_count
+                        "command": (
+                            context.args[0] if context and context.args else None
+                        ),
+                        "retry_count": retry_count,
                     }
                     logging.debug(f"Контекст ошибки: {error_context}")
 
                     # Проверяем возможность повтора
-                    can_retry, delay = await self.error_handler.handle_retry(e, retry_count, error_context)
-                    logging.info(f"Возможность повторной попытки: {'Да' if can_retry else 'Нет'}, Задержка: {delay} секунд")
+                    can_retry, delay = await self.error_handler.handle_retry(
+                        e, retry_count, error_context
+                    )
+                    logging.info(
+                        f"Возможность повторной попытки: {'Да' if can_retry else 'Нет'}, Задержка: {delay} секунд"
+                    )
 
                     if can_retry:
                         retry_count += 1
-                        logging.info(f"Попытка {retry_count} для функции {func.__name__}. Ожидание {delay} секунд.")
+                        logging.info(
+                            f"Попытка {retry_count} для функции {func.__name__}. Ожидание {delay} секунд."
+                        )
                         await asyncio.sleep(delay)
                         continue
 
                     # Обрабатываем ошибку
-                    user_message, success = await self.error_handler.handle_error(e, error_context)
-                    logging.debug(f"Сообщение для пользователя: {user_message}, Успешность обработки: {success}")
+                    user_message, success = await self.error_handler.handle_error(
+                        e, error_context
+                    )
+                    logging.debug(
+                        f"Сообщение для пользователя: {user_message}, Успешность обработки: {success}"
+                    )
 
                     # Отправляем ответ пользователю
                     if isinstance(update, CallbackQuery):
@@ -830,27 +866,44 @@ class ErrorHandler:
                         # Добавляем кнопку повтора, если применимо
                         if isinstance(e, RetryableError) and e.retry_allowed:
                             logging.info("Добавляем кнопку 'Повторить'.")
-                            markup = InlineKeyboardMarkup([[
-                                InlineKeyboardButton("🔄 Повторить", callback_data=f"retry_{func.__name__}")
-                            ]])
+                            markup = InlineKeyboardMarkup(
+                                [
+                                    [
+                                        InlineKeyboardButton(
+                                            "🔄 Повторить",
+                                            callback_data=f"retry_{func.__name__}",
+                                        )
+                                    ]
+                                ]
+                            )
                         elif error_config.get("allow_retry", False):
                             logging.info("Кнопка 'Повторить' разрешена настройками.")
-                            markup = InlineKeyboardMarkup([[
-                                InlineKeyboardButton("🔄 Повторить", callback_data=f"retry_{func.__name__}")
-                            ]])
+                            markup = InlineKeyboardMarkup(
+                                [
+                                    [
+                                        InlineKeyboardButton(
+                                            "🔄 Повторить",
+                                            callback_data=f"retry_{func.__name__}",
+                                        )
+                                    ]
+                                ]
+                            )
 
                         await message.reply_text(
-                            user_message,
-                            parse_mode='HTML',
-                            reply_markup=markup
+                            user_message, parse_mode="HTML", reply_markup=markup
                         )
                     else:
-                        logging.warning("Не удалось отправить сообщение: отсутствует message в update.")
+                        logging.warning(
+                            "Не удалось отправить сообщение: отсутствует message в update."
+                        )
 
-                    logging.info(f"Завершение обработки ошибки в функции {func.__name__}.")
+                    logging.info(
+                        f"Завершение обработки ошибки в функции {func.__name__}."
+                    )
                     break
 
         return wrapper
+
 
 class MetricProcessor:
     """Класс для обработки метрик и сложных данных."""
@@ -859,9 +912,7 @@ class MetricProcessor:
         self.logger = logger
 
     def process_complex_data(
-        self,
-        data: pd.Series,
-        metric_config: Dict[str, Any]
+        self, data: pd.Series, metric_config: Dict[str, Any]
     ) -> pd.Series:
         """
         Обработка сложных данных (списков, словарей, вложенных структур).
@@ -883,7 +934,9 @@ class MetricProcessor:
                 return pd.Series(dtype=float)
 
             first_value = data.iloc[0]
-            self.logger.debug(f"Первое значение в серии: {first_value} (тип: {type(first_value)})")
+            self.logger.debug(
+                f"Первое значение в серии: {first_value} (тип: {type(first_value)})"
+            )
 
             if isinstance(first_value, (list, tuple)):
                 self.logger.info("Данные представлены в виде списка или кортежа.")
@@ -907,9 +960,7 @@ class MetricProcessor:
             return pd.Series(0, index=data.index)
 
     def _process_list_data(
-        self,
-        data: pd.Series,
-        metric_config: Dict[str, Any]
+        self, data: pd.Series, metric_config: Dict[str, Any]
     ) -> pd.Series:
         """Обработка данных в виде списков."""
         try:
@@ -942,14 +993,14 @@ class MetricProcessor:
             return result
 
         except Exception as e:
-            self.logger.error(f"Ошибка обработки данных в виде списка: {e}", exc_info=True)
+            self.logger.error(
+                f"Ошибка обработки данных в виде списка: {e}", exc_info=True
+            )
             self.logger.debug(f"Состояние данных при ошибке:\n{data}")
             return pd.Series(0, index=data.index)
 
     def _process_dict_data(
-        self,
-        data: pd.Series,
-        metric_config: Dict[str, Any]
+        self, data: pd.Series, metric_config: Dict[str, Any]
     ) -> pd.Series:
         """Обработка данных в виде словарей."""
         try:
@@ -960,7 +1011,9 @@ class MetricProcessor:
             # Получаем ключи для извлечения значений
             keys = metric_config.get("dict_keys", [])
             if not keys:
-                self.logger.info("Ключи для извлечения не указаны. Автоматическое определение ключей.")
+                self.logger.info(
+                    "Ключи для извлечения не указаны. Автоматическое определение ключей."
+                )
                 first_dict = data.iloc[0]
                 keys = [k for k, v in first_dict.items() if isinstance(v, (int, float))]
                 self.logger.debug(f"Определенные ключи для словаря: {keys}")
@@ -993,14 +1046,14 @@ class MetricProcessor:
             return result
 
         except Exception as e:
-            self.logger.error(f"Ошибка обработки данных в виде словаря: {e}", exc_info=True)
+            self.logger.error(
+                f"Ошибка обработки данных в виде словаря: {e}", exc_info=True
+            )
             self.logger.debug(f"Состояние данных при ошибке:\n{data}")
             return pd.Series(0, index=data.index)
 
     def _process_string_data(
-        self,
-        data: pd.Series,
-        metric_config: Dict[str, Any]
+        self, data: pd.Series, metric_config: Dict[str, Any]
     ) -> pd.Series:
         """Обработка строковых данных с максимальным логированием."""
         try:
@@ -1016,14 +1069,14 @@ class MetricProcessor:
                 return self.process_complex_data(parsed_data, metric_config)
 
             # Проверяем на числа в строках
-            numeric_data = pd.to_numeric(data, errors='coerce')
+            numeric_data = pd.to_numeric(data, errors="coerce")
             if not numeric_data.isna().all():
                 self.logger.info("Данные содержат числовые значения в строках.")
                 self.logger.debug(f"Распознанные числовые значения: {numeric_data}")
                 return numeric_data.fillna(0)
 
             # Проверяем на списки/кортежи в строках
-            if data.iloc[0].startswith(('[', '(')):
+            if data.iloc[0].startswith(("[", "(")):
                 self.logger.info("Данные определены как списки или кортежи в строках.")
                 parsed_data = data.apply(eval)  # Безопасно только для списков/кортежей
                 self.logger.debug(f"Распарсенные данные: {parsed_data}")
@@ -1056,11 +1109,11 @@ class MetricProcessor:
             self.logger.debug(f"Исходные данные: {data}")
 
             # Используем регулярное выражение для поиска чисел
-            pattern = r'[-+]?\d*\.?\d+'
+            pattern = r"[-+]?\d*\.?\d+"
             extracted = data.str.extract(pattern, expand=False)
             self.logger.debug(f"Извлеченные числа (сырые): {extracted}")
 
-            numeric_data = pd.to_numeric(extracted, errors='coerce').fillna(0)
+            numeric_data = pd.to_numeric(extracted, errors="coerce").fillna(0)
             self.logger.debug(f"Числовые данные после преобразования: {numeric_data}")
             return numeric_data
 
@@ -1069,25 +1122,25 @@ class MetricProcessor:
             return pd.Series(0, index=data.index)
 
     def _safe_convert_to_numeric(
-        self,
-        data: pd.Series,
-        default_value: float = 0.0
+        self, data: pd.Series, default_value: float = 0.0
     ) -> pd.Series:
         """Безопасное преобразование в числовой формат с логированием."""
         try:
-            self.logger.info("Начало безопасного преобразования данных в числовой формат.")
+            self.logger.info(
+                "Начало безопасного преобразования данных в числовой формат."
+            )
             self.logger.debug(f"Исходные данные: {data}")
-            numeric_data = pd.to_numeric(data, errors='coerce').fillna(default_value)
+            numeric_data = pd.to_numeric(data, errors="coerce").fillna(default_value)
             self.logger.debug(f"Результат преобразования: {numeric_data}")
             return numeric_data
         except Exception as e:
-            self.logger.error(f"Ошибка безопасного преобразования данных: {e}", exc_info=True)
+            self.logger.error(
+                f"Ошибка безопасного преобразования данных: {e}", exc_info=True
+            )
             return pd.Series(default_value, index=data.index)
 
     def normalize_data(
-        self,
-        data: pd.Series,
-        metric_config: Dict[str, Any]
+        self, data: pd.Series, metric_config: Dict[str, Any]
     ) -> pd.Series:
         """Нормализация данных с логированием."""
         try:
@@ -1108,7 +1161,9 @@ class MetricProcessor:
             # Применяем округление
             decimals = metric_config.get("decimals")
             if decimals is not None:
-                self.logger.info(f"Применение округления до {decimals} знаков после запятой.")
+                self.logger.info(
+                    f"Применение округления до {decimals} знаков после запятой."
+                )
                 data = data.round(decimals)
 
             # Применяем ограничения
@@ -1127,17 +1182,26 @@ class MetricProcessor:
         except Exception as e:
             self.logger.error(f"Ошибка нормализации данных: {e}", exc_info=True)
             return data
+
+
 class CallbackDispatcher:
     def __init__(self, bot_instance):
         logger.debug(f"Доступные атрибуты CallbackDispatcher: {dir(self)}")
         self.logger = logging.getLogger(self.__class__.__name__)
         self.bot = bot_instance
-        self.permissions_manager = bot_instance.permissions_manager  # Передача менеджера прав
-        self.operator_data = OperatorData(bot_instance.db_manager)  # Используем db_manager из bot_instance
+        self.permissions_manager = (
+            bot_instance.permissions_manager
+        )  # Передача менеджера прав
+        self.operator_data = OperatorData(
+            bot_instance.db_manager
+        )  # Используем db_manager из bot_instance
         self._handlers = {}
-        logger.debug(f"Доступные атрибуты Bot: {dir(self.bot)}")  # Переместили после инициализации
+        logger.debug(
+            f"Доступные атрибуты Bot: {dir(self.bot)}"
+        )  # Переместили после инициализации
         self._register_handlers()
         self.logger.debug(f"Инициализация CallbackDispatcher: {dir(self)}")
+
     async def handle_weekly_report(self, operator_id: int) -> None:
         """
         Handle the weekly report for the given operator.
@@ -1146,16 +1210,24 @@ class CallbackDispatcher:
         # Add your logic for handling the weekly report here
         await asyncio.sleep(1)  # Simulate some async operation
         self.logger.info(f"Weekly report for operator {operator_id} handled.")
-    async def handle_monthly_report(self, update: Update, context: CallbackContext, operator_id: int) -> None:
+
+    async def handle_monthly_report(
+        self, update: Update, context: CallbackContext, operator_id: int
+    ) -> None:
         """Handle the monthly report for the given operator."""
         self.logger.info(f"Handling monthly report for operator {operator_id}.")
         # Add your logic to handle the monthly report here
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Monthly report for operator {operator_id}")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"Monthly report for operator {operator_id}",
+        )
+
     async def handle_yearly_report(self, operator_id: int):
         # Implementation of the handle_yearly_report method
         pass
+
     """Диспетчер для обработки callback-запросов."""
-    
+
     def _register_handlers(self):
         """Регистрация обработчиков callback."""
         self._handlers = {
@@ -1170,11 +1242,7 @@ class CallbackDispatcher:
             "menu": self._handle_operator_menu_callback,  # Добавляем обработчик для `menu`
         }
 
-    async def dispatch(
-        self,
-        update: Update,
-        context: CallbackContext
-    ) -> None:
+    async def dispatch(self, update: Update, context: CallbackContext) -> None:
         """
         Диспетчеризация callback-запросов с максимальным логированием.
 
@@ -1184,7 +1252,6 @@ class CallbackDispatcher:
         """
         self.logger.info("Начало обработки callback-запроса.")
 
-        
         try:
             if update is None:
                 self.logger.error("Объект update отсутствует (None).")
@@ -1209,66 +1276,111 @@ class CallbackDispatcher:
                 self.logger.info(f"Определён тип callback: {callback_type}")
                 self.logger.debug(f"Параметры после split: {params}")
             except ValueError as parse_error:
-                self.logger.error(f"Ошибка разбора callback данных: {data}, {parse_error}")
+                self.logger.error(
+                    f"Ошибка разбора callback данных: {data}, {parse_error}"
+                )
                 await query.answer("Некорректный формат данных.")
                 return
 
             # Поиск соответствующего обработчика
             handler = self._handlers.get(callback_type)
             if handler:
-                self.logger.info(f"Обработчик для callback типа '{callback_type}' найден: {handler.__name__}")
+                self.logger.info(
+                    f"Обработчик для callback типа '{callback_type}' найден: {handler.__name__}"
+                )
                 await handler(update, context, params)
             else:
                 self.logger.warning(f"Неизвестный тип callback: {callback_type}")
                 await query.answer("Неизвестный тип запроса.")
 
         except Exception as e:
-            self.logger.error(f"Ошибка при обработке callback-запроса: {e}", exc_info=True)
+            self.logger.error(
+                f"Ошибка при обработке callback-запроса: {e}", exc_info=True
+            )
             # Пытаемся ответить пользователю об ошибке
             try:
                 if update and update.callback_query:
-                    await update.callback_query.answer("Произошла ошибка при обработке запроса.")
+                    await update.callback_query.answer(
+                        "Произошла ошибка при обработке запроса."
+                    )
             except Exception as answer_error:
-                self.logger.error(f"Ошибка при отправке ответа об ошибке: {answer_error}", exc_info=True)
+                self.logger.error(
+                    f"Ошибка при отправке ответа об ошибке: {answer_error}",
+                    exc_info=True,
+                )
         finally:
             self.logger.info("Завершение обработки callback-запроса.")
 
     def get_period_keyboard(self, operator_id: int) -> InlineKeyboardMarkup:
         keyboard = [
             [InlineKeyboardButton("День", callback_data=f"period_daily_{operator_id}")],
-            [InlineKeyboardButton("Неделя", callback_data=f"period_weekly_{operator_id}")],
-            [InlineKeyboardButton("Месяц", callback_data=f"period_monthly_{operator_id}")],
+            [
+                InlineKeyboardButton(
+                    "Неделя", callback_data=f"period_weekly_{operator_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "Месяц", callback_data=f"period_monthly_{operator_id}"
+                )
+            ],
             [InlineKeyboardButton("Год", callback_data=f"period_yearly_{operator_id}")],
-            [InlineKeyboardButton("Кастомный период", callback_data=f"period_custom_{operator_id}")],
-            [InlineKeyboardButton("Назад", callback_data=f"operator_{operator_id}")]
+            [
+                InlineKeyboardButton(
+                    "Кастомный период", callback_data=f"period_custom_{operator_id}"
+                )
+            ],
+            [InlineKeyboardButton("Назад", callback_data=f"operator_{operator_id}")],
         ]
         return InlineKeyboardMarkup(keyboard)
-    
 
     def get_initial_operator_menu(self, operator_id: int) -> InlineKeyboardMarkup:
         """
         Генерирует первичную клавиатуру для оператора с одной кнопкой: "Посмотреть прогресс".
         """
         keyboard = [
-            [InlineKeyboardButton("Посмотреть прогресс", callback_data=f"menu_progress_{operator_id}")],
-            [InlineKeyboardButton("Назад к списку операторов", callback_data=f"menu_back_{operator_id}")]
+            [
+                InlineKeyboardButton(
+                    "Посмотреть прогресс", callback_data=f"menu_progress_{operator_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "Назад к списку операторов",
+                    callback_data=f"menu_back_{operator_id}",
+                )
+            ],
         ]
         return InlineKeyboardMarkup(keyboard)
-    
+
     def get_period_selection_menu(self, operator_id: int) -> InlineKeyboardMarkup:
         """
         Генерирует клавиатуру для выбора периода.
         """
         keyboard = [
             [InlineKeyboardButton("День", callback_data=f"period_daily_{operator_id}")],
-            [InlineKeyboardButton("Неделя", callback_data=f"period_weekly_{operator_id}")],
-            [InlineKeyboardButton("Месяц", callback_data=f"period_monthly_{operator_id}")],
+            [
+                InlineKeyboardButton(
+                    "Неделя", callback_data=f"period_weekly_{operator_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "Месяц", callback_data=f"period_monthly_{operator_id}"
+                )
+            ],
             [InlineKeyboardButton("Год", callback_data=f"period_yearly_{operator_id}")],
-            [InlineKeyboardButton("Назад", callback_data=f"menu_back_progress_{operator_id}")]
+            [
+                InlineKeyboardButton(
+                    "Назад", callback_data=f"menu_back_progress_{operator_id}"
+                )
+            ],
         ]
         return InlineKeyboardMarkup(keyboard)
-    
-    async def _handle_operator_menu_callback(self, update: Update, context: CallbackContext, params: List[str]) -> None:
+
+    async def _handle_operator_menu_callback(
+        self, update: Update, context: CallbackContext, params: List[str]
+    ) -> None:
         """
         Универсальный обработчик меню оператора.
         """
@@ -1277,7 +1389,9 @@ class CallbackDispatcher:
 
         try:
             action = params[0]  # Действие: 'progress', 'period', 'back'
-            operator_id = int(params[1]) if len(params) > 1 and params[1].isdigit() else None
+            operator_id = (
+                int(params[1]) if len(params) > 1 and params[1].isdigit() else None
+            )
 
             if action == "progress":
                 # Показать меню выбора периода
@@ -1285,25 +1399,33 @@ class CallbackDispatcher:
                 keyboard = self.get_period_selection_menu(operator_id)
                 await query.edit_message_text(
                     text=f"Выберите период для оператора {operator_id}:",
-                    reply_markup=keyboard
+                    reply_markup=keyboard,
                 )
             elif action.startswith("period"):
                 # Обработка выбора периода
                 period = action.split("_")[1]  # Например, 'daily', 'weekly', и т.д.
-                self.logger.info(f"Выбран период '{period}' для оператора {operator_id}.")
-                
+                self.logger.info(
+                    f"Выбран период '{period}' для оператора {operator_id}."
+                )
+
                 # Генерация графика
-                progress_data = await self.bot.progress_data.get_operator_progress(operator_id, period)
-                buf, trend_message = await self.bot.generate_operator_graph(progress_data, operator_id, period)
+                progress_data = await self.bot.progress_data.get_operator_progress(
+                    operator_id, period
+                )
+                buf, trend_message = await self.bot.generate_operator_graph(
+                    progress_data, operator_id, period
+                )
 
                 # Отправляем график
-                await query.message.reply_photo(photo=buf, caption=trend_message, parse_mode=ParseMode.HTML)
+                await query.message.reply_photo(
+                    photo=buf, caption=trend_message, parse_mode=ParseMode.HTML
+                )
                 self.logger.info("График успешно отправлен пользователю.")
 
                 # Возвращаем клавиатуру в начальное состояние
                 await query.edit_message_text(
                     text=f"Прогресс оператора {operator_id} за период {period}:",
-                    reply_markup=self.get_initial_operator_menu(operator_id)
+                    reply_markup=self.get_initial_operator_menu(operator_id),
                 )
             elif action == "back":
                 # Возврат к списку операторов
@@ -1313,23 +1435,45 @@ class CallbackDispatcher:
                 self.logger.warning(f"Неизвестное действие: {action}")
                 await query.answer("Некорректное действие.")
         except Exception as e:
-            self.logger.error(f"Ошибка в _handle_operator_menu_callback: {e}", exc_info=True)
+            self.logger.error(
+                f"Ошибка в _handle_operator_menu_callback: {e}", exc_info=True
+            )
             await query.answer("Произошла ошибка при обработке команды.")
         finally:
             self.logger.info("Завершение обработки меню оператора.")
-
 
     def get_period_keyboard(self, operator_id: int) -> InlineKeyboardMarkup:
         """
         Генерирует клавиатуру с вариантами периода: День, Неделя, Месяц, Год, Кастомный период.
         """
         keyboard = [
-            [InlineKeyboardButton("День", callback_data=f"menu_period_daily_{operator_id}")],
-            [InlineKeyboardButton("Неделя", callback_data=f"menu_period_weekly_{operator_id}")],
-            [InlineKeyboardButton("Месяц", callback_data=f"menu_period_monthly_{operator_id}")],
-            [InlineKeyboardButton("Год", callback_data=f"menu_period_yearly_{operator_id}")],
-            [InlineKeyboardButton("Кастомный период", callback_data=f"menu_period_custom_{operator_id}")],
-            [InlineKeyboardButton("Назад", callback_data=f"menu_back_{operator_id}")]
+            [
+                InlineKeyboardButton(
+                    "День", callback_data=f"menu_period_daily_{operator_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "Неделя", callback_data=f"menu_period_weekly_{operator_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "Месяц", callback_data=f"menu_period_monthly_{operator_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "Год", callback_data=f"menu_period_yearly_{operator_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "Кастомный период",
+                    callback_data=f"menu_period_custom_{operator_id}",
+                )
+            ],
+            [InlineKeyboardButton("Назад", callback_data=f"menu_back_{operator_id}")],
         ]
         return InlineKeyboardMarkup(keyboard)
 
@@ -1350,9 +1494,13 @@ class CallbackDispatcher:
         try:
             # Удаляем лишние пробелы и разделяем строки
             if " - " not in date_range:
-                self.logger.error(f"Некорректный формат диапазона дат: '{date_range}'. Ожидается 'YYYY-MM-DD - YYYY-MM-DD'.")
-                raise ValueError("Некорректный формат диапазона дат. Используйте формат 'YYYY-MM-DD - YYYY-MM-DD'.")
-            
+                self.logger.error(
+                    f"Некорректный формат диапазона дат: '{date_range}'. Ожидается 'YYYY-MM-DD - YYYY-MM-DD'."
+                )
+                raise ValueError(
+                    "Некорректный формат диапазона дат. Используйте формат 'YYYY-MM-DD - YYYY-MM-DD'."
+                )
+
             start_str, end_str = map(str.strip, date_range.split("-"))
 
             # Преобразуем строки в объекты date
@@ -1361,25 +1509,36 @@ class CallbackDispatcher:
 
             # Проверяем порядок дат
             if start_date > end_date:
-                self.logger.error(f"Дата начала позже даты окончания: {start_date} > {end_date}")
+                self.logger.error(
+                    f"Дата начала позже даты окончания: {start_date} > {end_date}"
+                )
                 raise ValueError("Дата начала не может быть позже даты окончания.")
 
             # Успешный парсинг
-            self.logger.debug(f"Успешно распарсены даты: start_date={start_date}, end_date={end_date}")
+            self.logger.debug(
+                f"Успешно распарсены даты: start_date={start_date}, end_date={end_date}"
+            )
             return start_date, end_date
 
         except ValueError as e:
             # Логируем подробности ошибки
-            self.logger.error(f"Ошибка парсинга диапазона дат '{date_range}': {e}", exc_info=True)
-            raise ValueError("Некорректный формат диапазона дат. Используйте формат 'YYYY-MM-DD - YYYY-MM-DD'.")
+            self.logger.error(
+                f"Ошибка парсинга диапазона дат '{date_range}': {e}", exc_info=True
+            )
+            raise ValueError(
+                "Некорректный формат диапазона дат. Используйте формат 'YYYY-MM-DD - YYYY-MM-DD'."
+            )
         except Exception as e:
             # Ловим любые другие неожиданные исключения
-            self.logger.error(f"Неизвестная ошибка при обработке диапазона дат '{date_range}': {e}", exc_info=True)
+            self.logger.error(
+                f"Неизвестная ошибка при обработке диапазона дат '{date_range}': {e}",
+                exc_info=True,
+            )
             raise ValueError("Произошла ошибка при обработке диапазона дат.")
-    
+
     async def _handle_operator_progress_callback(
-    self, update: Update, context: CallbackContext, params: List[str]
-) -> None:
+        self, update: Update, context: CallbackContext, params: List[str]
+    ) -> None:
         """
         Обработка запроса на просмотр прогресса оператора с максимальным логированием.
 
@@ -1389,13 +1548,15 @@ class CallbackDispatcher:
             params: Параметры из callback_data.
         """
         logging.info("Начало обработки запроса прогресса оператора.")
-        
+
         # Логируем исходные данные
         try:
             logging.debug(f"CallbackQuery данные: {update.callback_query}")
             logging.debug(f"Параметры: {params}")
         except Exception as log_error:
-            logging.error(f"Ошибка логирования исходных данных: {log_error}", exc_info=True)
+            logging.error(
+                f"Ошибка логирования исходных данных: {log_error}", exc_info=True
+            )
 
         query = update.callback_query
         operator_id = None
@@ -1429,11 +1590,17 @@ class CallbackDispatcher:
             context.user_data["selected_period"] = default_period
 
             # Получаем данные прогресса за указанный период
-            logging.info(f"Получение данных прогресса для оператора {operator_id} за период {default_period}.")
-            progress_data = await self.bot.progress_data.get_operator_progress(operator_id, default_period)
-            
+            logging.info(
+                f"Получение данных прогресса для оператора {operator_id} за период {default_period}."
+            )
+            progress_data = await self.bot.progress_data.get_operator_progress(
+                operator_id, default_period
+            )
+
             if not progress_data:
-                logging.warning(f"Нет данных прогресса для оператора {operator['name']} за период {default_period}.")
+                logging.warning(
+                    f"Нет данных прогресса для оператора {operator['name']} за период {default_period}."
+                )
                 await query.edit_message_text(
                     f"Нет данных для оператора {operator['name']} за период {default_period}."
                 )
@@ -1442,20 +1609,26 @@ class CallbackDispatcher:
             logging.debug(f"Данные прогресса оператора: {progress_data}")
 
             # Генерируем график прогресса
-            logging.info(f"Генерация графика прогресса для оператора {operator['name']}.")
+            logging.info(
+                f"Генерация графика прогресса для оператора {operator['name']}."
+            )
             buf, trend_message = await self.bot.generate_operator_progress(
                 progress_data, operator["name"], default_period
             )
             logging.debug(f"Сгенерированное сообщение трендов: {trend_message}")
 
             # Отправляем график и тренды в чат
-            logging.info(f"Отправка графика прогресса оператора {operator['name']} в чат.")
+            logging.info(
+                f"Отправка графика прогресса оператора {operator['name']} в чат."
+            )
             await query.message.reply_photo(
                 buf, caption=trend_message, parse_mode=ParseMode.HTML
             )
 
             # Обновляем сообщение с выбором других периодов
-            logging.info(f"Обновление сообщения с выбором других периодов для оператора {operator['name']}.")
+            logging.info(
+                f"Обновление сообщения с выбором других периодов для оператора {operator['name']}."
+            )
             keyboard = self.get_period_keyboard(operator_id)
             logging.debug(f"Сгенерированная клавиатура: {keyboard}")
             await query.edit_message_text(
@@ -1465,25 +1638,30 @@ class CallbackDispatcher:
 
         except Exception as e:
             # Логируем исключение
-            logging.error(f"Ошибка при обработке прогресса оператора {operator_id}: {e}", exc_info=True)
+            logging.error(
+                f"Ошибка при обработке прогресса оператора {operator_id}: {e}",
+                exc_info=True,
+            )
             await query.answer("Произошла ошибка при обработке запроса.")
         finally:
             logging.info("Завершение обработки запроса прогресса оператора.")
 
     async def _handle_period_select_callback(
-    self, update: Update, context: CallbackContext, params: List[str]
-) -> None:
+        self, update: Update, context: CallbackContext, params: List[str]
+    ) -> None:
         """
         Обработка выбора периода для оператора.
         """
         logging.info("Начало обработки выбора периода для оператора.")
-        
+
         # Логируем исходные данные
         try:
             logging.debug(f"CallbackQuery данные: {update.callback_query}")
             logging.debug(f"Параметры: {params}")
         except Exception as log_error:
-            logging.error(f"Ошибка логирования исходных данных: {log_error}", exc_info=True)
+            logging.error(
+                f"Ошибка логирования исходных данных: {log_error}", exc_info=True
+            )
 
         query = update.callback_query
         operator_id = None
@@ -1502,36 +1680,40 @@ class CallbackDispatcher:
                 return
 
             # Генерация клавиатуры выбора периода
-            logging.info(f"Генерация клавиатуры выбора периода для оператора {operator_id}.")
+            logging.info(
+                f"Генерация клавиатуры выбора периода для оператора {operator_id}."
+            )
             keyboard = self.get_period_keyboard(operator_id)
             logging.debug(f"Сгенерированная клавиатура: {keyboard}")
 
             # Отправляем сообщение с клавиатурой
             await query.edit_message_text(
                 f"Выберите период для оператора с ID {operator_id}:",
-                reply_markup=keyboard
+                reply_markup=keyboard,
             )
-            logging.info(f"Сообщение с клавиатурой выбора периода отправлено для оператора {operator_id}.")
+            logging.info(
+                f"Сообщение с клавиатурой выбора периода отправлено для оператора {operator_id}."
+            )
 
         except Exception as e:
             # Логируем исключение
-            logging.error(f"Ошибка при обработке выбора периода для оператора {operator_id}: {e}", exc_info=True)
+            logging.error(
+                f"Ошибка при обработке выбора периода для оператора {operator_id}: {e}",
+                exc_info=True,
+            )
             await query.answer("Произошла ошибка при выборе периода.")
         finally:
             logging.info("Завершение обработки выбора периода для оператора.")
 
     async def _handle_period_callback(
-    self,
-    update: Update,
-    context: CallbackContext,
-    params: List[str]
-) -> None:
+        self, update: Update, context: CallbackContext, params: List[str]
+    ) -> None:
         """
         Обработка выбора периода для оператора с проверкой прав и генерацией графиков.
         """
         logger.info("Начало обработки выбора периода.")
         query = update.callback_query
-        
+
         try:
             logger.debug(f"CallbackQuery данные: {query}")
             logger.debug(f"Параметры: {params}")
@@ -1555,15 +1737,23 @@ class CallbackDispatcher:
 
             # Проверяем, есть ли can_view_periods в permissions_manager
             if not hasattr(self.bot.permissions_manager, "can_view_periods"):
-                logger.error("Метод 'can_view_periods' отсутствует в PermissionsManager.")
+                logger.error(
+                    "Метод 'can_view_periods' отсутствует в PermissionsManager."
+                )
                 await query.answer("Ошибка: невозможно проверить права доступа.")
                 return
 
             # Проверяем права доступа пользователя
-            logger.info(f"Проверка прав доступа пользователя {query.from_user.id} для оператора {operator_id}.")
-            has_access = await self.permissions_manager.can_view_periods(query.from_user.id)
+            logger.info(
+                f"Проверка прав доступа пользователя {query.from_user.id} для оператора {operator_id}."
+            )
+            has_access = await self.permissions_manager.can_view_periods(
+                query.from_user.id
+            )
             if not has_access:
-                logger.warning(f"Пользователь {query.from_user.id} не имеет прав для выбора периода.")
+                logger.warning(
+                    f"Пользователь {query.from_user.id} не имеет прав для выбора периода."
+                )
                 await query.answer("У вас нет прав для выбора этого периода.")
                 return
 
@@ -1576,24 +1766,38 @@ class CallbackDispatcher:
             await query.answer("Строим графики, пожалуйста подождите...")
 
             # Получаем данные прогресса
-            logger.info(f"Получение данных прогресса для оператора {operator_id} за период {period}.")
-            progress_data = await self.bot.progress_data.get_operator_progress(operator_id, period)
+            logger.info(
+                f"Получение данных прогресса для оператора {operator_id} за период {period}."
+            )
+            progress_data = await self.bot.progress_data.get_operator_progress(
+                operator_id, period
+            )
             if not progress_data:
-                logger.warning(f"Нет данных прогресса для оператора {operator_id} за период {period}.")
-                await query.edit_message_text(f"Нет данных для оператора {operator_id} за период {period}.")
+                logger.warning(
+                    f"Нет данных прогресса для оператора {operator_id} за период {period}."
+                )
+                await query.edit_message_text(
+                    f"Нет данных для оператора {operator_id} за период {period}."
+                )
                 return
 
             logger.debug(f"Полученные данные прогресса: {progress_data}")
 
             # Генерация нескольких графиков (метод возвращает список кортежей):
             #   [ (group_name, buf, trend_msg, commentary), ... ]
-            logger.info(f"Генерация графиков (generate_operator_progress) для оператора {operator_id} и периода {period}.")
-            results = await self.bot.generate_operator_progress(progress_data, operator_id, period)
+            logger.info(
+                f"Генерация графиков (generate_operator_progress) для оператора {operator_id} и периода {period}."
+            )
+            results = await self.bot.generate_operator_progress(
+                progress_data, operator_id, period
+            )
 
-            logger.info(f"Отправка графиков и комментариев для оператора {operator_id}.")
+            logger.info(
+                f"Отправка графиков и комментариев для оператора {operator_id}."
+            )
             max_caption_length = 1024  # Лимит подписи в Telegram (примерно)
 
-            for (group_name, buf, trend_msg, commentary) in results:
+            for group_name, buf, trend_msg, commentary in results:
                 # Склеиваем подпись
                 final_caption = (trend_msg + "\n\n" + commentary).strip()
 
@@ -1602,18 +1806,16 @@ class CallbackDispatcher:
                     short_caption = final_caption[: (max_caption_length - 3)] + "..."
                     # 1) Отправляем фото с обрезанной подписью
                     await query.message.reply_photo(
-                        photo=buf,
-                        caption=short_caption,
-                        parse_mode=ParseMode.HTML
+                        photo=buf, caption=short_caption, parse_mode=ParseMode.HTML
                     )
                     # 2) А полный текст отдельным сообщением
-                    await query.message.reply_text(final_caption, parse_mode=ParseMode.HTML)
+                    await query.message.reply_text(
+                        final_caption, parse_mode=ParseMode.HTML
+                    )
                 else:
                     # Если подпись вмещается — отправляем одним сообщением
                     await query.message.reply_photo(
-                        photo=buf,
-                        caption=final_caption,
-                        parse_mode=ParseMode.HTML
+                        photo=buf, caption=final_caption, parse_mode=ParseMode.HTML
                     )
 
             logger.info("Все графики успешно отправлены пользователю.")
@@ -1628,11 +1830,8 @@ class CallbackDispatcher:
             logger.info("Завершение обработки выбора периода.")
 
     async def _handle_operator_callback(
-    self,
-    update: Update,
-    context: CallbackContext,
-    params: List[str]
-) -> None:
+        self, update: Update, context: CallbackContext, params: List[str]
+    ) -> None:
         """
         Обработка выбора оператора или специальных команд с максимальным логированием.
         """
@@ -1658,7 +1857,9 @@ class CallbackDispatcher:
             # Проверка на команды `menu`
             if command == "menu" and len(params) > 1:
                 sub_command = params[1].strip().lower()
-                operator_id = int(params[2]) if len(params) > 2 and params[2].isdigit() else None
+                operator_id = (
+                    int(params[2]) if len(params) > 2 and params[2].isdigit() else None
+                )
 
                 if not operator_id:
                     self.logger.warning("Отсутствует или некорректный ID оператора.")
@@ -1667,14 +1868,26 @@ class CallbackDispatcher:
 
                 # Обработка подкоманд `menu`
                 if sub_command == "progress":
-                    self.logger.info(f"Обработка подкоманды 'progress' для оператора {operator_id}.")
-                    await self._handle_operator_progress_callback(update, context, [operator_id])
+                    self.logger.info(
+                        f"Обработка подкоманды 'progress' для оператора {operator_id}."
+                    )
+                    await self._handle_operator_progress_callback(
+                        update, context, [operator_id]
+                    )
                 elif sub_command == "period":
-                    self.logger.info(f"Обработка подкоманды 'period' для оператора {operator_id}.")
-                    await self._handle_period_select_callback(update, context, [operator_id])
+                    self.logger.info(
+                        f"Обработка подкоманды 'period' для оператора {operator_id}."
+                    )
+                    await self._handle_period_select_callback(
+                        update, context, [operator_id]
+                    )
                 elif sub_command in ["daily", "weekly", "monthly", "yearly"]:
-                    self.logger.info(f"Обработка подкоманды периода '{sub_command}' для оператора {operator_id}.")
-                    await self._handle_period_select_callback(update, context, [operator_id, sub_command])
+                    self.logger.info(
+                        f"Обработка подкоманды периода '{sub_command}' для оператора {operator_id}."
+                    )
+                    await self._handle_period_select_callback(
+                        update, context, [operator_id, sub_command]
+                    )
                 elif sub_command == "back":
                     self.logger.info("Возврат к списку операторов.")
                     await self.operator_progress_menu_handle(update, context)
@@ -1700,58 +1913,79 @@ class CallbackDispatcher:
             self.logger.debug(f"Извлечённый ID оператора: {operator_id}")
 
             # Проверка прав доступа
-            self.logger.info(f"Проверка прав доступа для пользователя {query.from_user.id} и оператора {operator_id}.")
-            has_access = await self.permissions_manager.can_view_operator(query.from_user.id, operator_id)
+            self.logger.info(
+                f"Проверка прав доступа для пользователя {query.from_user.id} и оператора {operator_id}."
+            )
+            has_access = await self.permissions_manager.can_view_operator(
+                query.from_user.id, operator_id
+            )
             if not has_access:
-                self.logger.warning(f"Пользователь {query.from_user.id} не имеет прав на доступ к оператору {operator_id}.")
+                self.logger.warning(
+                    f"Пользователь {query.from_user.id} не имеет прав на доступ к оператору {operator_id}."
+                )
                 await query.answer("У вас нет прав для просмотра этого оператора.")
                 return
 
             # Сохранение выбранного оператора в контексте
             context.user_data["selected_operator"] = operator_id
-            self.logger.info(f"Оператор {operator_id} сохранён в контексте пользователя.")
+            self.logger.info(
+                f"Оператор {operator_id} сохранён в контексте пользователя."
+            )
 
             # Генерация клавиатуры для оператора
             self.logger.info(f"Генерация клавиатуры для оператора с ID: {operator_id}")
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("Посмотреть прогресс", callback_data=f"menu_progress_{operator_id}")],
-                #[InlineKeyboardButton("Выбрать период", callback_data=f"menu_period_{operator_id}")],
-                [InlineKeyboardButton("Назад к списку операторов", callback_data="menu_back")]
-            ])
+            keyboard = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "Посмотреть прогресс",
+                            callback_data=f"menu_progress_{operator_id}",
+                        )
+                    ],
+                    # [InlineKeyboardButton("Выбрать период", callback_data=f"menu_period_{operator_id}")],
+                    [
+                        InlineKeyboardButton(
+                            "Назад к списку операторов", callback_data="menu_back"
+                        )
+                    ],
+                ]
+            )
             self.logger.debug(f"Сгенерированная клавиатура: {keyboard}")
 
             # Обновление сообщения с клавиатурой
             try:
                 await query.edit_message_text(
-                    text=f"Выбран оператор: {operator['name']}",
-                    reply_markup=keyboard
+                    text=f"Выбран оператор: {operator['name']}", reply_markup=keyboard
                 )
-                self.logger.info(f"Сообщение успешно обновлено для оператора: {operator['name']}")
+                self.logger.info(
+                    f"Сообщение успешно обновлено для оператора: {operator['name']}"
+                )
             except telegram.error.BadRequest as e:
                 if "message is not modified" in str(e):
                     self.logger.info("Сообщение не требует обновления (не изменилось).")
                 else:
-                    self.logger.error(f"Ошибка при обновлении сообщения: {e}", exc_info=True)
+                    self.logger.error(
+                        f"Ошибка при обновлении сообщения: {e}", exc_info=True
+                    )
                     await query.answer("Ошибка при обновлении сообщения.")
                 return
 
         except Exception as e:
-            self.logger.error(f"Ошибка при обработке callback оператора: {e}", exc_info=True)
+            self.logger.error(
+                f"Ошибка при обработке callback оператора: {e}", exc_info=True
+            )
             await query.answer("Произошла ошибка. Попробуйте позже.")
         finally:
             self.logger.info("Завершение обработки callback оператора.")
 
     async def _handle_retry_callback(
-    self,
-    update: Update,
-    context: CallbackContext,
-    params: List[str]
-) -> None:
+        self, update: Update, context: CallbackContext, params: List[str]
+    ) -> None:
         """
         Обработка повторного запроса с максимальным логированием.
         """
         logging.info("Начало обработки повторного запроса.")
-        
+
         query = update.callback_query
         function_name = params[0] if params else None
         logging.debug(f"Имя функции для повтора: {function_name}")
@@ -1765,23 +1999,27 @@ class CallbackDispatcher:
                 return
 
             # Выполняем повторный запрос
-            logging.info(f"Выполнение повторного запроса через функцию '{function_name}'.")
+            logging.info(
+                f"Выполнение повторного запроса через функцию '{function_name}'."
+            )
             await query.answer("Повторяем запрос...")
             await retry_func(update, context)
-            logging.info(f"Повторный запрос выполнен успешно через функцию '{function_name}'.")
+            logging.info(
+                f"Повторный запрос выполнен успешно через функцию '{function_name}'."
+            )
 
         except Exception as e:
             # Логируем исключение
-            logging.error(f"Ошибка при повторном запросе через функцию '{function_name}': {e}", exc_info=True)
+            logging.error(
+                f"Ошибка при повторном запросе через функцию '{function_name}': {e}",
+                exc_info=True,
+            )
             await query.answer("Ошибка при повторном запросе")
         finally:
             logging.info("Завершение обработки повторного запроса.")
 
     async def _handle_metric_callback(
-        self,
-        update: Update,
-        context: CallbackContext,
-        params: List[str]
+        self, update: Update, context: CallbackContext, params: List[str]
     ) -> None:
         """
         Обработка выбора метрики с максимальным логированием.
@@ -1794,14 +2032,17 @@ class CallbackDispatcher:
 
         try:
             # Проверяем права доступа
-            logging.info(f"Проверка прав доступа пользователя {query.from_user.id} к метрике '{metric_name}'.")
+            logging.info(
+                f"Проверка прав доступа пользователя {query.from_user.id} к метрике '{metric_name}'."
+            )
             has_access = await self.bot.permissions_manager.can_view_metric(
-                query.from_user.id,
-                metric_name
+                query.from_user.id, metric_name
             )
             logging.debug(f"Результат проверки прав доступа: {has_access}")
             if not has_access:
-                logging.warning(f"Пользователь {query.from_user.id} не имеет прав для просмотра метрики '{metric_name}'.")
+                logging.warning(
+                    f"Пользователь {query.from_user.id} не имеет прав для просмотра метрики '{metric_name}'."
+                )
                 await query.answer("У вас нет прав для просмотра этой метрики")
                 return
 
@@ -1816,24 +2057,23 @@ class CallbackDispatcher:
 
             # Обновляем сообщение с информацией о метрике
             await query.edit_message_text(
-                f"Выбрана метрика: {metric_name}",
-                reply_markup=keyboard
+                f"Выбрана метрика: {metric_name}", reply_markup=keyboard
             )
             logging.info(f"Сообщение успешно обновлено для метрики '{metric_name}'.")
 
         except Exception as e:
             # Логируем исключение
-            logging.error(f"Ошибка при обработке выбора метрики '{metric_name}': {e}", exc_info=True)
+            logging.error(
+                f"Ошибка при обработке выбора метрики '{metric_name}': {e}",
+                exc_info=True,
+            )
             await query.answer("Ошибка при выборе метрики")
         finally:
             logging.info("Завершение обработки выбора метрики.")
 
     async def _handle_filter_callback(
-    self,
-    update: Update,
-    context: CallbackContext,
-    params: List[str]
-) -> None:
+        self, update: Update, context: CallbackContext, params: List[str]
+    ) -> None:
         """
         Обработка фильтров с максимальным логированием.
         """
@@ -1850,20 +2090,18 @@ class CallbackDispatcher:
             logging.info(f"Применение фильтра: {filter_type}={filter_value}")
             context.user_data.setdefault("filters", {})
             context.user_data["filters"][filter_type] = filter_value
-            logging.debug(f"Текущие фильтры пользователя: {context.user_data['filters']}")
+            logging.debug(
+                f"Текущие фильтры пользователя: {context.user_data['filters']}"
+            )
 
             # Обновляем сообщение
             logging.info("Генерация клавиатуры фильтров.")
             keyboard = self.bot.get_filter_keyboard(
-                filter_type,
-                context.user_data["filters"]
+                filter_type, context.user_data["filters"]
             )
             logging.debug(f"Сгенерированная клавиатура: {keyboard}")
 
-            await query.edit_message_text(
-                "Выберите фильтры:",
-                reply_markup=keyboard
-            )
+            await query.edit_message_text("Выберите фильтры:", reply_markup=keyboard)
             logging.info("Сообщение успешно обновлено с новыми фильтрами.")
 
         except Exception as e:
@@ -1873,10 +2111,7 @@ class CallbackDispatcher:
             logging.info("Завершение обработки фильтра.")
 
     async def _handle_page_callback(
-        self,
-        update: Update,
-        context: CallbackContext,
-        params: List[str]
+        self, update: Update, context: CallbackContext, params: List[str]
     ) -> None:
         """
         Обработка пагинации с максимальным логированием.
@@ -1899,16 +2134,11 @@ class CallbackDispatcher:
 
             # Обновляем сообщение
             logging.info("Генерация клавиатуры пагинации.")
-            keyboard = self.bot.get_pagination_keyboard(
-                page,
-                data["total_pages"]
-            )
+            keyboard = self.bot.get_pagination_keyboard(page, data["total_pages"])
             logging.debug(f"Сгенерированная клавиатура пагинации: {keyboard}")
 
             await query.edit_message_text(
-                data["text"],
-                reply_markup=keyboard,
-                parse_mode='HTML'
+                data["text"], reply_markup=keyboard, parse_mode="HTML"
             )
             logging.info("Сообщение успешно обновлено для текущей страницы.")
 
@@ -1919,10 +2149,7 @@ class CallbackDispatcher:
             logging.info("Завершение обработки пагинации.")
 
     async def _handle_graph_callback(
-        self,
-        update: Update,
-        context: CallbackContext,
-        params: List[str]
+        self, update: Update, context: CallbackContext, params: List[str]
     ) -> None:
         """
         Обработка настроек графика с максимальным логированием.
@@ -1940,7 +2167,9 @@ class CallbackDispatcher:
             logging.info(f"Применение настройки графика: {graph_type}={setting}")
             context.user_data.setdefault("graph_settings", {})
             context.user_data["graph_settings"][graph_type] = setting
-            logging.debug(f"Текущие настройки графика пользователя: {context.user_data['graph_settings']}")
+            logging.debug(
+                f"Текущие настройки графика пользователя: {context.user_data['graph_settings']}"
+            )
 
             # Обновляем сообщение
             logging.info("Генерация клавиатуры настроек графика.")
@@ -1949,10 +2178,7 @@ class CallbackDispatcher:
             )
             logging.debug(f"Сгенерированная клавиатура настроек графика: {keyboard}")
 
-            await query.edit_message_text(
-                "Настройки графика:",
-                reply_markup=keyboard
-            )
+            await query.edit_message_text("Настройки графика:", reply_markup=keyboard)
             logging.info("Сообщение успешно обновлено с настройками графика.")
 
         except Exception as e:
@@ -1961,35 +2187,50 @@ class CallbackDispatcher:
         finally:
             logging.info("Завершение обработки настроек графика.")
 
+
 class BotError(Exception):
     """Базовый класс для ошибок бота."""
+
     def __init__(self, message: str, user_message: str = None):
         super().__init__(message)
         self.user_message = user_message or message
 
+
 class AuthenticationError(BotError):
     """Ошибка аутентификации."""
+
     pass
+
 
 class PermissionError(BotError):
     """Ошибка прав доступа."""
+
     pass
+
 
 class ValidationError(BotError):
     """Ошибка валидации данных."""
+
     pass
+
 
 class DataProcessingError(BotError):
     """Ошибка обработки данных."""
+
     pass
+
 
 class VisualizationError(BotError):
     """Ошибка создания визуализации."""
+
     pass
+
 
 class ExternalServiceError(BotError):
     """Ошибка внешнего сервиса."""
+
     pass
+
 
 class DataProcessor:
     """Класс для обработки данных визуализации."""
@@ -1998,10 +2239,7 @@ class DataProcessor:
         self.logger = logger
 
     @staticmethod
-    def determine_resample_frequency(
-        total_seconds: float,
-        target_points: int
-    ) -> str:
+    def determine_resample_frequency(total_seconds: float, target_points: int) -> str:
         """
         Определяет оптимальную частоту ресемплинга.
 
@@ -2013,7 +2251,7 @@ class DataProcessor:
             str: Строка частоты для pandas resample
         """
         interval_seconds = max(int(total_seconds / target_points), 1)
-        
+
         if interval_seconds < 60:
             return f"{interval_seconds}S"  # секунды
         elif interval_seconds < 3600:
@@ -2025,9 +2263,7 @@ class DataProcessor:
 
     @staticmethod
     def get_aggregation_method(
-        column_name: str,
-        data_type: str,
-        unique_ratio: float
+        column_name: str, data_type: str, unique_ratio: float
     ) -> str:
         """
         Определяет оптимальный метод агрегации для колонки.
@@ -2041,22 +2277,21 @@ class DataProcessor:
             str: Метод агрегации
         """
         if not pd.api.types.is_numeric_dtype(data_type):
-            return 'last'
+            return "last"
 
         column_lower = column_name.lower()
-        if any(term in column_lower for term in ['count', 'quantity', 'total']):
-            return 'sum'
-        elif any(term in column_lower for term in ['rate', 'ratio', 'avg', 'mean']):
-            return 'mean'
+        if any(term in column_lower for term in ["count", "quantity", "total"]):
+            return "sum"
+        elif any(term in column_lower for term in ["rate", "ratio", "avg", "mean"]):
+            return "mean"
         elif unique_ratio < 0.1:  # Если мало уникальных значений
-            return 'mode'
+            return "mode"
         else:
-            return 'mean'
+            return "mean"
 
     @staticmethod
     def safe_convert_to_numeric(
-        series: pd.Series,
-        default_value: float = 0.0
+        series: pd.Series, default_value: float = 0.0
     ) -> pd.Series:
         """
         Безопасное преобразование серии в числовой формат.
@@ -2069,14 +2304,12 @@ class DataProcessor:
             pd.Series: Преобразованная серия
         """
         try:
-            return pd.to_numeric(series, errors='coerce').fillna(default_value)
+            return pd.to_numeric(series, errors="coerce").fillna(default_value)
         except Exception:
             return pd.Series([default_value] * len(series), index=series.index)
 
     def process_complex_data(
-        self,
-        data: pd.Series,
-        aggregation: str = 'sum'
+        self, data: pd.Series, aggregation: str = "sum"
     ) -> pd.Series:
         """
         Обработка сложных данных (списков, словарей, вложенных структур).
@@ -2094,12 +2327,14 @@ class DataProcessor:
             else:
                 expanded = pd.DataFrame(data.tolist(), index=data.index)
 
-            if aggregation == 'mean':
+            if aggregation == "mean":
                 return expanded.mean(axis=1)
             return expanded.sum(axis=1)
         except Exception as e:
             self.logger.error(f"Ошибка обработки сложных данных: {e}")
             return pd.Series(0, index=data.index)
+
+
 class MetricConfig(TypedDict):
     name: str
     label: str
@@ -2107,6 +2342,7 @@ class MetricConfig(TypedDict):
     line_style: Optional[str]
     marker: Optional[str]
     aggregation: Optional[Literal["sum", "mean", "max", "min"]]
+
 
 class VisualizationConfig(TypedDict):
     figure: Dict[str, Any]
@@ -2117,6 +2353,7 @@ class VisualizationConfig(TypedDict):
     y_label: str
     title: str
 
+
 class TrendData(TypedDict):
     metric: str
     current: float
@@ -2124,33 +2361,33 @@ class TrendData(TypedDict):
     change: float
     trend: Literal["up", "down", "stable"]
 
+
 # Определяем типы для обработки данных
 DataFrameOrSeries = Union[pd.DataFrame, pd.Series]
 MetricValue = Union[float, int, list, dict, str]
 AggregationMethod = Literal["sum", "mean", "max", "min", "first", "last"]
 
+
 class DataProcessor:
     def __init__(self, logger):
         self.logger = logger
+
     """Класс для обработки данных."""
-    
+
     @staticmethod
-    def determine_resample_frequency(
-        total_seconds: float,
-        target_points: int
-    ) -> str:
+    def determine_resample_frequency(total_seconds: float, target_points: int) -> str:
         """
         Определяет частоту ресемплинга на основе общего времени и целевых точек.
-        
+
         Args:
             total_seconds: Общее количество секунд
             target_points: Желаемое количество точек
-            
+
         Returns:
             str: Строка частоты ресемплинга (например, '1H', '1D')
         """
         seconds_per_point = total_seconds / target_points
-        
+
         if seconds_per_point < 60:
             return f"{int(seconds_per_point)}S"
         elif seconds_per_point < 3600:
@@ -2162,18 +2399,16 @@ class DataProcessor:
 
     @staticmethod
     def get_aggregation_method(
-        column: str,
-        dtype: np.dtype,
-        unique_ratio: float
+        column: str, dtype: np.dtype, unique_ratio: float
     ) -> AggregationMethod:
         """
         Определяет метод агрегации на основе типа данных и уникальности значений.
-        
+
         Args:
             column: Имя колонки
             dtype: Тип данных колонки
             unique_ratio: Отношение уникальных значений к общему количеству
-            
+
         Returns:
             AggregationMethod: Метод агрегации
         """
@@ -2187,17 +2422,19 @@ class DataProcessor:
         else:
             return "first"
 
+
 class TelegramBot:
     MAX_RECORDS_FOR_VISUALIZATION = 1000  # Define the attribute with a default value
+
     def __init__(
-    self,
-    token: str,
-    api_key: str = None,
-    model: str = "gpt-4o-mini",
-    max_concurrent_tasks: int = 5,
-    max_visualization_tasks: int = 3,
-):
-    # Настройка OpenAI API ключа
+        self,
+        token: str,
+        api_key: str = None,
+        model: str = "gpt-4o-mini",
+        max_concurrent_tasks: int = 5,
+        max_visualization_tasks: int = 3,
+    ):
+        # Настройка OpenAI API ключа
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             logger.error(
@@ -2213,19 +2450,20 @@ class TelegramBot:
         self.permissions_manager = PermissionsManager(self.db_manager)
         self.callback_dispatcher = CallbackDispatcher(self)
         self.progress_data = ProgressData(self.db_manager)
-        self.visualizer = MetricsVisualizer(output_dir="output_dir_path", global_config={"dpi": 100, "figsize": (12, 6)})        
+        self.visualizer = MetricsVisualizer(
+            output_dir="output_dir_path", global_config={"dpi": 100, "figsize": (12, 6)}
+        )
         self.client = AsyncOpenAI(api_key=self.api_key)
         self.model = model
         self.logger = logging.getLogger(__name__)
         # Сначала создаём приложение
         self.application = (
-            ApplicationBuilder()
-            .token(token)
-            .rate_limiter(AIORateLimiter())
-            .build()
+            ApplicationBuilder().token(token).rate_limiter(AIORateLimiter()).build()
         )
         # Добавляем обработчики
-        self.application.add_handler(CallbackQueryHandler(self.callback_dispatcher.dispatch))
+        self.application.add_handler(
+            CallbackQueryHandler(self.callback_dispatcher.dispatch)
+        )
         # Инициализация PermissionsManager
         self.report_generator = OpenAIReportGenerator(
             self.db_manager, model="gpt-4o-mini"
@@ -2294,7 +2532,6 @@ class TelegramBot:
     PLOT_CONFIGS = {
         "operator_progress": {
             "title_template": "Прогресс оператора {operator_name} за {period}",
-
             # Вместо одного "metrics": [...], указываем "groups", внутри — списки метрик
             "groups": {
                 "quality": [
@@ -2413,7 +2650,6 @@ class TelegramBot:
                     },
                 ],
             },
-
             "xlabel": "Дата",
             "ylabel": "Значение",
             "grid": True,
@@ -2446,7 +2682,10 @@ class TelegramBot:
 
     class TempFileManager:
         """Менеджер временных файлов с безопасным удалением."""
-        def __init__(self, temp_dir: str, max_retries: int = 3, retry_delay: float = 0.5):
+
+        def __init__(
+            self, temp_dir: str, max_retries: int = 3, retry_delay: float = 0.5
+        ):
             self.temp_dir = temp_dir
             self.max_retries = max_retries
             self.retry_delay = retry_delay
@@ -2469,25 +2708,33 @@ class TelegramBot:
             """
             current_time = time.time()
             async with self.lock:
-                for filepath in list(self.active_files):  # Создаем копию, чтобы избежать изменений в итерации
+                for filepath in list(
+                    self.active_files
+                ):  # Создаем копию, чтобы избежать изменений в итерации
                     try:
                         # Проверяем, существует ли файл
                         if not os.path.exists(filepath):
-                            logger.info(f"Файл {filepath} больше не существует. Удаление из активного списка.")
+                            logger.info(
+                                f"Файл {filepath} больше не существует. Удаление из активного списка."
+                            )
                             self.active_files.discard(filepath)
                             continue
 
                         # Проверяем возраст файла
                         file_age = current_time - os.path.getmtime(filepath)
                         if file_age > max_age:
-                            logger.info(f"Файл {filepath} старше {max_age} секунд. Попытка удаления.")
+                            logger.info(
+                                f"Файл {filepath} старше {max_age} секунд. Попытка удаления."
+                            )
                             if await self.remove_temp_file(filepath):
                                 logger.info(f"Старый временный файл удален: {filepath}")
                             else:
                                 logger.warning(f"Не удалось удалить файл: {filepath}")
 
                     except Exception as e:
-                        logger.error(f"Ошибка при очистке файла {filepath}: {e}", exc_info=True)
+                        logger.error(
+                            f"Ошибка при очистке файла {filepath}: {e}", exc_info=True
+                        )
 
     async def remove_temp_file(self, filepath: str) -> bool:
         """
@@ -2547,6 +2794,7 @@ class TelegramBot:
             "error": "Конверсия должна быть от 0 до 100",
         },
     }
+
     class ValidationError(Exception):
         """Исключение для ошибок валидации."""
 
@@ -2601,12 +2849,10 @@ class TelegramBot:
         return decorator
 
     async def _prepare_data_for_visualization(
-    self,
-    data: Dict[str, Any],
-    resample_threshold: int = None
-) -> Tuple[pd.DataFrame, List[str]]:
+        self, data: Dict[str, Any], resample_threshold: int = None
+    ) -> Tuple[pd.DataFrame, List[str]]:
         """
-        Подготовка данных для визуализации. Если ключи действительно выглядят 
+        Подготовка данных для визуализации. Если ключи действительно выглядят
         как "YYYY-MM-DD - YYYY-MM-DD" (timeseries), то обрабатываем их как даты.
         Иначе предполагаем, что это просто словарь метрик ('avg_call_rating', ...),
         и возвращаем DataFrame из одной строки.
@@ -2624,21 +2870,25 @@ class TelegramBot:
 
             # --- КЛЮЧЕВОЙ БЛОК: проверяем, действительно ли это похоже на таймсерию ---
             # Например, хотя бы один ключ должен соответствовать шаблону YYYY-MM-DD - YYYY-MM-DD
-            pattern = r'^\d{4}-\d{2}-\d{2}\s-\s\d{4}-\d{2}-\d{2}$'
-            is_timeseries = any(
-                re.match(pattern, key.strip()) for key in data.keys()
-            )
-            
+            pattern = r"^\d{4}-\d{2}-\d{2}\s-\s\d{4}-\d{2}-\d{2}$"
+            is_timeseries = any(re.match(pattern, key.strip()) for key in data.keys())
+
             if not is_timeseries:
                 # Если это не timeseries — просто создаём DataFrame с одной строкой,
                 # где колонки = ключи (например, avg_call_rating, ...)
-                logging.debug("Данные не выглядят как таймсерия, создаём DataFrame из одной строки.")
+                logging.debug(
+                    "Данные не выглядят как таймсерия, создаём DataFrame из одной строки."
+                )
                 df = pd.DataFrame([data])  # <-- одна строка, ключи = колонки
-                warnings.append("Данные не являются временным рядом: парсинг дат не выполняется.")
+                warnings.append(
+                    "Данные не являются временным рядом: парсинг дат не выполняется."
+                )
                 # На этом этапе пропускаем остальную логику (ресемплинг и т.п. не нужен).
                 return df, warnings
             # --- Если всё же timeseries (нашли хотя бы один ключ-дата): ---
-            logging.debug("Обнаружены ключи, похожие на временной ряд. Парсим как даты.")
+            logging.debug(
+                "Обнаружены ключи, похожие на временной ряд. Парсим как даты."
+            )
 
             # Создание DataFrame со строками = keys
             df = pd.DataFrame.from_dict(data, orient="index")
@@ -2650,7 +2900,7 @@ class TelegramBot:
                 raise DataProcessingError("После обработки не осталось данных.")
 
             # Проверяем наличие callback_dispatcher
-            if not hasattr(self, 'callback_dispatcher') or not self.callback_dispatcher:
+            if not hasattr(self, "callback_dispatcher") or not self.callback_dispatcher:
                 logging.error("callback_dispatcher не настроен в TelegramBot.")
                 raise AttributeError("callback_dispatcher отсутствует в TelegramBot.")
 
@@ -2658,17 +2908,21 @@ class TelegramBot:
 
             def parse_range(index_value: str) -> Optional[pd.Timestamp]:
                 # Ещё раз проверим точно тот же шаблон
-                pattern_full = r'^\d{4}-\d{2}-\d{2}$'
+                pattern_full = r"^\d{4}-\d{2}-\d{2}$"
                 if re.match(pattern_full, index_value.strip()):
                     try:
-                        start_date, _ = self.callback_dispatcher._parse_date_range(index_value)
+                        start_date, _ = self.callback_dispatcher._parse_date_range(
+                            index_value
+                        )
                         return pd.Timestamp(start_date)
                     except Exception as exc:
                         logger.debug(f"Не удалось распарсить '{index_value}': {exc}")
                         return None
                 else:
                     # Если ключ не подходит под паттерн — считаем его не датой
-                    logger.debug(f"Не обрабатываем ключ '{index_value}' как дату (timeseries).")
+                    logger.debug(
+                        f"Не обрабатываем ключ '{index_value}' как дату (timeseries)."
+                    )
                     return None
 
             # Применяем parse_range к индексам
@@ -2693,7 +2947,9 @@ class TelegramBot:
             if df.empty:
                 logging.warning("После обработки дат DataFrame пуст.")
                 df.loc[pd.Timestamp.now()] = [0] * len(df.columns)
-                warnings.append("Добавлена строка с нулевыми значениями для предотвращения пустоты.")
+                warnings.append(
+                    "Добавлена строка с нулевыми значениями для предотвращения пустоты."
+                )
                 return df, warnings
 
             # Ресемплинг, если превышен лимит записей
@@ -2709,8 +2965,12 @@ class TelegramBot:
             na_counts = df.isna().sum()
             if na_counts.any():
                 warnings.append(
-                    "Обнаружены пропущенные значения: " +
-                    ", ".join(f"{col} ({count})" for col, count in na_counts.items() if count > 0)
+                    "Обнаружены пропущенные значения: "
+                    + ", ".join(
+                        f"{col} ({count})"
+                        for col, count in na_counts.items()
+                        if count > 0
+                    )
                 )
                 df = df.fillna(method="ffill").fillna(0)
                 logging.debug(f"DataFrame после заполнения пропусков:\n{df}")
@@ -2723,10 +2983,10 @@ class TelegramBot:
             raise DataProcessingError(f"Ошибка подготовки данных: {e}")
 
     async def _resample_data(
-    self,
-    df: pd.DataFrame,
-    target_points: int,
-) -> pd.DataFrame:
+        self,
+        df: pd.DataFrame,
+        target_points: int,
+    ) -> pd.DataFrame:
         """
         Оптимизированный ресемплинг данных для визуализации.
 
@@ -2743,7 +3003,9 @@ class TelegramBot:
         try:
             # Если у нас слишком мало строк или индекс не Datetime, выходим
             if df.empty or len(df) < 2:
-                logging.warning("Недостаточно точек для ресемплинга или DataFrame пуст.")
+                logging.warning(
+                    "Недостаточно точек для ресемплинга или DataFrame пуст."
+                )
                 return df
 
             if not isinstance(df.index, pd.DatetimeIndex):
@@ -2753,7 +3015,9 @@ class TelegramBot:
 
             total_seconds = (df.index[-1] - df.index[0]).total_seconds()
             if total_seconds <= 0:
-                logging.warning("Интервал дат нулевой или отрицательный. Возврат исходных данных.")
+                logging.warning(
+                    "Интервал дат нулевой или отрицательный. Возврат исходных данных."
+                )
                 return df
 
             # Вычисляем интервалы
@@ -2810,19 +3074,23 @@ class TelegramBot:
         for column in df.columns:
             # Определяем тип данных
             if pd.api.types.is_numeric_dtype(df[column]):
-                if 'count' in column.lower() or 'quantity' in column.lower():
-                    agg_dict[column] = 'sum'  # Для счетчиков используем сумму
-                elif 'rate' in column.lower() or 'ratio' in column.lower():
-                    agg_dict[column] = 'mean'  # Для коэффициентов используем среднее
+                if "count" in column.lower() or "quantity" in column.lower():
+                    agg_dict[column] = "sum"  # Для счетчиков используем сумму
+                elif "rate" in column.lower() or "ratio" in column.lower():
+                    agg_dict[column] = "mean"  # Для коэффициентов используем среднее
                 else:
                     # Анализируем распределение данных
-                    if df[column].nunique() / len(df) < 0.1:  # Если мало уникальных значений
-                        agg_dict[column] = 'mode'  # Используем моду
+                    if (
+                        df[column].nunique() / len(df) < 0.1
+                    ):  # Если мало уникальных значений
+                        agg_dict[column] = "mode"  # Используем моду
                     else:
-                        agg_dict[column] = 'mean'  # По умолчанию среднее
+                        agg_dict[column] = "mean"  # По умолчанию среднее
             else:
-                agg_dict[column] = 'last'  # Для нечисловых данных берем последнее значение
-        
+                agg_dict[column] = (
+                    "last"  # Для нечисловых данных берем последнее значение
+                )
+
         return agg_dict
 
     async def _process_metric_data(
@@ -2849,13 +3117,15 @@ class TelegramBot:
                 return pd.Series(dtype=float)
 
             data = df[metric_name]
-            
+
             # Обрабатываем сложные данные
             processed_data = self.metric_processor.process_complex_data(data, metric)
-            
+
             # Нормализуем данные
-            normalized_data = self.metric_processor.normalize_data(processed_data, metric)
-            
+            normalized_data = self.metric_processor.normalize_data(
+                processed_data, metric
+            )
+
             return normalized_data
 
         except Exception as e:
@@ -2863,13 +3133,13 @@ class TelegramBot:
             return pd.Series(dtype=float)
 
     async def generate_progress_visualization(
-    self,
-    data: Dict[str, Any],
-    visualization_type: str,
-    period: str,
-    operator_name: Optional[Union[str, int]] = None,
-    override_config: Optional[Dict[str, Any]] = None  # <-- Новый аргумент
-) -> Tuple[BytesIO, str]:
+        self,
+        data: Dict[str, Any],
+        visualization_type: str,
+        period: str,
+        operator_name: Optional[Union[str, int]] = None,
+        override_config: Optional[Dict[str, Any]] = None,  # <-- Новый аргумент
+    ) -> Tuple[BytesIO, str]:
         """
         Универсальный метод для генерации визуализации прогресса.
 
@@ -2890,8 +3160,12 @@ class TelegramBot:
         async with self.visualization_semaphore:
             try:
                 # Преобразуем operator_name в строку, чтобы избежать проблем с типами
-                operator_name_str = f"оператор {operator_name}" if operator_name else "все операторы"
-                logger.info(f"Начало генерации визуализации типа '{visualization_type}' для {operator_name_str}")
+                operator_name_str = (
+                    f"оператор {operator_name}" if operator_name else "все операторы"
+                )
+                logger.info(
+                    f"Начало генерации визуализации типа '{visualization_type}' для {operator_name_str}"
+                )
                 logger.debug(f"Входные данные для визуализации: {data}")
 
                 # 1) Подготовка и валидация данных
@@ -2902,21 +3176,25 @@ class TelegramBot:
                 #    иначе — обычный путь (вызвать _get_visualization_config)
                 if override_config is not None:
                     config = override_config
-                    logger.debug("Используем переданный override_config вместо _get_visualization_config.")
+                    logger.debug(
+                        "Используем переданный override_config вместо _get_visualization_config."
+                    )
                 else:
-                    config = await self._get_visualization_config(visualization_type, operator_name, period)
+                    config = await self._get_visualization_config(
+                        visualization_type, operator_name, period
+                    )
                     logger.debug(f"_get_visualization_config вернул:\n{config}")
 
                 # 3) Создаём график ( _create_visualization внутри ищет config["metrics"] )
                 buf, trend_message = await self._create_visualization(
-                    df,
-                    config,
-                    is_all_operators=(visualization_type == 'all_operators')
+                    df, config, is_all_operators=(visualization_type == "all_operators")
                 )
 
                 # 4) Добавляем предупреждения (если вернулись из _prepare_data_for_visualization)
                 if warnings:
-                    trend_message += "\n\n⚠️ Предупреждения:\n" + "\n".join(f"- {w}" for w in warnings)
+                    trend_message += "\n\n⚠️ Предупреждения:\n" + "\n".join(
+                        f"- {w}" for w in warnings
+                    )
 
                 return buf, trend_message
 
@@ -2936,13 +3214,13 @@ class TelegramBot:
             "yearly": "Год",
         }
         return period_map.get(period, "Неизвестный период")
-        
+
     async def _get_visualization_config(
-    self,
-    visualization_type: str,
-    operator_name: Optional[str] = None,
-    period: Optional[str] = None
-) -> Dict[str, Any]:
+        self,
+        visualization_type: str,
+        operator_name: Optional[str] = None,
+        period: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Получение (и копирование) конфигурации для визуализации,
         с учётом новых групп метрик (quality, conversion и т. д.).
@@ -2958,7 +3236,9 @@ class TelegramBot:
         try:
             # Проверяем, есть ли такой ключ в PLOT_CONFIGS
             if visualization_type not in self.PLOT_CONFIGS:
-                raise ValueError(f"Неподдерживаемый тип визуализации: {visualization_type}")
+                raise ValueError(
+                    f"Неподдерживаемый тип визуализации: {visualization_type}"
+                )
 
             # Берём «сырую» конфигурацию и копируем
             base_config = copy.deepcopy(self.PLOT_CONFIGS[visualization_type])
@@ -2968,8 +3248,7 @@ class TelegramBot:
                 # Пытаемся определить "человеческое" название периода, если нужно
                 period_str = self.get_period_label(period) if period else ""
                 base_config["title"] = base_config["title_template"].format(
-                    operator_name=operator_name,
-                    period=period_str
+                    operator_name=operator_name, period=period_str
                 )
             # иначе — можно оставить base_config["title"] = (что было),
             # или без title, если в конфиге не задано.
@@ -3026,7 +3305,9 @@ class TelegramBot:
             logging.info("Ось X отформатирована для отображения дат.")
 
         except Exception as e:
-            logging.error(f"Ошибка при настройке внешнего вида графика: {e}", exc_info=True)
+            logging.error(
+                f"Ошибка при настройке внешнего вида графика: {e}", exc_info=True
+            )
         finally:
             logging.info("Настройка внешнего вида графика завершена.")
 
@@ -3043,19 +3324,22 @@ class TelegramBot:
         Returns:
             Tuple[BytesIO, str]: Буфер изображения и сообщение о трендах
         """
-        logging.info(f"Начало генерации графика прогресса для всех операторов за период {period}.")
+        logging.info(
+            f"Начало генерации графика прогресса для всех операторов за период {period}."
+        )
         try:
-            return await self.generate_progress_visualization(operator_data, "all_operators", period)
+            return await self.generate_progress_visualization(
+                operator_data, "all_operators", period
+            )
         except Exception as e:
-            logging.error(f"Ошибка генерации прогресса всех операторов: {e}", exc_info=True)
+            logging.error(
+                f"Ошибка генерации прогресса всех операторов: {e}", exc_info=True
+            )
             raise
 
     async def generate_operator_progress(
-    self,
-    operator_data: Dict[str, Any],
-    operator_name: str,
-    period: str
-) -> List[Tuple[str, BytesIO, str, str]]:
+        self, operator_data: Dict[str, Any], operator_name: str, period: str
+    ) -> List[Tuple[str, BytesIO, str, str]]:
         """
         Генерация нескольких графиков по группам метрик (quality, conversion, call_handling, time, summary).
         Для каждой группы:
@@ -3066,8 +3350,12 @@ class TelegramBot:
         - Возвращаем список (group_name, buf, trend_msg, commentary).
         """
 
-        operator_name_str = str(operator_name) if operator_name else "Неизвестный оператор"
-        logging.info(f"Генерация графиков для оператора {operator_name_str} за период {period}.")
+        operator_name_str = (
+            str(operator_name) if operator_name else "Неизвестный оператор"
+        )
+        logging.info(
+            f"Генерация графиков для оператора {operator_name_str} за период {period}."
+        )
 
         try:
             if not operator_data:
@@ -3116,7 +3404,9 @@ class TelegramBot:
                     if metric_name in group_data:
                         filtered_metrics.append(m_cfg)
                     else:
-                        logging.debug(f"Метрика '{metric_name}' отсутствует в group_data, пропускаем.")
+                        logging.debug(
+                            f"Метрика '{metric_name}' отсутствует в group_data, пропускаем."
+                        )
 
                 if not filtered_metrics:
                     logging.info(
@@ -3137,17 +3427,17 @@ class TelegramBot:
                     "ylabel": "Значение",
                     "grid": True,  # или op_config.get("grid", True)
                     "legend_position": "upper right",
-                    "metrics": filtered_metrics  # <--- КЛЮЧЕВОЙ момент!
+                    "metrics": filtered_metrics,  # <--- КЛЮЧЕВОЙ момент!
                 }
 
                 # Вызываем визуализацию, передавая override_config = plot_config
                 # Внутри generate_progress_visualization нужно поддержать этот параметр
                 buf, trend_msg = await self.generate_progress_visualization(
-                    filtered_data_for_plot,      # данные (только нужные метрики)
-                    "operator_progress",         # visualization_type
+                    filtered_data_for_plot,  # данные (только нужные метрики)
+                    "operator_progress",  # visualization_type
                     period,
                     operator_name_str,
-                    override_config=plot_config  # <-- ключевой аргумент
+                    override_config=plot_config,  # <-- ключевой аргумент
                 )
 
                 # Генерация комментария
@@ -3156,7 +3446,7 @@ class TelegramBot:
                     [filtered_data_for_plot],  # список из одного словаря
                     metrics_keys,
                     operator_name_str,
-                    period
+                    period,
                 )
 
                 # Складываем всё в results
@@ -3167,13 +3457,13 @@ class TelegramBot:
         except DataProcessingError as e:
             logging.error(
                 f"Ошибка обработки данных для оператора {operator_name_str}: {e}",
-                exc_info=True
+                exc_info=True,
             )
             raise
         except Exception as e:
             logging.error(
                 f"Ошибка генерации прогресса для оператора {operator_name_str}: {e}",
-                exc_info=True
+                exc_info=True,
             )
             raise DataProcessingError(f"Общая ошибка: {e}")
 
@@ -3192,7 +3482,9 @@ class TelegramBot:
                 Кортеж (информация об операторе, данные прогресса, начальная дата,
                 конечная дата, предупреждения) или None в случае ошибки
         """
-        logging.info(f"Начало получения данных о прогрессе оператора с ID {operator_id} за период {period_str}.")
+        logging.info(
+            f"Начало получения данных о прогрессе оператора с ID {operator_id} за период {period_str}."
+        )
         try:
             # Получаем информацию об операторе
             logging.info(f"Получение информации об операторе с ID {operator_id}.")
@@ -3209,12 +3501,17 @@ class TelegramBot:
                 start_date, end_date = self._get_date_range(period_str)
                 logging.debug(f"Диапазон дат: {start_date} - {end_date}.")
             except ValueError as e:
-                logging.error(f"Ошибка определения диапазона дат для периода {period_str}: {e}", exc_info=True)
+                logging.error(
+                    f"Ошибка определения диапазона дат для периода {period_str}: {e}",
+                    exc_info=True,
+                )
                 return None
 
             # Получаем данные прогресса
             logging.info(f"Получение данных прогресса оператора с ID {operator_id}.")
-            progress_data = await self.progress_data.get_operator_progress(int(operator_id), period_str)
+            progress_data = await self.progress_data.get_operator_progress(
+                int(operator_id), period_str
+            )
             logging.debug(f"Данные прогресса: {progress_data}")
 
             # Проверяем валидность данных
@@ -3236,14 +3533,19 @@ class TelegramBot:
             return operator, df, start_date, end_date, warnings
 
         except Exception as e:
-            logging.error(f"Ошибка при получении данных прогресса для оператора {operator_id}: {e}", exc_info=True)
+            logging.error(
+                f"Ошибка при получении данных прогресса для оператора {operator_id}: {e}",
+                exc_info=True,
+            )
             return None
         finally:
-            logging.info(f"Завершение получения данных прогресса для оператора с ID {operator_id}.")
+            logging.info(
+                f"Завершение получения данных прогресса для оператора с ID {operator_id}."
+            )
 
     async def all_operators_progress_handle(
-    self, update: Update, context: CallbackContext
-) -> None:
+        self, update: Update, context: CallbackContext
+    ) -> None:
         """
         Обработчик команды /all_operators_progress [period] с логированием.
         Показывает сводную динамику для всех операторов за указанный период.
@@ -3319,7 +3621,10 @@ class TelegramBot:
             )
 
         except Exception as e:
-            logging.error(f"Ошибка при обработке общего прогресса всех операторов: {e}", exc_info=True)
+            logging.error(
+                f"Ошибка при обработке общего прогресса всех операторов: {e}",
+                exc_info=True,
+            )
             await update.message.reply_text("Произошла ошибка при получении прогресса.")
         finally:
             logging.info("Завершение обработки команды /all_operators_progress.")
@@ -3351,14 +3656,20 @@ class TelegramBot:
             # Извлечение аргументов
             operator_id = int(context.args[0])
             period = context.args[1].lower()
-            logging.info(f"Получены аргументы: operator_id={operator_id}, period={period}")
+            logging.info(
+                f"Получены аргументы: operator_id={operator_id}, period={period}"
+            )
 
             # Проверка прав доступа
             user_id = update.effective_user.id
             user_role = context.user_data.get("user_role")
-            logging.info(f"Проверка прав доступа для пользователя {user_id} с ролью {user_role}.")
+            logging.info(
+                f"Проверка прав доступа для пользователя {user_id} с ролью {user_role}."
+            )
             if user_role in ["Operator", "Admin"] and user_id != operator_id:
-                logging.warning(f"Пользователь {user_id} попытался получить доступ к данным оператора {operator_id}.")
+                logging.warning(
+                    f"Пользователь {user_id} попытался получить доступ к данным оператора {operator_id}."
+                )
                 await update.message.reply_text(
                     "У вас нет прав для просмотра прогресса других операторов."
                 )
@@ -3374,8 +3685,12 @@ class TelegramBot:
             logging.debug(f"Данные оператора: {operator}")
 
             # Получение данных прогресса
-            logging.info(f"Получение данных прогресса оператора {operator_id} за период {period}.")
-            progress_data = await self.progress_data.get_operator_progress(operator_id, period)
+            logging.info(
+                f"Получение данных прогресса оператора {operator_id} за период {period}."
+            )
+            progress_data = await self.progress_data.get_operator_progress(
+                operator_id, period
+            )
             logging.debug(f"Данные прогресса: {progress_data}")
 
             # Генерация визуализации
@@ -3391,14 +3706,16 @@ class TelegramBot:
                 update.message,
                 graph_data,
                 trend_message,
-                "Не удалось создать визуализацию прогресса."
+                "Не удалось создать визуализацию прогресса.",
             )
 
         except ValueError as ve:
             logging.error(f"Неверный формат ID оператора: {ve}", exc_info=True)
             await update.message.reply_text("Неверный формат ID оператора.")
         except Exception as e:
-            logging.error(f"Ошибка при обработке прогресса оператора: {e}", exc_info=True)
+            logging.error(
+                f"Ошибка при обработке прогресса оператора: {e}", exc_info=True
+            )
             await update.message.reply_text("Произошла ошибка при получении прогресса.")
         finally:
             logging.info("Завершение обработки команды /operator_progress.")
@@ -3415,7 +3732,9 @@ class TelegramBot:
 
         # Проверка аутентификации
         if not context.user_data.get("is_authenticated"):
-            logger.warning(f"Пользователь {user_id} попытался получить доступ без аутентификации.")
+            logger.warning(
+                f"Пользователь {user_id} попытался получить доступ без аутентификации."
+            )
             await update.message.reply_text(
                 "Сначала войдите с помощью /login ваш_пароль."
             )
@@ -3442,36 +3761,50 @@ class TelegramBot:
             logger.info("Создание клавиатуры для выбора операторов.")
             keyboard = []
             for op in operators:
-                    operator_name = op.get("name", "").strip()
-                    if not operator_name:
-                        logger.warning("Пропущен оператор с пустым или некорректным именем.")
-                        continue
-                    # Логируем исходное имя оператора
-                    logger.debug(f"Обработка имени оператора: '{operator_name}', длина: {len(operator_name)}")
+                operator_name = op.get("name", "").strip()
+                if not operator_name:
+                    logger.warning(
+                        "Пропущен оператор с пустым или некорректным именем."
+                    )
+                    continue
+                # Логируем исходное имя оператора
+                logger.debug(
+                    f"Обработка имени оператора: '{operator_name}', длина: {len(operator_name)}"
+                )
 
-                    # Проверяем длину callback_data
-                    callback_data = f"operator_{operator_name}"
-                    
-                    if len(callback_data) > 64:
-                        logger.warning(
-                            f"Имя оператора '{operator_name}' слишком длинное для callback_data. Урезаем."
+                # Проверяем длину callback_data
+                callback_data = f"operator_{operator_name}"
+
+                if len(callback_data) > 64:
+                    logger.warning(
+                        f"Имя оператора '{operator_name}' слишком длинное для callback_data. Урезаем."
+                    )
+                    max_name_length = 64 - len(
+                        "operator_"
+                    )  # Учитываем запас на кодирование
+                    truncated_name = operator_name[:max_name_length]
+                    callback_data = f"operator_{truncated_name}"
+
+                # Проверяем корректность callback_data
+                if len(callback_data) > 64:
+                    logger.error(
+                        f"Не удалось создать корректный callback_data для оператора '{operator_name}'. Пропускаем."
+                    )
+                    continue
+
+                # Добавляем кнопку
+                keyboard.append(
+                    [
+                        InlineKeyboardButton(
+                            text=operator_name, callback_data=callback_data
                         )
-                        max_name_length = 64 - len("operator_")  # Учитываем запас на кодирование
-                        truncated_name = operator_name[:max_name_length]
-                        callback_data = f"operator_{truncated_name}"
-
-                    # Проверяем корректность callback_data
-                    if len(callback_data) > 64:
-                        logger.error(f"Не удалось создать корректный callback_data для оператора '{operator_name}'. Пропускаем.")
-                        continue
-
-                    # Добавляем кнопку
-                    keyboard.append([
-                        InlineKeyboardButton(text=operator_name, callback_data=callback_data)
-                    ])
+                    ]
+                )
 
             if not keyboard:
-                logger.warning("Не удалось создать клавиатуру: нет доступных операторов.")
+                logger.warning(
+                    "Не удалось создать клавиатуру: нет доступных операторов."
+                )
                 await update.message.reply_text("Нет доступных операторов.")
                 return
             # Создаём разметку клавиатуры
@@ -3485,10 +3818,15 @@ class TelegramBot:
             logger.info("Сообщение с выбором операторов отправлено пользователю.")
 
         except telegram.error.BadRequest as e:
-            logger.error(f"Ошибка при отправке сообщения с клавиатурой: {e}", exc_info=True)
+            logger.error(
+                f"Ошибка при отправке сообщения с клавиатурой: {e}", exc_info=True
+            )
             await update.message.reply_text("Произошла ошибка при создании клавиатуры.")
         except Exception as e:
-            logger.error(f"Ошибка при обработке команды /operator_progress_menu: {e}", exc_info=True)
+            logger.error(
+                f"Ошибка при обработке команды /operator_progress_menu: {e}",
+                exc_info=True,
+            )
             await update.message.reply_text("Произошла ошибка при обработке команды.")
 
     @handle_bot_exceptions("❌ Произошла ошибка при обработке запроса")
@@ -3515,7 +3853,7 @@ class TelegramBot:
         if not self.scheduler.running:
             self.scheduler.start()
         self.scheduler.add_job(
-            self.send_daily_reports, "cron", hour=11, minute=49
+            self.send_daily_reports, "cron", hour=15, minute=49
         )  # поставить 6 утра, на проде будет не локальное мое время
         logger.info("Ежедневная задача для отправки отчетов добавлена в планировщик.")
         # Запуск воркеров
@@ -4255,59 +4593,103 @@ class TelegramBot:
 
     from datetime import datetime, timedelta
 
-    async def send_daily_reports(self, check_days: int = 40):
+    async def send_daily_reports(self, check_days: int = 7):
         """
-        Пример: проверяем последние N=40 дней. 
-        Для каждого дня, если нет отчёта, ставим задачу (add_task) на генерацию отчёта за этот day.
-        Затем (опционально) делаем обычный отчёт за «вчера» для руководителей.
+        Проверяем последние N (по умолчанию 30) дней:
+        1) Из таблицы users берём всех операторов (status='on').
+        2) Для каждого оператора и для каждой даты (из диапазона [end_date - check_days+1 .. end_date])
+            проверяем, есть ли запись в reports (WHERE user_id=... AND DATE(report_date)=...).
+            - Если запись отсутствует, добавляем задачу add_task(..., chat_id=manager_chat_id),
+            чтобы сгенерировать отчёт и отправить его менеджеру.
+        3) В конце (после заполнения «пустых» дней) формируем обычный «итоговый» отчёт за вчера
+            (уже тоже на chat_id менеджеров).
         """
         logger.info(
-            f"Начата постановка отчётов. Проверяем пропуски за последние {check_days} дней."
+            f"Начата постановка задач на отчёты. Проверяем пропуски за последние {check_days} дней."
         )
+
         try:
-            managers = [309606681]
-            operator_ids = [2, 5, 6, 8, 9, 10]
+            end_date = date.today() - timedelta(days=1)  # верхняя граница: вчера
+            start_date = end_date - timedelta(days=(check_days - 1))  # нижняя граница
+            managers = [309606681]  # список chat_id менеджеров
 
-            end_date = date.today() - timedelta(days=1)
-            start_date = end_date - timedelta(days=(check_days - 1))
+            # 1) Получаем всех операторов (status='on')
+            excluded_user_ids = {1, 4}  # Жестко заданный список user_id, которые исключаем
 
+            async with self.db_manager.acquire() as connection:
+                async with connection.cursor(aiomysql.DictCursor) as cursor:
+                    query_operators = """
+                        SELECT user_id
+                        FROM users
+                        WHERE status = 'on'
+                    """
+                    await cursor.execute(query_operators)
+                    rows = await cursor.fetchall()
+
+            if not rows:
+                logger.warning("Не найдено ни одного активного оператора (status='on').")
+                return
+            
+            # Исключаем нежелательные user_id
+            operator_ids = [row["user_id"] for row in rows if row["user_id"] not in excluded_user_ids]
+
+            if not operator_ids:
+                logger.warning("Все активные операторы исключены из обработки.")
+                return
+
+            logger.info(f"Найдено {len(operator_ids)} операторов после фильтрации: {operator_ids}")
+
+            operator_ids = [row["user_id"] for row in rows]
+            logger.info(f"Найдено {len(operator_ids)} операторов: {operator_ids}")
+
+            # 2) Для каждого дня и каждого оператора проверяем, есть ли запись в reports.
             async with self.db_manager.acquire() as connection:
                 async with connection.cursor() as cursor:
 
                     for op_id in operator_ids:
-                        d = start_date
-                        while d <= end_date:
-                            # проверка, есть ли запись
+                        current_day = start_date
+                        while current_day <= end_date:
+                            report_date_str = current_day.strftime("%Y-%m-%d")
+
+                            # Проверка, есть ли запись в reports
                             query_exist = """
-                                SELECT 1 FROM reports
-                                WHERE user_id = %s 
-                                AND report_date = %s
+                                SELECT 1
+                                FROM reports
+                                WHERE user_id = %s
+                                AND DATE(report_date) = %s
                                 LIMIT 1
                             """
-                            await cursor.execute(query_exist, (op_id, d))
+                            await cursor.execute(query_exist, (op_id, report_date_str))
                             row = await cursor.fetchone()
+                            if row:
+                                # Уже есть отчёт в БД, пропускаем
+                                current_day += timedelta(days=1)
+                                continue
 
-                            if not row:
-                                # если записи нет, ставим задачу на генерацию отчёта за этот день
-                                custom_range = f"{d.strftime('%d/%m/%Y')}-{d.strftime('%d/%m/%Y')}"
-                                logger.info(
-                                    f"Нет отчёта для оператора {op_id} за {d} -> ставим задачу generate_report."
-                                )
-                                # добавим в очередь
-                                await add_task(
-                                    bot_instance=self,
-                                    user_id=op_id,
-                                    report_type="custom",
-                                    period="custom",
-                                    chat_id=managers[0],     # или None, если не нужно сразу отправлять
-                                    date_range=custom_range
-                                )
-                            d += timedelta(days=1)
+                            # Запись не найдена => ставим задачу на генерацию отчёта
+                            # и отправку в чат менеджера (manager_chat_id).
+                            custom_range = f"{current_day.strftime('%d/%m/%Y')}-{current_day.strftime('%d/%m/%Y')}"
+                            logger.info(
+                                f"Нет отчёта в reports для оператора {op_id}, дата={report_date_str}. "
+                                f"Добавляем задачу (chat_id=manager)."
+                            )
+
+                            # Допустим, если у вас один менеджер:
+                            manager_chat_id = managers[0]
+
+                            await add_task(
+                                bot_instance=self,
+                                user_id=op_id,
+                                report_type="custom",
+                                period="custom",
+                                chat_id=manager_chat_id,  # отчёт пойдёт менеджеру
+                                date_range=custom_range,
+                            )
+                            current_day += timedelta(days=1)
 
                     await connection.commit()
 
-            # (Опционально) в конце делаем «обычный» отчёт за вчера
-            # если вы хотите, чтобы руководители получили «один общий отчёт».
+            # 3) Итоговый отчёт за вчера — тоже на chat_id менеджеров
             yesterday_dt = datetime.now() - timedelta(days=1)
             date_str = yesterday_dt.strftime("%d/%m/%Y")
             date_range = f"{date_str}-{date_str}"
@@ -4319,17 +4701,18 @@ class TelegramBot:
                         user_id=op_id,
                         report_type="custom",
                         period="custom",
-                        chat_id=manager_chat_id,
+                        chat_id=manager_chat_id,  # отчёт пойдёт менеджеру
                         date_range=date_range,
                     )
                     logger.info(
-                        f"Задача на итоговый отчет за {date_range} (оператор {op_id}) добавлена."
+                        f"Задача на итоговый отчёт (за {date_range}) для оператора {op_id} добавлена "
+                        f"в очередь (chat_id={manager_chat_id})."
                     )
 
-            logger.info("Все задачи успешно поставлены.")
+            logger.info("Все задачи на отправку отчетов успешно поставлены в очередь.")
 
         except Exception as e:
-            logger.error(f"Ошибка при постановке задач: {e}", exc_info=True)
+            logger.error(f"Ошибка при постановке задач на отчёты: {e}", exc_info=True)
 
     async def generate_and_send_report(self, user_id, period):
         """Генерация и отправка отчета для конкретного пользователя."""
@@ -4564,11 +4947,11 @@ class TelegramBot:
                 )
 
     async def _create_visualization(
-    self,
-    df: pd.DataFrame,
-    config: Dict[str, Any],
-    is_all_operators: bool,
-) -> Tuple[BytesIO, str]:
+        self,
+        df: pd.DataFrame,
+        config: Dict[str, Any],
+        is_all_operators: bool,
+    ) -> Tuple[BytesIO, str]:
         """
         Создание визуализации на основе подготовленных данных.
 
@@ -4623,14 +5006,20 @@ class TelegramBot:
                 metric_name = metric_cfg["name"]
 
                 if metric_name not in df.columns:
-                    logging.warning(f"Метрика '{metric_name}' отсутствует в DataFrame, пропускаем.")
+                    logging.warning(
+                        f"Метрика '{metric_name}' отсутствует в DataFrame, пропускаем."
+                    )
                     continue
 
                 # Обработка/очистка данных по метрике
-                metric_data = await self._process_metric_data(df, metric_cfg, is_all_operators)
+                metric_data = await self._process_metric_data(
+                    df, metric_cfg, is_all_operators
+                )
                 # Если после обработки данных по метрике нет, пропускаем
                 if metric_data.empty or metric_data.sum() == 0:
-                    logging.debug(f"Для метрики '{metric_name}' нет данных (или все нули). Пропускаем.")
+                    logging.debug(
+                        f"Для метрики '{metric_name}' нет данных (или все нули). Пропускаем."
+                    )
                     continue
 
                 # Строим линию / точки
@@ -4679,10 +5068,7 @@ class TelegramBot:
             raise DataProcessingError(f"Ошибка создания визуализации: {e}")
 
     async def _process_metric_data(
-        self,
-        df: pd.DataFrame,
-        metric: MetricConfig,
-        is_all_operators: bool = False
+        self, df: pd.DataFrame, metric: MetricConfig, is_all_operators: bool = False
     ) -> pd.Series:
         """
         Оптимизированная обработка данных метрики.
@@ -4694,7 +5080,7 @@ class TelegramBot:
 
         Returns:
             pd.Series: Обработанные данные метрики с временным индексом
-        
+
         Raises:
             DataProcessingError: При ошибке обработки метрики
         """
@@ -4705,7 +5091,7 @@ class TelegramBot:
                 return pd.Series(dtype=float)
 
             data = df[metric_name]
-            
+
             if is_all_operators:
                 # Проверяем тип данных
                 if isinstance(data.iloc[0], (list, dict)):
@@ -4714,9 +5100,11 @@ class TelegramBot:
                         expanded_data = pd.DataFrame(data.tolist(), index=data.index)
                     else:
                         expanded_data = pd.DataFrame(data.tolist(), index=data.index)
-                    
+
                     # Агрегируем данные
-                    agg_method = cast(AggregationMethod, metric.get("aggregation", "sum"))
+                    agg_method = cast(
+                        AggregationMethod, metric.get("aggregation", "sum")
+                    )
                     if agg_method == "mean":
                         return expanded_data.mean(axis=1)
                     else:
@@ -4725,16 +5113,14 @@ class TelegramBot:
                     return data
 
             # Для одного оператора
-            return pd.to_numeric(data, errors='coerce').fillna(0)
+            return pd.to_numeric(data, errors="coerce").fillna(0)
 
         except Exception as e:
             logger.error(f"Ошибка обработки метрики {metric_name}: {e}")
             return pd.Series(dtype=float)
 
     async def _calculate_trends(
-        self,
-        df: pd.DataFrame,
-        metrics: List[str]
+        self, df: pd.DataFrame, metrics: List[str]
     ) -> List[TrendData]:
         """
         Расчет трендов для метрик.
@@ -4747,20 +5133,20 @@ class TelegramBot:
             List[TrendData]: Список данных о трендах для каждой метрики
         """
         trends: List[TrendData] = []
-        
+
         try:
             for metric in metrics:
                 if metric not in df.columns:
                     continue
-                    
+
                 data = df[metric].dropna()
                 if len(data) < 2:
                     continue
-                    
+
                 current = float(data.iloc[-1])
                 previous = float(data.iloc[-2])
                 change = ((current - previous) / previous * 100) if previous != 0 else 0
-                
+
                 trend_direction: Literal["up", "down", "stable"]
                 if change > 1:
                     trend_direction = "up"
@@ -4768,25 +5154,27 @@ class TelegramBot:
                     trend_direction = "down"
                 else:
                     trend_direction = "stable"
-                
-                trends.append({
-                    "metric": metric,
-                    "current": current,
-                    "previous": previous,
-                    "change": change,
-                    "trend": trend_direction
-                })
-                
+
+                trends.append(
+                    {
+                        "metric": metric,
+                        "current": current,
+                        "previous": previous,
+                        "change": change,
+                        "trend": trend_direction,
+                    }
+                )
+
         except Exception as e:
             logger.error(f"Ошибка при расчете трендов: {e}")
-            
+
         return trends
 
     async def _format_trend_message(
         self,
         trends: List[TrendData],
         metrics: List[MetricConfig],
-        is_all_operators: bool
+        is_all_operators: bool,
     ) -> str:
         """
         Форматирование сообщения с трендами.
@@ -4801,32 +5189,26 @@ class TelegramBot:
         """
         if not trends:
             return "Недостаточно данных для анализа трендов"
-            
+
         message_parts = []
         operator_prefix = "Все операторы" if is_all_operators else "Оператор"
-        
+
         for trend in trends:
             metric_config = next(
-                (m for m in metrics if m["name"] == trend["metric"]),
-                None
+                (m for m in metrics if m["name"] == trend["metric"]), None
             )
             if not metric_config:
                 continue
-                
-            trend_symbol = {
-                "up": "📈",
-                "down": "📉",
-                "stable": "➡️"
-            }[trend["trend"]]
-            
+
+            trend_symbol = {"up": "📈", "down": "📉", "stable": "➡️"}[trend["trend"]]
+
             message_parts.append(
                 f"{trend_symbol} {metric_config['label']}: "
                 f"{trend['current']:.2f} "
                 f"({trend['change']:+.1f}%)"
             )
-            
-        return f"{operator_prefix}:\n" + "\n".join(message_parts)
 
+        return f"{operator_prefix}:\n" + "\n".join(message_parts)
 
     async def generate_commentary_on_metrics(
         self, data, metrics, operator_name, period_str
@@ -4846,7 +5228,11 @@ class TelegramBot:
         # Составляем подробное описание динамики метрик
         trends = []
         for metric in metrics:
-            values = [row.get(metric) for row in data if row.get(metric) is not None and row.get(metric) > 0]
+            values = [
+                row.get(metric)
+                for row in data
+                if row.get(metric) is not None and row.get(metric) > 0
+            ]
             dates = [
                 row.get("report_date") for row in data if row.get(metric) is not None
             ]
@@ -4914,7 +5300,7 @@ async def main():
     # Проверяем конфигурацию
     if not config.telegram_token:
         raise ValueError("Telegram token отсутствует в конфигурации")
-    if not hasattr(config, 'db_config'):
+    if not hasattr(config, "db_config"):
         raise ValueError("Отсутствует конфигурация базы данных")
     bot = None
     try:
@@ -4924,6 +5310,7 @@ async def main():
         await bot.run()
     except Exception as e:
         logger.error(f"Произошла ошибка при запуске бота: {e}", exc_info=True)
+
 
 if __name__ == "__main__":
     try:
