@@ -366,6 +366,9 @@ class OpenAIReportGenerator:
             'missed_calls': missed_calls
         }
     
+
+
+    
     async def generate_report(self, connection, user_id, period='daily', date_range=None):
         """
         Генерация отчета для оператора по его user_id с использованием данных и OpenAI.
@@ -400,6 +403,22 @@ class OpenAIReportGenerator:
             else:
                 # Используем стандартную обработку периода
                 start_date, end_date = self.get_date_range(period)
+
+            if period == 'daily' and date_range:
+                try:
+                    # Парсинг даты с поддержкой обоих форматов
+                    if '-' in date_range:
+                        day = datetime.datetime.strptime(date_range, '%Y-%m-%d')  # Формат '2024-12-27'
+                    else:
+                        day = datetime.datetime.strptime(date_range, '%d/%m/%Y')  # Формат '27/12/2024'
+                    
+                    start_date = day.replace(hour=0, minute=0, second=0, microsecond=0)
+                    end_date = day.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+
+                except ValueError as e:
+                    logger.error(f"Ошибка при обработке date_range: {date_range}. {e}")
+                    return f"Ошибка: Некорректный формат даты {date_range}."
 
             # Используем стандартную обработку периода
             logger.info(f"[КРОТ]: Определен диапазон дат: {start_date} - {end_date}")
@@ -479,6 +498,21 @@ class OpenAIReportGenerator:
                 return "Ошибка: Не удалось получить рекомендации."
 
             logger.info(f"[КРОТ]: Рекомендации успешно сгенерированы: {recommendations_text[:100]}...")  # Логируем начало текста рекомендаций
+
+
+            # -----------------------------------------------------
+            #  ДОБАВЛЯЕМ ПРОВЕРКУ ТОЛЬКО ДЛЯ ЕЖЕДНЕВНОГО ОТЧЁТА
+            # -----------------------------------------------------
+            if period == 'daily':
+                # Если нет рекомендаций (или пустая строка), не сохраняем отчёт
+                if not recommendations_text.strip():
+                    logger.warning(
+                        f"[КРОТ]: Для период=daily нет рекомендаций (или пустые). "
+                        f"Отчёт НЕ будет сохранен в БД."
+                    )
+                    # Возвращаем None или сообщение — в зависимости от вашей логики
+                    return None
+            # -----------------------------------------------------
 
             # Формирование отчета
             report_date = f"{start_date.strftime('%Y-%m-%d')} - {end_date.strftime('%Y-%m-%d')}"

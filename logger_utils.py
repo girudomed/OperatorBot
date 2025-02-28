@@ -1,9 +1,10 @@
 import logging
 import os
-from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 import json
 import queue
+from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 import httpx
+
 
 class TelegramErrorHandler(logging.Handler):
     """
@@ -32,101 +33,10 @@ class TelegramErrorHandler(logging.Handler):
             print(f"[КРОТ]: Ошибка в TelegramErrorHandler: {e}")
 
 
-def setup_logging(
-    log_file="logs.log",
-    log_level=logging.INFO,
-    max_bytes=5 * 1024 * 1024,
-    backup_count=5,
-    json_format=False,
-    use_queue=False,
-    telegram_bot_token=None,
-    telegram_chat_id=None
-):
-    """
-    Настраивает логирование для проекта "КРОТ".
-    Логи записываются в файл с ротацией, выводятся в консоль, поддерживают формат JSON и
-    обеспечивают поддержку многопоточного логирования через QueueHandler.
-
-    :param log_file: Имя файла для сохранения логов.
-    :param log_level: Уровень логирования (по умолчанию INFO).
-    :param max_bytes: Максимальный размер лог-файла до ротации (по умолчанию 5 MB).
-    :param backup_count: Количество резервных копий лог-файлов (по умолчанию 5).
-    :param json_format: Если True, логи записываются в формате JSON.
-    :param use_queue: Если True, используется QueueHandler для многопоточного логирования.
-    :param telegram_bot_token: Токен Telegram бота для отправки ошибок.
-    :param telegram_chat_id: ID чата для отправки ошибок.
-    :return: Конфигурированный объект логгера "КРОТ".
-    """
-    # Проверка существования директории для логов
-    log_dir = os.path.dirname(log_file)
-    if log_dir and not os.path.exists(log_dir):
-        try:
-            os.makedirs(log_dir)
-            print(f"[КРОТ]: Создана директория для логов: {log_dir}")
-        except Exception as e:
-            print(f"[КРОТ]: Ошибка при создании директории для логов: {e}")
-            raise
-
-    # Установка базового форматтера
-    if json_format:
-        formatter = JsonFormatter()
-    else:
-        formatter = logging.Formatter(
-            fmt="%(asctime)s - [КРОТ] - %(name)s - %(levelname)s - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"
-        )
-
-    # Настройка ротации логов
-    rotating_handler = RotatingFileHandler(
-        log_file, maxBytes=max_bytes, backupCount=backup_count
-    )
-    rotating_handler.setFormatter(formatter)
-
-    # Очередь для QueueHandler (если включено)
-    log_queue = queue.Queue(-1) if use_queue else None
-
-    # Конфигурация основного логгера
-    logger = logging.getLogger('KROT')
-    logger.setLevel(log_level)
-
-    # Удаление предыдущих хендлеров
-    if logger.hasHandlers():
-        logger.handlers.clear()
-
-    # Добавление обработчиков
-    if use_queue:
-        queue_handler = QueueHandler(log_queue)
-        logger.addHandler(queue_handler)
-
-        # Запуск QueueListener
-        listener = QueueListener(log_queue, rotating_handler)
-        listener.start()
-    else:
-        logger.addHandler(rotating_handler)
-
-    # Настройка консольного логирования
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(log_level)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-
-    # Добавление TelegramErrorHandler (если токен и чат указаны)
-    if telegram_bot_token and telegram_chat_id:
-        telegram_handler = TelegramErrorHandler(
-            bot_token=telegram_bot_token,
-            chat_id=telegram_chat_id
-        )
-        telegram_handler.setFormatter(formatter)
-        logger.addHandler(telegram_handler)
-
-    # Логирование успешной настройки
-    logger.info(f"[КРОТ]: Логирование настроено. Логи сохраняются в файл: {log_file}")
-
-    return logger
-
-
-# Класс для форматирования логов в JSON формате
 class JsonFormatter(logging.Formatter):
+    """
+    Форматтер для записи логов в формате JSON.
+    """
     def format(self, record):
         log_record = {
             'time': self.formatTime(record, self.datefmt),
@@ -139,25 +49,131 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(log_record)
 
 
-# Пример использования "КРОТ"
-if __name__ == "__main__":
-    # Включаем JSON форматирование, многопоточность и Telegram уведомления для "КРОТ"
-    TELEGRAM_BOT_TOKEN = "ваш_telegram_bot_token"
-    TELEGRAM_CHAT_ID = "ваш_telegram_chat_id"
+def setup_logging(
+    log_file="logs.log",
+    log_level=logging.INFO,
+    max_log_lines=200000,
+    average_line_length=100,
+    backup_count=0,
+    json_format=False,
+    use_queue=True,
+    telegram_bot_token=None,
+    telegram_chat_id=None
+):
+    """
+    Настраивает логирование с учётом:
+      • ротации лог-файла на основе количества строк (max_log_lines) и усреднённой длины строки (average_line_length);
+      • очереди (QueueHandler/QueueListener) при многопоточном использовании (use_queue);
+      • отправки ошибок в Telegram (при наличии telegram_bot_token и telegram_chat_id);
+      • возможности JSON-форматирования (json_format).
 
-    logger = setup_logging(
-        log_level=logging.DEBUG,
-        json_format=True,
-        use_queue=True,
-        telegram_bot_token=TELEGRAM_BOT_TOKEN,
-        telegram_chat_id=TELEGRAM_CHAT_ID
+    Параметры:
+      log_file          : Имя файла, куда пишутся логи.
+      log_level         : Уровень логирования (по умолчанию INFO).
+      max_log_lines     : Приблизительное количество строк, после которого произойдёт ротация.
+      average_line_length: Средняя длина одной строки лога, используется для вычисления maxBytes.
+      backup_count      : Количество резервных копий лог-файлов.
+      json_format       : Если True, логи записываются в формате JSON.
+      use_queue         : Если True, включается QueueHandler/QueueListener для многопоточного логирования.
+      telegram_bot_token: Токен Telegram-бота для отправки ошибок в чат.
+      telegram_chat_id  : ID чата в Telegram, куда отправлять ошибки.
+
+    Возвращает:
+      Объект корневого логгера (root logger) с настроенными хендлерами.
+    """
+
+    # Если указан токен, проверяем, что он строка
+    if telegram_bot_token is not None and not isinstance(telegram_bot_token, str):
+        raise TypeError("Значение токена должно быть строкой")
+
+    # Создаём директорию для логов, если её нет
+    log_dir = os.path.dirname(log_file)
+    if log_dir and not os.path.exists(log_dir):
+        try:
+            os.makedirs(log_dir)
+        except Exception as e:
+            print(f"[КРОТ]: Ошибка при создании директории для логов: {e}")
+            raise
+
+    # Вычисляем размер файла в байтах для ротации
+    max_bytes = max_log_lines * average_line_length
+
+    # Форматтер
+    if json_format:
+        formatter = JsonFormatter()
+    else:
+        formatter = logging.Formatter(
+            fmt="%(asctime)s - [КРОТ] - %(name)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
+
+    # Создаём ротационный файловый хендлер
+    rotating_handler = RotatingFileHandler(
+        filename=log_file,
+        maxBytes=max_bytes,
+        backupCount=backup_count,
+        encoding="utf-8"
+    )
+    rotating_handler.setFormatter(formatter)
+    rotating_handler.setLevel(log_level)
+
+    # Настраиваем корневой логгер (root logger)
+    logger = logging.getLogger()  # используем корневой логгер
+    logger.setLevel(log_level)
+
+    # Очищаем предыдущие хендлеры, чтобы избежать дублирования
+    if logger.hasHandlers():
+        logger.handlers.clear()
+
+    # Хендлер для консоли
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    console_handler.setLevel(log_level)
+    logger.addHandler(console_handler)
+    logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+    # Если нужно логировать в Telegram
+    if telegram_bot_token and telegram_chat_id:
+        telegram_handler = TelegramErrorHandler(
+            bot_token=telegram_bot_token,
+            chat_id=telegram_chat_id,
+            level=logging.ERROR  # Лишь ошибки отправляем в Telegram
+        )
+        telegram_handler.setFormatter(formatter)
+        logger.addHandler(telegram_handler)
+
+    # Если включён режим использования очереди (для многопоточности)
+    if use_queue:
+        log_queue = queue.Queue(-1)
+        queue_handler = QueueHandler(log_queue)
+        # QueueListener будет фактически писать в rotating_handler
+        listener = QueueListener(log_queue, rotating_handler)
+        listener.start()
+        logger.addHandler(queue_handler)
+    else:
+        # Иначе напрямую используем rotating_handler
+        logger.addHandler(rotating_handler)
+
+    logger.info(
+        "[КРОТ]: Логирование настроено. "
+        f"Файл: {log_file}, maxBytes≈{max_bytes}, backupCount={backup_count}"
     )
 
-    # Примеры логов
-    try:
-        logger.info("[КРОТ] Пример информационного сообщения.")
-        logger.warning("[КРОТ] Пример предупреждения.")
-        logger.error("[КРОТ] Пример ошибки.")
-        raise ValueError("Тестовое исключение для логов")
-    except Exception as e:
-        logger.exception("[КРОТ] Исключение обработано.")
+    return logger
+
+
+# Тестовый пример
+if __name__ == "__main__":
+    logger = setup_logging(
+        log_file="logs.log",
+        log_level=logging.DEBUG,
+        max_log_lines=200000,
+        average_line_length=100,
+        backup_count=3,
+        json_format=False,
+        use_queue=True,
+        telegram_bot_token="your_bot_token",
+        telegram_chat_id="your_chat_id"
+    )
+    logger.info("Тестовая запись в лог.")
+    logger.error("Тестовая ошибка для проверки Telegram-уведомления.")

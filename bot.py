@@ -90,6 +90,7 @@ from urllib.parse import quote, unquote
 from visualization import MetricsVisualizer
 from config import openai_api_key
 import matplotlib.dates as mdates
+from logger_utils import setup_logging
 
 lock_file = "/tmp/bot.lock"
 fp = open(lock_file, "w")
@@ -109,43 +110,19 @@ print(f"Загруженный токен: {telegram_token}")  # Отладоч�
 # Убедитесь, что `token` является строкой
 if not isinstance(telegram_token, str):
     raise TypeError("Значение токена должно быть строкой")
-# Создаем очередь для логов
-log_queue = queue.Queue(-1)
 
-# Настраиваем корневой логгер
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
 
-# Настраиваем обработчик для записи логов в файл с ротацией
-log_file = "logs.log"
-max_log_lines = 150000
-average_line_length = 100
-max_bytes = max_log_lines * average_line_length
-backup_count = 0
-
-file_handler = RotatingFileHandler(
-    log_file, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"
+logger = setup_logging(
+    log_file="logs.log",
+    log_level=logging.INFO,
+    max_log_lines=150000,
+    average_line_length=100,
+    backup_count=3,  # Количество резервных копий
+    json_format=False,
+    use_queue=True,
+    telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN"),
+    telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
 )
-file_handler.setFormatter(
-    logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-)
-file_handler.setLevel(logging.INFO)
-
-# Настраиваем QueueHandler и QueueListener
-queue_handler = QueueHandler(log_queue)
-listener = QueueListener(log_queue, file_handler)
-listener.start()
-
-logger.addHandler(queue_handler)
-
-# Настройка обработчика для консоли
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(
-    logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-)
-console_handler.setLevel(logging.INFO)
-logger.addHandler(console_handler)
-
 
 # Обработчик необработанных исключений
 def log_uncaught_exceptions(exc_type, exc_value, exc_traceback):
@@ -163,9 +140,9 @@ sys.excepthook = log_uncaught_exceptions
 logger.info("Настройка HTTPXRequest...")
 httpx_request = HTTPXRequest(
     connection_pool_size=100,  # Размер пула соединений
-    read_timeout=10.0,  # Таймаут на чтение
-    write_timeout=10.0,  # Таймаут на запись
-    connect_timeout=5.0,  # Таймаут на подключение
+    read_timeout=30.0,  # Таймаут на чтение
+    write_timeout=15.0,  # Таймаут на запись
+    connect_timeout=10.0,  # Таймаут на подключение
 )
 
 # Инициализация приложения Telegram
@@ -291,19 +268,26 @@ HELP_MESSAGE = """Команды:
         Запрос оператора осуществляется по user_id
         2	 Альбина
         3	 ГВ ст.админ
+        4    ЧС ст.админ
         5	 Ирина
-        6	 Ксения
+        6	 Аделя
         7	 ПП Ст.админ
         8	 Ресепшн ГВ
         9	 Ресепшн ПП
+        10   Анастасия
+        11  Рецепшн ЧС
 
         Для генерации отчета по операторам с рекомендациями используйте команду: "/generate_report 5 custom 01/10/2024-25/11/2024", где custom является важной переменной после главной команды, также дата должна строго быть в таком формате
         Для генерации отчета по всем операторам без упоминании позывного без рекомендацией используйте команду: "/report_summary custom 01/10/2024-25/11/2024"
         Если вы нажали не ту команду, то выполните команду "/cancel"
         
-        Сначала необходимо зайти в бота через команду /login введя пароль 
+        Сначала необходимо зайти в бота через команду /login введя пароль выданный из БД.
             
         По вопросам работы бота обращаться в отдел маркетинга Гирудомед.
+
+        Внимание! Если включена отправка ежедневных отчётов и вы видете "Ошибка при извлечении данных оператора или данных нет." - это значит, что по какому-то оператору данных в базе нету. Это нормально.
+
+        Ежедневные отчеты отправляются в 7:00 по мск руководителям
     
     """
 
@@ -2458,7 +2442,11 @@ class TelegramBot:
         self.logger = logging.getLogger(__name__)
         # Сначала создаём приложение
         self.application = (
-            ApplicationBuilder().token(token).rate_limiter(AIORateLimiter()).build()
+            ApplicationBuilder()
+            .token(token)
+            .request(httpx_request)  # Передаём настроенный HTTPXRequest
+            .rate_limiter(AIORateLimiter())
+            .build()
         )
         # Добавляем обработчики
         self.application.add_handler(
@@ -3853,7 +3841,7 @@ class TelegramBot:
         if not self.scheduler.running:
             self.scheduler.start()
         self.scheduler.add_job(
-            self.send_daily_reports, "cron", hour=15, minute=49
+            self.send_daily_reports, "cron", hour=6, minute=00
         )  # поставить 6 утра, на проде будет не локальное мое время
         logger.info("Ежедневная задача для отправки отчетов добавлена в планировщик.")
         # Запуск воркеров
@@ -4595,27 +4583,27 @@ class TelegramBot:
 
     async def send_daily_reports(self, check_days: int = 7):
         """
-        Проверяем последние N (по умолчанию 30) дней:
+        Проверяем последние N дней (по умолчанию 40), включая вчера:
         1) Из таблицы users берём всех операторов (status='on').
-        2) Для каждого оператора и для каждой даты (из диапазона [end_date - check_days+1 .. end_date])
-            проверяем, есть ли запись в reports (WHERE user_id=... AND DATE(report_date)=...).
-            - Если запись отсутствует, добавляем задачу add_task(..., chat_id=manager_chat_id),
-            чтобы сгенерировать отчёт и отправить его менеджеру.
-        3) В конце (после заполнения «пустых» дней) формируем обычный «итоговый» отчёт за вчера
-            (уже тоже на chat_id менеджеров).
+        2) Для каждого оператора и каждой даты (из диапазона [start_date..end_date])
+            проверяем наличие записи в reports (WHERE user_id = ... AND DATE(report_date) = ...).
+            Если записи нет, ставим задачу (add_task) на генерацию отчёта для каждого менеджерского chat_id.
+            
+        В итоге, для каждого оператора и дня, если отчёт отсутствует, создаётся задача для каждого менеджера.
         """
-        logger.info(
-            f"Начата постановка задач на отчёты. Проверяем пропуски за последние {check_days} дней."
-        )
-
+        logger.info(f"Начата постановка задач на отчёты. Проверяем пропуски за последние {check_days} дней.")
         try:
-            end_date = date.today() - timedelta(days=1)  # верхняя граница: вчера
-            start_date = end_date - timedelta(days=(check_days - 1))  # нижняя граница
-            managers = [309606681]  # список chat_id менеджеров
-
-            # 1) Получаем всех операторов (status='on')
-            excluded_user_ids = {1, 4}  # Жестко заданный список user_id, которые исключаем
-
+            # Определяем диапазон дат: end_date — вчера, start_date — начало диапазона
+            end_date = date.today() - timedelta(days=1)
+            start_date = end_date - timedelta(days=(check_days - 1))
+            
+            # Список chat_id менеджеров
+            managers = [309606681, 1673538157]
+            
+            # Исключаем определённых операторов по user_id
+            excluded_user_ids = {1}
+            
+            # 1) Получаем всех операторов с статусом 'on'
             async with self.db_manager.acquire() as connection:
                 async with connection.cursor(aiomysql.DictCursor) as cursor:
                     query_operators = """
@@ -4625,33 +4613,27 @@ class TelegramBot:
                     """
                     await cursor.execute(query_operators)
                     rows = await cursor.fetchall()
-
+            
             if not rows:
                 logger.warning("Не найдено ни одного активного оператора (status='on').")
                 return
             
-            # Исключаем нежелательные user_id
             operator_ids = [row["user_id"] for row in rows if row["user_id"] not in excluded_user_ids]
-
             if not operator_ids:
                 logger.warning("Все активные операторы исключены из обработки.")
                 return
-
+            
             logger.info(f"Найдено {len(operator_ids)} операторов после фильтрации: {operator_ids}")
-
-            operator_ids = [row["user_id"] for row in rows]
-            logger.info(f"Найдено {len(operator_ids)} операторов: {operator_ids}")
-
-            # 2) Для каждого дня и каждого оператора проверяем, есть ли запись в reports.
+            
+            # 2) Для каждого оператора и для каждой даты в диапазоне проверяем наличие отчёта
             async with self.db_manager.acquire() as connection:
                 async with connection.cursor() as cursor:
-
                     for op_id in operator_ids:
                         current_day = start_date
                         while current_day <= end_date:
                             report_date_str = current_day.strftime("%Y-%m-%d")
-
-                            # Проверка, есть ли запись в reports
+                            
+                            # Проверяем, существует ли уже отчёт за текущую дату для оператора
                             query_exist = """
                                 SELECT 1
                                 FROM reports
@@ -4662,75 +4644,72 @@ class TelegramBot:
                             await cursor.execute(query_exist, (op_id, report_date_str))
                             row = await cursor.fetchone()
                             if row:
-                                # Уже есть отчёт в БД, пропускаем
+                                # Если отчёт уже существует, переходим к следующему дню
                                 current_day += timedelta(days=1)
                                 continue
-
-                            # Запись не найдена => ставим задачу на генерацию отчёта
-                            # и отправку в чат менеджера (manager_chat_id).
-                            custom_range = f"{current_day.strftime('%d/%m/%Y')}-{current_day.strftime('%d/%m/%Y')}"
-                            logger.info(
-                                f"Нет отчёта в reports для оператора {op_id}, дата={report_date_str}. "
-                                f"Добавляем задачу (chat_id=manager)."
-                            )
-
-                            # Допустим, если у вас один менеджер:
-                            manager_chat_id = managers[0]
-
-                            await add_task(
-                                bot_instance=self,
-                                user_id=op_id,
-                                report_type="custom",
-                                period="custom",
-                                chat_id=manager_chat_id,  # отчёт пойдёт менеджеру
-                                date_range=custom_range,
-                            )
+                            
+                            # Если отчёта нет, ставим задачу для каждого chat_id менеджера
+                            for manager_chat_id in managers:
+                                logger.info(
+                                    f"Нет отчёта в reports для оператора {op_id}, дата={report_date_str}. "
+                                    f"Добавляем задачу в очередь (chat_id={manager_chat_id})."
+                                )
+                                await add_task(
+                                    bot_instance=self,
+                                    user_id=op_id,
+                                    report_type="daily",
+                                    period="daily",
+                                    chat_id=manager_chat_id,
+                                    date_range=report_date_str,
+                                )
+                            # Переходим к следующему дню
                             current_day += timedelta(days=1)
-
                     await connection.commit()
-
-            # 3) Итоговый отчёт за вчера — тоже на chat_id менеджеров
-            yesterday_dt = datetime.now() - timedelta(days=1)
-            date_str = yesterday_dt.strftime("%d/%m/%Y")
-            date_range = f"{date_str}-{date_str}"
-
-            for manager_chat_id in managers:
-                for op_id in operator_ids:
-                    await add_task(
-                        bot_instance=self,
-                        user_id=op_id,
-                        report_type="custom",
-                        period="custom",
-                        chat_id=manager_chat_id,  # отчёт пойдёт менеджеру
-                        date_range=date_range,
-                    )
-                    logger.info(
-                        f"Задача на итоговый отчёт (за {date_range}) для оператора {op_id} добавлена "
-                        f"в очередь (chat_id={manager_chat_id})."
-                    )
-
-            logger.info("Все задачи на отправку отчетов успешно поставлены в очередь.")
-
+            
+            logger.info("Все задачи на отправку отчётов успешно поставлены в очередь.")
+        
         except Exception as e:
             logger.error(f"Ошибка при постановке задач на отчёты: {e}", exc_info=True)
 
+
     async def generate_and_send_report(self, user_id, period):
-        """Генерация и отправка отчета для конкретного пользователя."""
+        """
+        Генерация и отправка отчета для конкретного пользователя.
+        Если в результате generate_report(...) вернулся None
+        или recommendations пустое — НЕ отправляем отчёт и НЕ пишем в БД.
+        """
         try:
             async with self.db_manager.acquire() as connection:
+                # Допустим, внутри generate_report(...) есть логика:
+                # - Сформировать текст/данные
+                # - Если нет recommendations, return None (и не делать INSERT в БД)
+                # - Иначе записать отчёт (INSERT) и вернуть dict/объект c данными
                 report = await self.report_generator.generate_report(
                     connection, user_id, period=period
                 )
 
+            # Если None, значит либо нет данных, либо нет recommendations
             if not report:
-                logger.error(f"Данные по пользователю с ID {user_id} не найдены.")
+                logger.warning(
+                    f"Не удалось сформировать отчёт для пользователя {user_id}. "
+                    "Возможно, отсутствуют данные или нет рекомендаций."
+                )
                 return
 
-            # Отправка отчета пользователю
+            # На всякий случай дополнительная проверка
+            if not report.get("recommendations"):
+                logger.warning(
+                    f"Отчёт сформирован, но нет recommendations (user_id={user_id}). "
+                    "Пропускаем отправку и запись."
+                )
+                return
+
+            # Если всё в порядке, отправляем отчёт пользователю
             await self.send_report_to_user(user_id, report)
-            logger.info(f"Отчет успешно отправлен пользователю {user_id}")
+            logger.info(f"Отчёт успешно отправлен пользователю {user_id}")
+
         except Exception as e:
-            logger.error(f"Ошибка при генерации отчета для пользователя {user_id}: {e}")
+            logger.error(f"Ошибка при генерации отчёта для пользователя {user_id}: {e}", exc_info=True)
 
     def generate_report_text(self, report_data):
         """Генерация текста отчета по шаблону на основе данных."""
