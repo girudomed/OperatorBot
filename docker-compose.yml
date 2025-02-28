@@ -1,0 +1,20 @@
+version: "3.8"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: operators_bot_container
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/app  # Для разработки: монтируем код напрямую, для продакшена лучше убрать
+    env_file:
+      - .env
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "30m"  # Максимальный размер файла логов
+        max-file: "1"    # Логи перезаписываются при достижении лимита
