@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
     container_name: operators_bot_container
     ports:
-      - "5000:5000"
+      - "5001:5000"
     volumes:
       - .:/app  # Для разработки: монтируем код напрямую, для продакшена лучше убрать
     env_file:
