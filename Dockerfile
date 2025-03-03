@@ -25,7 +25,7 @@ COPY . .
 ENV PYTHONUNBUFFERED=1
 
 # Открываем порт
-EXPOSE 5000
+EXPOSE 5001
 
 # Запускаем приложение
 CMD ["python", "bot.py"]
