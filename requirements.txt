@@ -163,3 +163,4 @@ yarg==0.1.9
 yarl==1.9.4
 zope.interface==7.1.1
 pandas
+matplotlib==3.6.3
