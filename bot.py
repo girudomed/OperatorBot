@@ -2678,7 +2678,7 @@ class TelegramBot:
             self.temp_dir = temp_dir
             self.max_retries = max_retries
             self.retry_delay = retry_delay
-            self.lock = Lock()
+            self.lock = asyncio.Lock()
             self.active_files = set()
 
         async def create_temp_file(self, prefix: str = "", suffix: str = "") -> str:
