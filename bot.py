@@ -183,12 +183,13 @@ async def worker(queue: asyncio.Queue, bot_instance):
                 # ... тогда отправим сообщение
                 if report and not report.startswith("Ошибка:"):
                     await bot_instance.send_long_message(chat_id, report)
+                    logger.info(f"Отчёт для user_id={user_id} отправлен.")
                 else:
-                    msg = report or "Ошибка или нет данных"
-                    await bot_instance.application.bot.send_message(
-                        chat_id=chat_id, text=msg
-                    )
-                logger.info(f"Отчёт для user_id={user_id} отправлен (или ошибка).")
+                    #msg = report or "Ошибка или нет данных"
+                    #await bot_instance.application.bot.send_message(
+                        #chat_id=chat_id, text=msg
+                    #)
+                    logger.info(f"Отчёт для user_id={user_id} отправлен (или ошибка).")
             else:
                 # chat_id=None => это оператор => ничего не отправляем
                 logger.debug(
