@@ -169,7 +169,7 @@ async def worker(queue: asyncio.Queue, bot_instance):
         date_range = task.get('date_range')
 
         try:
-            async with bot_instance.db_pool.acquire() as connection:
+            async with bot_instance.db_manager.get_connection() as connection:
                 report = await bot_instance.report_generator.generate_report(
                     connection, user_id, period=period, date_range=date_range
                 )
