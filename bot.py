@@ -163,43 +163,31 @@ async def start_workers(bot_instance):
 async def worker(queue: asyncio.Queue, bot_instance):
     while True:
         task = await queue.get()
-        user_id = task["user_id"]
-        report_type = task["report_type"]
-        period = task["period"]
-        chat_id = task["chat_id"]
-        date_range = task["date_range"]
+        user_id = task.get('user_id')
+        chat_id = task.get('chat_id')
+        period = task.get('period')
+        date_range = task.get('date_range')
 
         try:
-            async with bot_instance.db_manager.acquire() as connection:
+            async with bot_instance.db_pool.acquire() as connection:
                 report = await bot_instance.report_generator.generate_report(
                     connection, user_id, period=period, date_range=date_range
                 )
 
-            # Вот тут проблема:
-            # bot_instance.send_long_message(chat_id, report)
-            # -> если chat_id=None -> BadRequest
-
             if chat_id is not None:
-                # ... тогда отправим сообщение
-                if report and not report.startswith("Ошибка:"):
+                if report:
                     await bot_instance.send_long_message(chat_id, report)
+                    logger.info(f"Отчёт для user_id={user_id} отправлен.")
                 else:
-                    msg = report or "Ошибка или нет данных"
-                    await bot_instance.application.bot.send_message(
-                        chat_id=chat_id, text=msg
-                    )
-                logger.info(f"Отчёт для user_id={user_id} отправлен (или ошибка).")
+                    msg = "Ошибка или нет данных"
+                    await bot_instance.application.bot.send_message(chat_id=chat_id, text=msg)
+                    logger.warning(f"Нет данных для отчета для user_id={user_id}.")
             else:
-                # chat_id=None => это оператор => ничего не отправляем
-                logger.debug(
-                    f"chat_id=None, это оператор {user_id}. "
-                    f"Отчёт сгенерирован и сохранён (без отправки в чат)."
-                )
+                # Если chat_id=None — это оператор, отправка не требуется
+                logger.debug(f"chat_id=None, отчёт для оператора user_id={user_id} не отправлен.")
 
         except Exception as e:
-            logger.error(
-                f"Ошибка при обработке задачи для user_id={user_id}: {e}", exc_info=True
-            )
+            logger.exception(f"Ошибка при обработке задачи для user_id={user_id}: {e}")
             if chat_id:
                 await bot_instance.application.bot.send_message(
                     chat_id=chat_id,
@@ -207,7 +195,7 @@ async def worker(queue: asyncio.Queue, bot_instance):
                 )
         finally:
             queue.task_done()
-            logger.info(f"Воркеры завершили обработку задачи: {task}")
+            logger.info(f"Завершена обработка задачи: {task}")
 
 
 async def add_task(
