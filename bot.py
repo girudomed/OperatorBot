@@ -234,14 +234,16 @@ async def add_task(
 
     # Если есть chat_id (менеджер) — отправим уведомление
     if isinstance(chat_id, int):
-        try:
-            await bot_instance.application.bot.send_message(
-                chat_id=chat_id, text="Ваш запрос поставлен в очередь на обработку."
-            )
-        except Exception as e:
-            logger.warning(
-                f"Ошибка отправки уведомления chat_id={chat_id} (user_id={user_id}): {e}"
-            )
+        logger.debug(f"Уведомление не отправляется для chat_id={chat_id}.")
+
+        #try:
+            #await bot_instance.application.bot.send_message(
+                #chat_id=chat_id, text="Ваш запрос поставлен в очередь на обработку."
+            #)
+        #except Exception as e:
+            #logger.warning(
+                #f"Ошибка отправки уведомления chat_id={chat_id} (user_id={user_id}): {e}"
+            #)
     else:
         # Оператору не отправляем, но и не пишем в лог как ошибку
         logger.debug(f"chat_id=None для user_id={user_id}, уведомление не требуется.")
@@ -3843,7 +3845,7 @@ class TelegramBot:
         if not self.scheduler.running:
             self.scheduler.start()
         self.scheduler.add_job(
-            self.send_daily_reports, "cron", hour=13, minute=57
+            self.send_daily_reports, "cron", hour=14, minute=8
         )  # поставить 6 утра, на проде будет не локальное мое время
         logger.info("Ежедневная задача для отправки отчетов добавлена в планировщик.")
         # Запуск воркеров
@@ -4583,7 +4585,7 @@ class TelegramBot:
 
     from datetime import datetime, timedelta
 
-    async def send_daily_reports(self, check_days: int = 7):
+    async def send_daily_reports(self, check_days: int = 10):
         """
         Проверяем последние N дней (по умолчанию 40), включая вчера:
         1) Из таблицы users берём всех операторов (status='on').
