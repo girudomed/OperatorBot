@@ -3845,7 +3845,7 @@ class TelegramBot:
         if not self.scheduler.running:
             self.scheduler.start()
         self.scheduler.add_job(
-            self.send_daily_reports, "cron", hour=14, minute=8
+            self.send_daily_reports, "cron", hour=14, minute=19
         )  # поставить 6 утра, на проде будет не локальное мое время
         logger.info("Ежедневная задача для отправки отчетов добавлена в планировщик.")
         # Запуск воркеров
