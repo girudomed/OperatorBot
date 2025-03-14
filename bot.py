@@ -271,7 +271,7 @@ HELP_MESSAGE = """Команды:
         3	 ГВ ст.админ
         4    ЧС ст.админ
         5	 Ирина
-        6	 Аделя
+        6	 Энзе
         7	 ПП Ст.админ
         8	 Ресепшн ГВ
         9	 Ресепшн ПП
@@ -4885,8 +4885,7 @@ class TelegramBot:
             logger.error(f"[КРОТ]: Бот заблокирован пользователем с chat_id {chat_id}.")
         else:
             logger.error(
-                f"[КРОТ]: Ошибка при отправке отчета пользователю с chat_id {chat_id}: {e}"
-            )
+                f"[КРОТ]: Ошибка при отправке отчета пользователю с chat_id {chat_id}: {e}")
 
     async def send_password_to_chief(self, password):
         """

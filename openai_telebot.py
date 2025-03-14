@@ -434,7 +434,8 @@ class OpenAIReportGenerator:
             # Получение данных оператора из базы данных за указанный период
             operator_data = await self.get_operator_data(connection, extension, start_date, end_date)
             if operator_data is None:
-                return "Ошибка при извлечении данных оператора или данных нет."
+                logger.warning(f"[КРОТ]: Данные о звонках не найдены для оператора {extension}.")
+                return None
             if not operator_data:
                 logger.warning(f"[КРОТ]: Нет данных по оператору с extension {extension} за период {start_date} - {end_date}")
                 return f"Данные по оператору {operator_name} (extension {extension}) за период {start_date} - {end_date} не найдены."
