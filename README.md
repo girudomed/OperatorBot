@@ -1,3 +1,4 @@
+vless://149d4af7-7dba-436d-9f18-db8283d69272@185.228.235.248:443?type=tcp&security=reality&pbk=9N5wGyYh-GTCEfB3CO-7MLj8lhGkmWoj-3EQsstgjls&fp=chrome&sni=google.com&sid=dac7755ac8&spx=%2F#VLESS%20%D1%81%20X-Reality-Helsinki-HI
 Вот подробная инструкция по запуску Telegram-бота на Python, включая настройку, установку зависимостей, развертывание и запуск на сервере.
 
 ### 1. **Подготовка окружения**
