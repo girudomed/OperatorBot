@@ -1,0 +1,218 @@
+"""
+Типы данных для работы с БД.
+"""
+
+from typing import TypedDict, Optional
+from datetime import datetime
+
+
+class UserRecord(TypedDict, total=False):
+    """Запись пользователя из таблицы UsersTelegaBot."""
+    user_id: int
+    username: str
+    full_name: str
+    operator_id: Optional[int]
+    password: str
+    role_id: Optional[int]
+    extension: Optional[str]
+    # Admin panel fields
+    status: str  # 'pending', 'approved', 'blocked'
+    approved_by: Optional[int]
+    blocked_at: Optional[datetime]
+
+
+class OperatorRecord(TypedDict, total=False):
+    """Запись оператора из таблицы users."""
+    id: int
+    name: str
+    extension: str
+    user_id: Optional[int]
+
+
+class CallRecord(TypedDict, total=False):
+    """Запись звонка из таблицы call_scores."""
+    id: int
+    history_id: int
+    call_score: float
+    score_date: datetime
+    called_info: Optional[str]
+    call_date: Optional[datetime]
+    call_type: Optional[str]
+    talk_duration: Optional[int]
+    call_success: Optional[str]
+    transcript: Optional[str]
+    result: Optional[str]
+    caller_info: str
+    caller_number: Optional[str]
+    called_number: Optional[str]
+    utm_source_by_number: Optional[str]
+    call_category: str
+    number_category: int
+    number_checklist: Optional[int]
+    category_checklist: Optional[str]
+    is_target: int
+    outcome: Optional[str]
+    requested_service_id: Optional[int]
+    requested_service_name: Optional[str]
+    requested_doctor_id: Optional[int]
+    requested_doctor_name: Optional[str]
+    requested_doctor_speciality: Optional[str]
+    refusal_reason: Optional[str]
+
+
+class CallHistoryRecord(TypedDict, total=False):
+    """Запись из таблицы call_history."""
+    id: int
+    call_date: datetime
+    talk_duration: Optional[int]
+    call_type: Optional[str]
+    called_info: Optional[str]
+    caller_info: Optional[str]
+    caller_number: Optional[str]
+    called_number: Optional[str]
+    recording_id: Optional[str]
+
+
+class RoleRecord(TypedDict, total=False):
+    """Запись роли из таблицы RolesTelegaBot."""
+    id: int
+    role_name: str
+    role_password: str
+
+
+class ReportRecord(TypedDict, total=False):
+    """Запись отчёта из таблицы reports."""
+    user_id: int
+    report_date: datetime
+    total_calls: int
+    accepted_calls: int
+    booked_services: int
+    conversion_rate: float
+    avg_call_rating: float
+    total_cancellations: int
+    cancellation_rate: float
+    total_conversation_time: int
+    avg_conversation_time: float
+    avg_spam_time: float
+    total_spam_time: int
+    total_navigation_time: int
+    avg_navigation_time: float
+    complaint_calls: int
+    complaint_rating: float
+    recommendations: str
+
+
+class CallMetrics(TypedDict):
+    """Агрегированные метрики звонков."""
+    total_calls: int
+    avg_talk_time: Optional[float]
+    successful_calls: int
+
+
+class LMValueRecord(TypedDict, total=False):
+    """Запись метрики LM из таблицы lm_value."""
+    id: int
+    history_id: int
+    call_score_id: Optional[int]
+    metric_code: str
+    metric_group: str
+    value_numeric: Optional[float]
+    value_label: Optional[str]
+    value_json: Optional[dict]
+    lm_version: str
+    calc_method: str
+    calc_source: Optional[str]
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+
+class LMMetricDictionary(TypedDict, total=False):
+    """Запись из таблицы lm_metric_dictionary (если используется)."""
+    id: int
+    metric_code: str
+    metric_group: str
+    metric_name: str
+    description: Optional[str]
+    data_type: str
+    formula: Optional[str]
+    value_range: Optional[str]
+    use_case: Optional[str]
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+
+# ============================================================================
+# Типы для LM метрик
+# ============================================================================
+
+class LMMetricBase(TypedDict, total=False):
+    """Базовый тип для метрики LM."""
+    metric_code: str
+    metric_group: str
+    value_numeric: Optional[float]
+    value_label: Optional[str]
+    value_json: Optional[dict]
+    calc_method: str
+
+
+class LMOperationalMetric(TypedDict):
+    """Операционная метрика LM (скорость, эффективность, нагрузка)."""
+    metric_code: str  # response_speed_score, talk_time_efficiency, queue_impact_index
+    metric_group: str  # 'operational'
+    value_numeric: float  # 0-100
+    calc_method: str  # 'rule'
+
+
+class LMConversionMetric(TypedDict):
+    """Конверсионная метрика LM (конверсия, потери, cross-sell)."""
+    metric_code: str  # conversion_score, lost_opportunity_score, cross_sell_potential
+    metric_group: str  # 'conversion'
+    value_numeric: float  # 0-100
+    calc_method: str  # 'rule'
+
+
+class LMQualityMetric(TypedDict):
+    """Метрика качества LM (чек-лист, скор, риск скрипта)."""
+    metric_code: str  # checklist_coverage_ratio, normalized_call_score, script_risk_index
+    metric_group: str  # 'quality'
+    value_numeric: float  # 0-100
+    calc_method: str  # 'rule'
+
+
+class LMRiskMetric(TypedDict, total=False):
+    """Метрика риска LM (отток, жалобы, фоллоу-ап)."""
+    metric_code: str  # churn_risk_level, complaint_risk_flag, followup_needed_flag
+    metric_group: str  # 'risk'
+    value_numeric: float  # 0-100 для churn_risk, 0-100 для complaint, 0/1 для followup
+    value_label: str  # 'low'/'medium'/'high' или 'true'/'false'
+    calc_method: str  # 'rule'
+
+
+class LMForecastMetric(TypedDict):
+    """Прогнозная метрика LM (вероятности)."""
+    metric_code: str  # conversion_prob_forecast, second_call_prob, complaint_prob
+    metric_group: str  # 'forecast'
+    value_numeric: float  # 0-1 (вероятность)
+    calc_method: str  # 'rule'
+
+
+class LMAuxiliaryMetric(TypedDict, total=False):
+    """Вспомогательная метрика LM (версия, профиль)."""
+    metric_code: str  # lm_version_tag, calc_profile
+    metric_group: str  # 'aux'
+    value_label: str  # версия LM или профиль расчета
+    calc_method: str  # 'meta'
+
+
+# ============================================================================
+# Admin Panel Models
+# ============================================================================
+
+class AdminActionLog(TypedDict, total=False):
+    """Запись из таблицы admin_action_logs - аудит действий админов."""
+    id: int
+    actor_id: int  # Кто выполнил действие
+    target_id: Optional[int]  # Над кем выполнено (null для системных)
+    action: str  # approve, decline, promote, demote, block, unblock, lookup
+    payload_json: Optional[str]  # JSON с дополнительными данными
+    created_at: datetime  # Когда выполнено

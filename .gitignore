@@ -1,7 +1,37 @@
+# Environment
 .env
+*.env.local
+*.env.*.local
+
+# Virtual Environment
 venv/
-venv/lib/python3.11/site-packages/torch/lib/libtorch_cpu.dylib
-# Исключаем файлы моделей Hugging Face
+env/
+ENV/
+
+# Logs
+*.log
+logs/
+analyzer.log
+project_summary.log
+visualization.log
+
+# Temp files and caches
+temp_plots/
+*.rdb
+dump.rdb
+__pycache__/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Hugging Face models and cache
 .cache/huggingface/
-# Исключаем кеш моделей Hugging Face
 models/
+venv/lib/python3.11/site-packages/torch/lib/libtorch_cpu.dylib

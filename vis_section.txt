@@ -1,0 +1,203 @@
+class VisualizationError(BotError):
+    """Ошибка создания визуализации."""
+
+    pass
+
+
+class ExternalServiceError(BotError):
+    """Ошибка внешнего сервиса."""
+
+    pass
+
+
+class DataProcessor:
+    """Класс для обработки данных визуализации."""
+
+    def __init__(self, logger):
+        self.logger = logger
+
+    @staticmethod
+    def determine_resample_frequency(total_seconds: float, target_points: int) -> str:
+        """
+        Определяет оптимальную частоту ресемплинга.
+
+        Args:
+            total_seconds: Общее количество секунд
+            target_points: Целевое количество точек
+
+        Returns:
+            str: Строка частоты для pandas resample
+        """
+        interval_seconds = max(int(total_seconds / target_points), 1)
+
+        if interval_seconds < 60:
+            return f"{interval_seconds}S"  # секунды
+        elif interval_seconds < 3600:
+            return f"{interval_seconds // 60}T"  # минуты
+        elif interval_seconds < 86400:
+            return f"{interval_seconds // 3600}H"  # часы
+        else:
+            return f"{interval_seconds // 86400}D"  # дни
+
+    @staticmethod
+    def get_aggregation_method(
+        column_name: str, data_type: str, unique_ratio: float
+    ) -> str:
+        """
+        Определяет оптимальный метод агрегации для колонки.
+
+        Args:
+            column_name: Имя колонки
+            data_type: Тип данных
+            unique_ratio: Отношение уникальных значений к общему количеству
+
+        Returns:
+            str: Метод агрегации
+        """
+        if not pd.api.types.is_numeric_dtype(data_type):
+            return "last"
+
+        column_lower = column_name.lower()
+        if any(term in column_lower for term in ["count", "quantity", "total"]):
+            return "sum"
+        elif any(term in column_lower for term in ["rate", "ratio", "avg", "mean"]):
+            return "mean"
+        elif unique_ratio < 0.1:  # Если мало уникальных значений
+            return "mode"
+        else:
+            return "mean"
+
+    @staticmethod
+    def safe_convert_to_numeric(
+        series: pd.Series, default_value: float = 0.0
+    ) -> pd.Series:
+        """
+        Безопасное преобразование серии в числовой формат.
+
+        Args:
+            series: Исходная серия
+            default_value: Значение по умолчанию
+
+        Returns:
+            pd.Series: Преобразованная серия
+        """
+        try:
+            return pd.to_numeric(series, errors="coerce").fillna(default_value)
+        except Exception:
+            return pd.Series([default_value] * len(series), index=series.index)
+
+    def process_complex_data(
+        self, data: pd.Series, aggregation: str = "sum"
+    ) -> pd.Series:
+        """
+        Обработка сложных данных (списков, словарей, вложенных структур).
+
+        Args:
+            data: Серия со сложными данными
+            aggregation: Метод агрегации
+
+        Returns:
+            pd.Series: Обработанная серия
+        """
+        try:
+            if isinstance(data.iloc[0], dict):
+                expanded = pd.DataFrame(data.tolist(), index=data.index)
+            else:
+                expanded = pd.DataFrame(data.tolist(), index=data.index)
+
+            if aggregation == "mean":
+                return expanded.mean(axis=1)
+            return expanded.sum(axis=1)
+        except Exception as e:
+            self.logger.error(f"Ошибка обработки сложных данных: {e}")
+            return pd.Series(0, index=data.index)
+
+
+class MetricConfig(TypedDict):
+    name: str
+    label: str
+    color: str
+    line_style: Optional[str]
+    marker: Optional[str]
+    aggregation: Optional[Literal["sum", "mean", "max", "min"]]
+
+
+class VisualizationConfig(TypedDict):
+    figure: Dict[str, Any]
+    grid: bool
+    marker_size: int
+    metrics: List[MetricConfig]
+    x_label: str
+    y_label: str
+    title: str
+
+
+class TrendData(TypedDict):
+    metric: str
+    current: float
+    previous: float
+    change: float
+    trend: Literal["up", "down", "stable"]
+
+
+# Определяем типы для обработки данных
+DataFrameOrSeries = Union[pd.DataFrame, pd.Series]
+MetricValue = Union[float, int, list, dict, str]
+AggregationMethod = Literal["sum", "mean", "max", "min", "first", "last"]
+
+
+class DataProcessor:
+    def __init__(self, logger):
+        self.logger = logger
+
+    """Класс для обработки данных."""
+
+    @staticmethod
+    def determine_resample_frequency(total_seconds: float, target_points: int) -> str:
+        """
+        Определяет частоту ресемплинга на основе общего времени и целевых точек.
+
+        Args:
+            total_seconds: Общее количество секунд
+            target_points: Желаемое количество точек
+
+        Returns:
+            str: Строка частоты ресемплинга (например, '1H', '1D')
+        """
+        seconds_per_point = total_seconds / target_points
+
+        if seconds_per_point < 60:
+            return f"{int(seconds_per_point)}S"
+        elif seconds_per_point < 3600:
+            return f"{int(seconds_per_point / 60)}T"
+        elif seconds_per_point < 86400:
+            return f"{int(seconds_per_point / 3600)}H"
+        else:
+            return f"{int(seconds_per_point / 86400)}D"
+
+    @staticmethod
+    def get_aggregation_method(
+        column: str, dtype: np.dtype, unique_ratio: float
+    ) -> AggregationMethod:
+        """
+        Определяет метод агрегации на основе типа данных и уникальности значений.
+
+        Args:
+            column: Имя колонки
+            dtype: Тип данных колонки
+            unique_ratio: Отношение уникальных значений к общему количеству
+
+        Returns:
+            AggregationMethod: Метод агрегации
+        """
+        if dtype in (np.float64, np.int64):
+            if unique_ratio > 0.8:
+                return "mean"
+            else:
+                return "sum"
+        elif dtype == np.bool_:
+            return "sum"
+        else:
+            return "first"
+
+

@@ -1,0 +1,192 @@
+"""
+Главный модуль приложения.
+"""
+
+import asyncio
+import fcntl
+import sys
+import logging
+
+import nest_asyncio
+from telegram.ext import ApplicationBuilder
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+
+from app.config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
+from app.logging_config import setup_watchdog, get_watchdog_logger
+
+# Импортируем error handlers для установки глобальных обработчиков
+from app.utils.error_handlers import (
+    setup_global_exception_handlers,
+    log_async_exceptions,
+    ErrorContext
+)
+
+from app.db.manager import DatabaseManager
+from app.telegram.middlewares.permissions import PermissionsManager
+
+# Сервисы
+from app.services.call_lookup import CallLookupService
+from app.services.weekly_quality import WeeklyQualityService
+from app.services.reports import ReportService
+
+# Хендлеры
+from app.telegram.handlers.auth import setup_auth_handlers
+from app.telegram.handlers.call_lookup import register_call_lookup_handlers
+from app.telegram.handlers.weekly_quality import register_weekly_quality_handlers
+from app.telegram.handlers.reports import register_report_handlers
+
+# Воркеры
+from app.workers.task_worker import start_workers, stop_workers
+
+# Инициализация логирования
+setup_watchdog()
+logger = get_watchdog_logger(__name__)
+
+# Блокировка повторного запуска
+LOCK_FILE = "/tmp/operabot.lock"
+
+def acquire_lock():
+    fp = open(LOCK_FILE, "w")
+    try:
+        fcntl.lockf(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fp
+    except IOError:
+        print("Бот уже запущен!")
+        sys.exit(1)
+
+# Обработчик необработанных исключений
+def log_uncaught_exceptions(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    logger.error(
+        "Необработанное исключение", exc_info=(exc_type, exc_value, exc_traceback)
+    )
+
+sys.excepthook = log_uncaught_exceptions
+nest_asyncio.apply()
+
+async def main():
+    # Блокировка запуска
+    lock_fp = acquire_lock()
+    
+    logger.info("Запуск бота (новая архитектура)...")
+
+    # 1. Инициализация БД
+    db_manager = DatabaseManager()
+    await db_manager.create_pool()
+    logger.info("Пул соединений с БД создан.")
+
+    try:
+        # 2. Инициализация сервисов
+        permissions_manager = PermissionsManager(db_manager)
+        
+        call_lookup_service = CallLookupService(db_manager)
+        weekly_quality_service = WeeklyQualityService(db_manager)
+        report_service = ReportService(db_manager)
+        
+        # Admin panel components
+        from app.db.repositories.admin import AdminRepository
+        from app.services.notifications import NotificationsManager as NotificationService
+        
+        admin_repo = AdminRepository(db_manager)
+        notification_service = NotificationService()  # Existing service
+
+        # 3. Инициализация приложения Telegram
+        application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+        
+        # Привязываем сервисы к bot_data для доступа из воркеров и хендлеров
+        application.bot_data["db_manager"] = db_manager
+        application.bot_data["report_service"] = report_service
+        application.bot_data["permissions_manager"] = permissions_manager
+        application.bot_data["admin_repo"] = admin_repo
+
+        # 4. Регистрация хендлеров
+        logger.info("Регистрация хендлеров...")
+        
+        # Auth
+        setup_auth_handlers(application, db_manager, permissions_manager)
+        
+        # Admin Panel
+        from app.telegram.handlers.admin_panel import register_admin_panel_handlers
+        from app.telegram.handlers.admin_users import register_admin_users_handlers
+        from app.telegram.handlers.admin_commands import register_admin_commands_handlers
+        from app.telegram.handlers.admin_stats import register_admin_stats_handlers
+        
+        # Initialize MetricsService for stats
+        from app.services.metrics_service import MetricsService
+        from app.db.repositories.operators import OperatorRepository
+        operator_repo = OperatorRepository(db_manager)
+        metrics_service = MetricsService(operator_repo)
+        
+        register_admin_panel_handlers(application, admin_repo, permissions_manager)
+        register_admin_users_handlers(application, admin_repo, permissions_manager, notification_service)
+        register_admin_commands_handlers(application, admin_repo, permissions_manager, notification_service)
+        register_admin_stats_handlers(application, admin_repo, metrics_service, permissions_manager)
+        
+        # Call Lookup (/call_lookup)
+        register_call_lookup_handlers(application, call_lookup_service, permissions_manager)
+        
+        # Weekly Quality (/weekly_quality)
+        register_weekly_quality_handlers(application, weekly_quality_service, permissions_manager)
+        
+        # Reports (/report)
+        register_report_handlers(application, report_service, permissions_manager, db_manager)
+
+        # 5. Запуск воркеров очереди
+        await start_workers(application)
+
+        # 6. Настройка планировщика (APScheduler)
+        scheduler = AsyncIOScheduler()
+        
+        async def send_weekly_report():
+            logger.info("Запуск автоматической отправки еженедельного отчета...")
+            try:
+                report_text = await weekly_quality_service.get_text_report(period="weekly")
+                if TELEGRAM_CHAT_ID:
+                    await application.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=report_text)
+                    logger.info(f"Еженедельный отчет отправлен в чат {TELEGRAM_CHAT_ID}")
+                else:
+                    logger.warning("TELEGRAM_CHAT_ID не установлен, отчет не отправлен.")
+            except Exception:
+                logger.exception("Ошибка при отправке еженедельного отчета.")
+
+        # Запуск каждый понедельник в 09:00
+        scheduler.add_job(
+            send_weekly_report,
+            CronTrigger(day_of_week='mon', hour=9, minute=0),
+            id='weekly_quality_report',
+            replace_existing=True
+        )
+        scheduler.start()
+        logger.info("Планировщик запущен.")
+
+        # 7. Запуск polling
+        logger.info("Бот запущен и готов к работе (Polling).")
+        await application.run_polling()
+
+    except Exception:
+        logger.exception("Критическая ошибка во время работы бота.")
+        raise
+    finally:
+        # Остановка и очистка ресурсов
+        logger.info("Остановка бота...")
+        if 'scheduler' in locals():
+            scheduler.shutdown()
+        
+        # Остановка воркеров (если application был создан)
+        if 'application' in locals():
+            await stop_workers(application)
+            
+        await db_manager.close()
+        logger.info("Бот остановлен.")
+        
+        # Освобождение блокировки (хотя ОС сделает это сама при выходе)
+        lock_fp.close()
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
