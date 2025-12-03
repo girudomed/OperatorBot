@@ -9,6 +9,7 @@ from app.telegram.middlewares.permissions import PermissionsManager
 from app.utils.error_handlers import log_async_exceptions
 from app.logging_config import get_watchdog_logger
 from app.telegram.utils.logging import describe_user
+from app.telegram.utils.messages import safe_edit_message
 
 logger = get_watchdog_logger(__name__)
 
@@ -73,7 +74,8 @@ class AdminLookupHandler:
             [InlineKeyboardButton("◀️ Назад", callback_data="admin:back")],
         ]
 
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             text=message,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML",

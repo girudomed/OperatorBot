@@ -3,6 +3,7 @@
 """
 
 import asyncio
+import inspect
 import time
 import aiomysql
 from contextlib import asynccontextmanager
@@ -22,6 +23,62 @@ class DatabaseManager:
     def __init__(self):
         self.pool: Optional[aiomysql.Pool] = None
         self._lock = asyncio.Lock()
+    
+    @staticmethod
+    def _extract_db_error_details(error: Exception) -> Tuple[str, Optional[int], str]:
+        error_type = type(error).__name__
+        error_code = None
+        message = str(error)
+        if hasattr(error, "args") and error.args:
+            first = error.args[0]
+            if isinstance(first, int):
+                error_code = first
+        return error_type, error_code, message
+
+    @staticmethod
+    def _classify_db_error(error_code: Optional[int], message: str) -> str:
+        msg = message.lower()
+        if error_code in {1054, 1146, 1060, 1062} or "unknown column" in msg or "unknown table" in msg:
+            return "schema_error"
+        if error_code in {2003, 2006, 2013} or "connection" in msg:
+            return "connection_error"
+        if "timeout" in msg:
+            return "timeout"
+        return "unknown_error"
+
+    def _resolve_query_name(self, query_name: Optional[str]) -> str:
+        if query_name:
+            return query_name
+        try:
+            frame = inspect.stack()[3]
+            module = frame.frame.f_globals.get("__name__", "")
+            return f"{module}.{frame.function}"
+        except Exception:
+            return "unknown_query"
+
+    def _log_db_error(
+        self,
+        error: Exception,
+        query: str,
+        params: Optional[Union[Tuple, List, Dict]],
+        query_name: Optional[str],
+        category: Optional[str] = None,
+    ) -> str:
+        error_type, error_code, message = self._extract_db_error_details(error)
+        resolved_category = category or self._classify_db_error(error_code, message)
+        logger.error(
+            "Ошибка выполнения SQL-запроса",
+            extra={
+                "error_type": error_type,
+                "error_code": error_code,
+                "error_message": message,
+                "query_name": self._resolve_query_name(query_name),
+                "sql": query,
+                "params": repr(params),
+                "category": resolved_category,
+            },
+        )
+        return resolved_category
 
     async def create_pool(self) -> None:
         """Создание пула соединений с базой данных."""
@@ -81,7 +138,9 @@ class DatabaseManager:
         query: str, 
         params: Optional[Union[Tuple, List, Dict]] = None, 
         fetchone: bool = False, 
-        fetchall: bool = False
+        fetchall: bool = False,
+        query_name: Optional[str] = None,
+        log_error: bool = True,
     ) -> Any:
         """
         Выполнение SQL-запроса.
@@ -121,7 +180,8 @@ class DatabaseManager:
 
                     return True
                 except Exception as e:
-                    logger.error(f"Ошибка выполнения запроса: {query}, параметры: {params}, ошибка: {e}")
+                    if log_error:
+                        self._log_db_error(e, query, params, query_name)
                     raise
 
     async def execute_with_retry(
@@ -132,6 +192,7 @@ class DatabaseManager:
         fetchall: bool = False,
         retries: int = 3,
         base_delay: float = 0.5,
+        query_name: Optional[str] = None,
     ) -> Any:
         """
         Выполнение SQL-запроса с повторными попытками.
@@ -144,11 +205,26 @@ class DatabaseManager:
                     params=params,
                     fetchone=fetchone,
                     fetchall=fetchall,
+                    query_name=query_name,
+                    log_error=False,
                 )
             except (aiomysql.Error, RuntimeError) as error:
                 last_error = error
+                error_type, error_code, message = self._extract_db_error_details(error)
+                category = self._classify_db_error(error_code, message)
+                self._log_db_error(error, query, params, query_name, category)
+                if category == "schema_error":
+                    raise
                 logger.warning(
-                    f"Ошибка выполнения запроса. Попытка {attempt}/{retries}: {error}"
+                    f"Ошибка выполнения запроса. Попытка {attempt}/{retries}",
+                    extra={
+                        "query_name": self._resolve_query_name(query_name),
+                        "error_type": error_type,
+                        "error_code": error_code,
+                        "category": category,
+                        "attempt": attempt,
+                        "max_attempts": retries,
+                    },
                 )
                 if attempt == retries:
                     raise

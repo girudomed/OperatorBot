@@ -75,6 +75,39 @@ class TestPermissionsManager:
         can_promote = await permissions.can_promote(123, 'superadmin')
         assert can_promote is False
 
+    @pytest.mark.asyncio
+    async def test_can_access_admin_panel_for_admin(self, permissions, mock_db):
+        """Admin получает доступ в /admin."""
+        mock_db.execute_with_retry.return_value = {'role_id': 2, 'status': 'approved'}
+        assert await permissions.can_access_admin_panel(123) is True
+
+    @pytest.mark.asyncio
+    async def test_can_access_admin_panel_for_pending(self, permissions, mock_db):
+        """Pending не допускается в /admin."""
+        mock_db.execute_with_retry.return_value = {'role_id': 2, 'status': 'pending'}
+        assert await permissions.can_access_admin_panel(123) is False
+
+    @pytest.mark.asyncio
+    async def test_can_access_call_lookup_operator(self, permissions, mock_db):
+        """Утверждённый оператор имеет доступ к /call_lookup."""
+        mock_db.execute_with_retry.side_effect = [
+            {'status': 'approved'},  # get_user_status
+            {'role_id': 1, 'status': 'approved'},  # get_user_role
+        ]
+        result = await permissions.can_access_call_lookup(123)
+        assert result is True
+        mock_db.execute_with_retry.side_effect = None
+
+    @pytest.mark.asyncio
+    async def test_can_access_call_lookup_pending_denied(self, permissions, mock_db):
+        """Pending пользователь не может читать расшифровки."""
+        mock_db.execute_with_retry.side_effect = [
+            {'status': 'pending'},
+        ]
+        result = await permissions.can_access_call_lookup(123)
+        assert result is False
+        mock_db.execute_with_retry.side_effect = None
+
 
 class TestAdminRepository:
     """Тесты для AdminRepository."""
@@ -125,6 +158,24 @@ class TestAdminRepository:
         admins = await admin_repo.get_admins()
         assert len(admins) == 2
         assert any(a['role'] == 'superadmin' for a in admins)
+
+    @pytest.mark.asyncio
+    async def test_get_users_counters(self, admin_repo, mock_db):
+        """Тест агрегированного счётчика пользователей."""
+        mock_db.execute_with_retry.return_value = {
+            'total_users': 10,
+            'pending_users': 3,
+            'approved_users': 6,
+            'blocked_users': 1,
+            'admins_count': 2,
+            'operators_count': 4,
+        }
+
+        counters = await admin_repo.get_users_counters()
+        assert counters['total_users'] == 10
+        assert counters['pending_users'] == 3
+        assert counters['admins'] == 2
+        assert counters['operators'] == 4
 
 
 if __name__ == "__main__":

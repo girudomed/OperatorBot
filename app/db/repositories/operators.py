@@ -9,6 +9,9 @@ import json
 from app.db.manager import DatabaseManager
 from app.db.models import OperatorRecord, CallMetrics
 from app.logging_config import get_watchdog_logger
+from app.core.roles import ROLE_NAME_TO_ID
+from app.config import DEV_ADMIN_ID, DEV_ADMIN_USERNAME
+from app.core.roles import ROLE_NAME_TO_ID
 
 logger = get_watchdog_logger(__name__)
 
@@ -105,15 +108,33 @@ class OperatorRepository:
                 COUNT(*) AS total_calls,
                 SUM(CASE WHEN cs.history_id IS NULL THEN 1 ELSE 0 END) AS missed_calls
             FROM call_history ch
-            LEFT JOIN call_scores cs ON cs.history_id = COALESCE(ch.id, ch.history_id)
+            LEFT JOIN call_scores cs ON cs.history_id = ch.history_id
             WHERE ch.context_start_time BETWEEN %s AND %s
         """
-        
-        history_stats = await self.db_manager.execute_with_retry(
-            history_query,
-            (start_ts, end_ts),
-            fetchone=True,
-        ) or {}
+        log_extra = {
+            "feature": "weekly_quality_report",
+            "date_range_start": start_str,
+            "date_range_end": end_str,
+        }
+        logger.info(
+            "weekly_quality_report: подсчёт звонков (history) за период %s — %s",
+            start_str,
+            end_str,
+            extra=log_extra,
+        )
+
+        try:
+            history_stats = await self.db_manager.execute_with_retry(
+                history_query,
+                (start_ts, end_ts),
+                fetchone=True,
+            ) or {}
+        except Exception:
+            logger.exception(
+                "weekly_quality_report: ошибка выборки call_history",
+                extra=log_extra,
+            )
+            raise
 
         lead_categories = (
             "Запись на услугу (успешная)",
@@ -132,11 +153,25 @@ class OperatorRepository:
             FROM call_scores cs
             WHERE cs.call_date BETWEEN %s AND %s
         """
-        score_stats = await self.db_manager.execute_with_retry(
-            scores_query,
-            (start_str, end_str),
-            fetchone=True,
-        ) or {}
+        logger.info(
+            "weekly_quality_report: подсчёт скорингов (scores) за период %s — %s",
+            start_str,
+            end_str,
+            extra=log_extra,
+        )
+
+        try:
+            score_stats = await self.db_manager.execute_with_retry(
+                scores_query,
+                (start_str, end_str),
+                fetchone=True,
+            ) or {}
+        except Exception:
+            logger.exception(
+                "weekly_quality_report: ошибка выборки call_scores",
+                extra=log_extra,
+            )
+            raise
 
         return {
             "total_calls": history_stats.get("total_calls") or 0,
@@ -171,13 +206,71 @@ class OperatorRepository:
             (user_id, name, report_text, period, start_date, end_date, metrics_str, recommendations)
         )
 
+    def _is_dev_account(self, record: Dict[str, Any]) -> bool:
+        """Проверяет, относится ли запись к dev/admin аккаунту, которого нужно скрыть."""
+        telegram_id = record.get("telegram_id")
+        username = record.get("username")
+        if DEV_ADMIN_ID and telegram_id and str(telegram_id) == str(DEV_ADMIN_ID):
+            return True
+        if DEV_ADMIN_USERNAME and username and username.lower() == DEV_ADMIN_USERNAME.lower():
+            return True
+        return False
+
+    async def get_approved_operators(self, include_pending: bool = True) -> List[Dict[str, Any]]:
+        """
+        Возвращает список операторов для генерации отчётов.
+
+        Args:
+            include_pending: включать ли пользователей со статусом pending.
+        """
+        statuses = ["approved"]
+        if include_pending:
+            statuses.append("pending")
+
+        placeholders = ",".join(["%s"] * len(statuses))
+        query = f"""
+            SELECT user_id AS id, user_id, telegram_id, full_name, username, extension, status
+            FROM users
+            WHERE status IN ({placeholders}) AND role_id = %s
+            ORDER BY COALESCE(full_name, username, 'Без имени')
+        """
+        params = (*statuses, ROLE_NAME_TO_ID["operator"])
+        rows = await self.db_manager.execute_with_retry(
+            query,
+            params=params,
+            fetchall=True,
+        ) or []
+
+        result: List[Dict[str, Any]] = []
+        for record in rows:
+            if not record.get("user_id"):
+                continue
+            if self._is_dev_account(record):
+                continue
+            result.append(record)
+        return result
+
+    async def get_operator_info_by_user_id(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """Получает информацию об операторе по user_id."""
+        query = """
+            SELECT user_id AS id, user_id, telegram_id, full_name, username, extension
+            FROM users
+            WHERE user_id = %s
+            LIMIT 1
+        """
+        return await self.db_manager.execute_with_retry(
+            query,
+            params=(user_id,),
+            fetchone=True,
+        )
+
     # === Методы из db_module.py ===
 
     async def find_operator_by_id(self, user_id: int) -> Optional[OperatorRecord]:
         """
         Поиск оператора по его ID.
         """
-        query = "SELECT * FROM users WHERE id = %s"
+        query = "SELECT * FROM users WHERE user_id = %s"
         result = await self.db_manager.execute_query(query, (user_id,), fetchone=True)
         if not result:
             logger.warning(f"Оператор с ID {user_id} не найден.")

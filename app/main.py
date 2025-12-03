@@ -6,10 +6,10 @@ import asyncio
 import fcntl
 import sys
 import logging
+from typing import Optional
 
-import nest_asyncio
-from telegram import BotCommand
-from telegram.ext import ApplicationBuilder
+from telegram import BotCommand, Update
+from telegram.ext import ApplicationBuilder, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -47,6 +47,45 @@ logger = get_watchdog_logger(__name__)
 # Блокировка повторного запуска
 LOCK_FILE = "/tmp/operabot.lock"
 
+
+async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Глобально логируем необработанные ошибки PTB, чтобы не терять контекст."""
+    error = context.error
+    update_obj: Optional[Update] = update if isinstance(update, Update) else None
+    user = update_obj.effective_user if update_obj else None
+    chat = update_obj.effective_chat if update_obj else None
+
+    if update_obj and update_obj.callback_query:
+        update_type = "callback_query"
+    elif update_obj and update_obj.message:
+        update_type = "message"
+    elif update_obj and update_obj.inline_query:
+        update_type = "inline_query"
+    else:
+        update_type = "unknown"
+
+    handler_name = None
+    tb = getattr(error, "__traceback__", None)
+    if tb:
+        while tb.tb_next:
+            tb = tb.tb_next
+        handler_name = tb.tb_frame.f_code.co_name
+
+    logger.error(
+        "Unhandled exception в Telegram handler",
+        exc_info=(type(error), error, error.__traceback__) if error else None,
+        extra={
+            "source": "telegram.application",
+            "error_type": type(error).__name__ if error else None,
+            "handler_name": handler_name,
+            "update_type": update_type,
+            "update_id": update_obj.update_id if update_obj else None,
+            "user_id": user.id if user else None,
+            "username": user.username if user else None,
+            "chat_id": chat.id if chat else None,
+        },
+    )
+
 def acquire_lock():
     fp = open(LOCK_FILE, "w")
     try:
@@ -66,8 +105,6 @@ def log_uncaught_exceptions(exc_type, exc_value, exc_traceback):
     )
 
 sys.excepthook = log_uncaught_exceptions
-nest_asyncio.apply()
-
 async def main():
     # Блокировка запуска
     lock_fp = acquire_lock()
@@ -99,6 +136,8 @@ async def main():
 
         # 3. Инициализация приложения Telegram
         application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+        application.add_error_handler(telegram_error_handler)
+        workers_started = False
         
         # Привязываем сервисы к bot_data для доступа из воркеров и хендлеров
         application.bot_data["db_manager"] = db_manager
@@ -144,10 +183,7 @@ async def main():
 
         await _configure_bot_commands(application)
 
-        # 5. Запуск воркеров очереди
-        await start_workers(application)
-
-        # 6. Настройка планировщика (APScheduler)
+        # 5. Настройка планировщика (APScheduler)
         scheduler = AsyncIOScheduler()
         
         async def send_weekly_report():
@@ -169,12 +205,19 @@ async def main():
             id='weekly_quality_report',
             replace_existing=True
         )
+        await application.initialize()
+        await application.start()
+
+        # 6. Запуск воркеров очереди
+        await start_workers(application)
+        workers_started = True
+
         scheduler.start()
         logger.info("Планировщик запущен.")
 
-        # 7. Запуск polling
+        await application.updater.start_polling()
         logger.info("Бот запущен и готов к работе (Polling).")
-        await application.run_polling()
+        await application.updater.wait_for_stop()
 
     except Exception:
         logger.exception("Критическая ошибка во время работы бота.")
@@ -183,12 +226,16 @@ async def main():
         # Остановка и очистка ресурсов
         logger.info("Остановка бота...")
         if 'scheduler' in locals():
-            scheduler.shutdown()
+            scheduler.shutdown(wait=False)
         
-        # Остановка воркеров (если application был создан)
+        # Остановка воркеров и приложения
         if 'application' in locals():
-            await stop_workers(application)
-            
+            await application.updater.stop()
+            if 'workers_started' in locals() and workers_started:
+                await stop_workers(application)
+            await application.stop()
+            await application.shutdown()
+
         await db_manager.close()
         logger.info("Бот остановлен.")
         
@@ -202,8 +249,6 @@ async def _configure_bot_commands(application):
         BotCommand("start", "Перезапустить диалог"),
         BotCommand("help", "Показать список команд"),
         BotCommand("register", "Отправить заявку на доступ"),
-        BotCommand("verify_password", "Проверить пароль роли"),
-        BotCommand("reset_password", "Сбросить пароль роли"),
         BotCommand("weekly_quality", "Еженедельный отчёт качества"),
         BotCommand("report", "AI-отчёт"),
         BotCommand("call_lookup", "Поиск звонков по номеру"),

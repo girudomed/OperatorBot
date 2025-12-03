@@ -152,7 +152,7 @@ class CallLookupService:
 
         query = f"""
             SELECT
-                ch.id AS history_id,
+                ch.history_id AS history_id,
                 ch.call_time,
                 ch.caller_info,
                 ch.caller_number,
@@ -163,7 +163,7 @@ class CallLookupService:
                 cs.score,
                 cs.transcript
             FROM call_history ch
-            LEFT JOIN call_scores cs ON cs.history_id = ch.id
+            LEFT JOIN call_scores cs ON cs.history_id = ch.history_id
             WHERE (
                 {called_expr} LIKE %s
                 OR {caller_expr} LIKE %s
@@ -238,7 +238,7 @@ class CallLookupService:
         logger.info("Запрошены детали звонка history_id=%s", history_id)
         query = """
             SELECT
-                ch.id AS history_id,
+                ch.history_id AS history_id,
                 ch.call_time,
                 ch.caller_info,
                 ch.caller_number,
@@ -249,8 +249,8 @@ class CallLookupService:
                 cs.score,
                 cs.transcript
             FROM call_history ch
-            LEFT JOIN call_scores cs ON cs.history_id = ch.id
-            WHERE ch.id = %s
+            LEFT JOIN call_scores cs ON cs.history_id = ch.history_id
+            WHERE ch.history_id = %s
             LIMIT 1
         """
         result = await self.db_manager.execute_with_retry(

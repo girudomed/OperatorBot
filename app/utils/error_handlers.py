@@ -9,8 +9,10 @@ import asyncio
 import functools
 import sys
 import traceback
-from typing import Any, Callable, Optional, TypeVar, cast
+from itertools import chain
+from typing import Any, Callable, Dict, Optional, TypeVar, cast
 
+from telegram import Update
 from watch_dog import get_watchdog_logger
 
 # Используем watch_dog для всех логов
@@ -70,7 +72,94 @@ def setup_global_exception_handlers():
         # Event loop еще не создан, установим позже
         pass
     
-    logger.info("Глобальные обработчики исключений установлены")
+logger.info("Глобальные обработчики исключений установлены")
+
+
+def _find_update_in_args(args: tuple, kwargs: dict) -> Optional[Update]:
+    for value in chain(args, kwargs.values()):
+        if isinstance(value, Update):
+            return value
+    return None
+
+
+async def _resolve_user_role(handler_instance: Any, update: Optional[Update]) -> Optional[str]:
+    if not update or not getattr(update, "effective_user", None):
+        return None
+    permissions = getattr(handler_instance, "permissions", None)
+    if not permissions or not hasattr(permissions, "get_effective_role"):
+        return None
+    user = update.effective_user
+    try:
+        return await permissions.get_effective_role(user.id, user.username)
+    except Exception:
+        return None
+
+
+def _build_update_context(update: Optional[Update]) -> Dict[str, Any]:
+    context: Dict[str, Any] = {}
+    if not update:
+        return context
+
+    user = update.effective_user
+    chat = update.effective_chat
+
+    if user:
+        context["user_id"] = user.id
+        if user.username:
+            context["username"] = user.username
+        if user.full_name:
+            context["full_name"] = user.full_name
+    if chat:
+        context["chat_id"] = chat.id
+
+    handler_type = "update"
+    command_or_callback = None
+
+    if update.callback_query:
+        handler_type = "callback_query"
+        command_or_callback = update.callback_query.data
+    elif update.message:
+        text = update.message.text or update.message.caption or ""
+        handler_type = "command" if text.startswith("/") else "message"
+        command_or_callback = text
+
+    context["handler_type"] = handler_type
+    if command_or_callback:
+        context["command_or_callback"] = command_or_callback
+    return context
+
+
+def _classify_business_error(error: Exception) -> str:
+    message = str(error).lower()
+    if "unknown column" in message or "unknown table" in message:
+        return "db_schema_error"
+    if isinstance(error, PermissionError) or "permission" in message:
+        return "permission_error"
+    if "timeout" in message:
+        return "timeout_error"
+    return "unexpected_error"
+
+
+async def _notify_user_about_error(update: Optional[Update], category: str) -> None:
+    if not update:
+        return
+    default_message = "⚠️ Произошла ошибка. Повторите действие или обратитесь к разработчику."
+    if category == "db_schema_error":
+        default_message = "⚠️ Ошибка БД, обратитесь к разработчику."
+    try:
+        if update.callback_query:
+            try:
+                await update.callback_query.answer(default_message, show_alert=True)
+            except Exception:
+                pass
+            try:
+                await update.callback_query.message.reply_text(default_message)
+            except Exception:
+                pass
+        elif update.message:
+            await update.message.reply_text(default_message)
+    except Exception:
+        pass
 
 
 def log_exceptions(func: F) -> F:
@@ -87,16 +176,25 @@ def log_exceptions(func: F) -> F:
         try:
             return func(*args, **kwargs)
         except Exception as e:
+            update = _find_update_in_args(args, kwargs)
+            context = _build_update_context(update)
+            error_category = _classify_business_error(e)
+            base_message = f"Ошибка в {func.__module__}.{func.__name__}"
+            if context.get("command_or_callback"):
+                base_message = (
+                    f"Ошибка при выполнении {context.get('handler_type')} "
+                    f"{context.get('command_or_callback')}"
+                )
             logger.error(
-                f"Ошибка в {func.__module__}.{func.__name__}",
+                base_message,
                 exc_info=True,
                 extra={
                     "function": func.__name__,
-                    "module": func.__module__,
+                    "module_name": func.__module__,
                     "exception_type": type(e).__name__,
                     "exception_message": str(e),
-                    "args": str(args)[:200],
-                    "kwargs": str(kwargs)[:200]
+                    "error_category": error_category,
+                    **context,
                 }
             )
             raise
@@ -123,23 +221,38 @@ def log_async_exceptions(func: F) -> F:
                 f"Задача отменена: {func.__module__}.{func.__name__}",
                 extra={
                     "function": func.__name__,
-                    "module": func.__module__
+                    "module_name": func.__module__
                 }
             )
             raise
         except Exception as e:
+            update = _find_update_in_args(args, kwargs)
+            context = _build_update_context(update)
+            error_category = _classify_business_error(e)
+            handler_instance = args[0] if args else None
+            if handler_instance:
+                role = await _resolve_user_role(handler_instance, update)
+                if role:
+                    context["user_role"] = role
+            base_message = f"Ошибка в async {func.__module__}.{func.__name__}"
+            if context.get("command_or_callback"):
+                base_message = (
+                    f"Ошибка при выполнении {context.get('handler_type')} "
+                    f"{context.get('command_or_callback')}"
+                )
             logger.error(
-                f"Ошибка в async {func.__module__}.{func.__name__}",
+                base_message,
                 exc_info=True,
                 extra={
                     "function": func.__name__,
-                    "module": func.__module__,
+                    "module_name": func.__module__,
                     "exception_type": type(e).__name__,
                     "exception_message": str(e),
-                    "args": str(args)[:200],
-                    "kwargs": str(kwargs)[:200]
+                    "error_category": error_category,
+                    **context,
                 }
             )
+            await _notify_user_about_error(update, error_category)
             raise
     
     return cast(F, wrapper)

@@ -18,9 +18,9 @@ Role = Literal['operator', 'admin', 'superadmin']
 Status = Literal['pending', 'approved', 'blocked']
 
 ROLE_PERMISSIONS: Dict[Role, Set[str]] = {
-    'operator': {'call_lookup', 'weekly_quality'},
-    'admin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management'},
-    'superadmin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles'},
+    'operator': {'call_lookup', 'weekly_quality', 'report'},
+    'admin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'report'},
+    'superadmin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report'},
 }
 
 

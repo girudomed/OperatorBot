@@ -18,6 +18,7 @@ from telegram.ext import (
 
 from app.services.call_lookup import CallLookupService
 from app.telegram.middlewares.permissions import PermissionsManager
+from app.telegram.utils.messages import safe_edit_message
 from app.logging_config import get_watchdog_logger
 from app.telegram.utils.logging import describe_user
 
@@ -84,10 +85,7 @@ class _CallLookupHandlers:
 
         args = context.args or []
         if not args:
-            await message.reply_text(
-                "Использование: /call_lookup <номер> [период]\n"
-                "Пример: /call_lookup +7 999 123 45 67 weekly"
-            )
+            await self._send_usage_hint(message)
             return
 
         phone = "".join(args[0:2]) if args[0] == "+7" and len(args) > 1 else args[0]
@@ -158,7 +156,7 @@ class _CallLookupHandlers:
         payload = self._decode_payload(parts[2])
 
         if not await self._is_allowed(user.id, user.username):
-            await query.edit_message_text("Доступ запрещён.")
+            await safe_edit_message(query, text="Доступ запрещён.")
             logger.warning(
                 "Call lookup callback отклонён для %s (action=%s)",
                 describe_user(user),
@@ -333,6 +331,42 @@ class _CallLookupHandlers:
 
         markup = InlineKeyboardMarkup(keyboard) if keyboard else None
         return "\n".join(lines), markup
+
+    async def _send_usage_hint(self, message: Message) -> None:
+        text = (
+            "📂 <b>Расшифровки</b>\n\n"
+            "Используйте формат:\n"
+            "<code>/call_lookup &lt;номер&gt; [период]</code>\n"
+            "Например: <code>/call_lookup +7 999 1234567 weekly</code>.\n\n"
+            "Выберите период, и бот подставит команду автоматически."
+        )
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "🔍 Вставить команду",
+                    switch_inline_query_current_chat="/call_lookup ",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "Daily",
+                    switch_inline_query_current_chat="/call_lookup  daily",
+                ),
+                InlineKeyboardButton(
+                    "Weekly",
+                    switch_inline_query_current_chat="/call_lookup  weekly",
+                ),
+                InlineKeyboardButton(
+                    "Monthly",
+                    switch_inline_query_current_chat="/call_lookup  monthly",
+                ),
+            ],
+        ]
+        await message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML",
+        )
 
     async def _edit_or_send(
         self,

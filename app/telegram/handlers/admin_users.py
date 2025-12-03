@@ -12,6 +12,7 @@ from app.logging_config import get_watchdog_logger
 from app.utils.error_handlers import log_async_exceptions
 from app.core.roles import role_name_from_id
 from app.telegram.utils.logging import describe_user
+from app.telegram.utils.messages import safe_edit_message
 
 logger = get_watchdog_logger(__name__)
 
@@ -29,10 +30,18 @@ class AdminUsersHandler:
         self.permissions = permissions
         self.notifications = notifications
         self.default_filter = "pending"
+        self.page_size = 10
 
-    def _parse_filter(self, data: str) -> str:
+    def _parse_status_page(self, data: str) -> tuple[str, int]:
         parts = data.split(':')
-        return parts[3] if len(parts) > 3 else self.default_filter
+        status = parts[3] if len(parts) > 3 else self.default_filter
+        page = 0
+        if len(parts) > 4:
+            try:
+                page = max(0, int(parts[4]))
+            except ValueError:
+                page = 0
+        return status, page
 
     def _extract_user_id(self, data: str) -> int:
         try:
@@ -40,8 +49,8 @@ class AdminUsersHandler:
         except (ValueError, IndexError):
             return 0
 
-    def _build_list_callback(self, status: str) -> str:
-        return f"admin:users:list:{status}"
+    def _build_list_callback(self, status: str, page: int = 0) -> str:
+        return f"admin:users:list:{status}:{page}"
     
     @log_async_exceptions
     async def show_users_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -49,33 +58,65 @@ class AdminUsersHandler:
         query = update.callback_query
         await query.answer()
         
-        # Формат: admin:users:list:<status>
-        status_filter = self._parse_filter(query.data)
+        status_filter, page = self._parse_status_page(query.data)
         logger.info(
             "Админ %s открыл список пользователей (%s)",
             describe_user(update.effective_user),
             status_filter,
+            extra={"action": "list_users", "result": "success", "status": status_filter},
         )
         
         users = await self.admin_repo.get_all_users(status_filter)
+        total = len(users)
+        max_page = max(0, (total - 1) // self.page_size) if total else 0
+        page = min(page, max_page)
+        start = page * self.page_size
+        end = start + self.page_size
+        page_slice = users[start:end]
         
         if not users:
             message = f"📋 Нет пользователей со статусом: {status_filter}"
             keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="admin:back")]]
+            logger.info(
+                "Админ %s открыл пустой список пользователей (%s)",
+                describe_user(update.effective_user),
+                status_filter,
+                extra={"action": "list_users", "result": "empty", "status": status_filter},
+            )
         else:
-            message = f"👥 <b>Пользователи ({status_filter})</b>\n\n"
+            message = (
+                f"👥 <b>Пользователи ({status_filter})</b>\n"
+                f"Показано {start + 1}-{min(end, total)} из {total}\n"
+            )
             
             keyboard = []
-            for user in users[:10]:  # Показываем первых 10
+            for user in page_slice:
                 user_text = f"{user.get('full_name', 'Нет имени')} (@{user.get('username', 'нет')})"
                 user_id = user.get('id')
                 
                 keyboard.append([
                     InlineKeyboardButton(
                         user_text,
-                        callback_data=f"admin:users:details:{status_filter}:{user_id}"
+                        callback_data=f"admin:users:details:{status_filter}:{page}:{user_id}"
                     )
                 ])
+            nav_row = []
+            if page > 0:
+                nav_row.append(
+                    InlineKeyboardButton(
+                        "⬅️ Назад",
+                        callback_data=self._build_list_callback(status_filter, page - 1),
+                    )
+                )
+            if page < max_page:
+                nav_row.append(
+                    InlineKeyboardButton(
+                        "➡️ Далее",
+                        callback_data=self._build_list_callback(status_filter, page + 1),
+                    )
+                )
+            if nav_row:
+                keyboard.append(nav_row)
             
             # Фильтры
             filters = [
@@ -85,17 +126,24 @@ class AdminUsersHandler:
             ]
             keyboard.append(filters)
             keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="admin:back")])
+            logger.info(
+                "Админ %s просматривает %s пользователей (%s показано)",
+                describe_user(update.effective_user),
+                status_filter,
+                len(page_slice),
+                extra={
+                    "action": "list_users",
+                    "result": "success",
+                    "status": status_filter,
+                    "displayed": len(page_slice),
+                },
+            )
         
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             text=message,
             reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='HTML'
-        )
-        logger.info(
-            "Админ %s просматривает пользователя id=%s (статус=%s)",
-            describe_user(query.from_user),
-            user_id,
-            user.get('status', status_filter),
+            parse_mode='HTML',
         )
     
     @log_async_exceptions
@@ -104,42 +152,61 @@ class AdminUsersHandler:
         query = update.callback_query
         await query.answer()
         
-        status_filter = self._parse_filter(query.data)
+        status_filter, page = self._parse_status_page(query.data)
         user_id = self._extract_user_id(query.data)
         if not user_id:
             await query.answer("❌ Пользователь не найден", show_alert=True)
             return
 
-        await self._render_user_details(query, user_id, status_filter)
+        logger.info(
+            "Админ %s открыл карточку пользователя #%s (filter=%s)",
+            describe_user(update.effective_user),
+            user_id,
+            status_filter,
+            extra={
+                "action": "open_user_card",
+                "result": "success",
+                "target_user_id": user_id,
+                "status": status_filter,
+            },
+        )
+        await self._render_user_details(query, update.effective_user, user_id, status_filter, page)
 
     async def _render_user_details(
         self,
         query,
+        actor,
         user_id: int,
         status_filter: str,
+        page: int,
     ):
-        user_query = "SELECT * FROM users WHERE id = %s"
-        user = await self.admin_repo.db.execute_with_retry(
-            user_query, params=(user_id,), fetchone=True
-        )
-        
+        user = await self.admin_repo.get_user_by_id(user_id)
         if not user:
-            await query.edit_message_text("❌ Пользователь не найден")
+            await safe_edit_message(query, text="❌ Пользователь не найден")
             return
         
         role_name = user.get('role') or role_name_from_id(user.get('role_id'))
+        username = user.get('username')
+        username_line = f"@{username}" if username else "—"
+        extension = user.get('extension') or "—"
+        created_at = user.get('created_at')
+        if hasattr(created_at, "strftime"):
+            created_str = created_at.strftime("%d.%m.%Y %H:%M")
+        else:
+            created_str = created_at or "—"
         
         message = (
             f"👤 <b>Пользователь #{user_id}</b>\n\n"
             f"Имя: {user.get('full_name', 'Не указано')}\n"
-            f"Username: @{user.get('username', 'нет')}\n"
-            f"Extension: {user.get('extension', 'нет')}\n"
+            f"Username: {username_line}\n"
+            f"Extension: {extension}\n"
             f"Роль: <b>{role_name}</b>\n"
             f"Статус: <b>{user.get('status', 'pending')}</b>\n"
+            f"Регистрация: {created_str}\n"
         )
         
         keyboard = []
-        base_callback_suffix = f"{status_filter}:{user_id}"
+        base_callback_suffix = f"{status_filter}:{page}:{user_id}"
         
         if user.get('status') == 'pending':
             keyboard.append([
@@ -154,18 +221,44 @@ class AdminUsersHandler:
             keyboard.append([
                 InlineKeyboardButton("🔓 Unblock", callback_data=f"admin:users:unblock:{base_callback_suffix}")
             ])
+
+        can_promote_admin = False
+        if actor and user.get('status') == 'approved' and role_name == 'operator':
+            can_promote_admin = await self.permissions.can_promote(
+                actor.id,
+                'admin',
+                actor.username,
+            )
+        if can_promote_admin:
+            keyboard.append([
+                InlineKeyboardButton(
+                    "⬆️ Назначить админом",
+                    callback_data=f"admin:admins:promote_admin:{user_id}"
+                )
+            ])
+
+        keyboard.append([
+            InlineKeyboardButton(
+                "🔄 Обновить",
+                callback_data=f"admin:users:details:{status_filter}:{page}:{user_id}"
+            )
+        ])
         
         keyboard.append([
             InlineKeyboardButton(
                 "◀️ К списку",
-                callback_data=self._build_list_callback(status_filter)
+                callback_data=self._build_list_callback(status_filter, page)
             )
         ])
+        keyboard.append([
+            InlineKeyboardButton("🏠 В панель", callback_data="admin:back")
+        ])
         
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             text=message,
             reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='HTML'
+            parse_mode='HTML',
         )
     
     @log_async_exceptions
@@ -174,9 +267,8 @@ class AdminUsersHandler:
         query = update.callback_query
         await query.answer()
         
-        parts = query.data.split(':')
-        status_filter = parts[3] if len(parts) > 3 else self.default_filter
-        user_id = int(parts[-1])
+        status_filter, page = self._parse_status_page(query.data)
+        user_id = self._extract_user_id(query.data)
         actor_id = update.effective_user.id
         
         # Проверяем права
@@ -187,6 +279,7 @@ class AdminUsersHandler:
                 "Попытка approve без прав: %s -> target_id=%s",
                 describe_user(update.effective_user),
                 user_id,
+                extra={"action": "approve_user", "result": "permission_denied", "target_user_id": user_id},
             )
             return
         
@@ -196,7 +289,7 @@ class AdminUsersHandler:
         if success:
             # Получаем данные пользователя для уведомления
             user = await self.admin_repo.db.execute_with_retry(
-                "SELECT telegram_id, username FROM users WHERE id = %s",
+                "SELECT telegram_id, username FROM users WHERE user_id = %s",
                 params=(user_id,), fetchone=True
             )
             
@@ -206,14 +299,15 @@ class AdminUsersHandler:
                     update.effective_user.full_name
                 )
             
-            await query.edit_message_text(
-                "✅ Пользователь успешно одобрен. Теперь он может пользоваться ботом.",
+            await safe_edit_message(
+                query,
+                text="✅ Пользователь успешно одобрен. Теперь он может пользоваться ботом.",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton(
                         "◀️ К списку",
-                        callback_data=self._build_list_callback(status_filter)
+                        callback_data=self._build_list_callback(status_filter, page)
                     )
-                ]])
+                ]]),
             )
         else:
             await query.answer("❌ Ошибка при утверждении", show_alert=True)
@@ -222,6 +316,7 @@ class AdminUsersHandler:
             describe_user(update.effective_user),
             user_id,
             success,
+            extra={"action": "approve_user", "result": "success" if success else "error", "target_user_id": user_id},
         )
     
     @log_async_exceptions
@@ -230,9 +325,8 @@ class AdminUsersHandler:
         query = update.callback_query
         await query.answer()
         
-        parts = query.data.split(':')
-        status_filter = parts[3] if len(parts) > 3 else self.default_filter
-        user_id = int(parts[-1])
+        status_filter, page = self._parse_status_page(query.data)
+        user_id = self._extract_user_id(query.data)
         actor_id = update.effective_user.id
         
         can_approve = await self.permissions.can_approve(actor_id, update.effective_user.username)
@@ -242,20 +336,22 @@ class AdminUsersHandler:
                 "Попытка decline без прав: %s -> target_id=%s",
                 describe_user(update.effective_user),
                 user_id,
+                extra={"action": "decline_user", "result": "permission_denied", "target_user_id": user_id},
             )
             return
         
         success = await self.admin_repo.decline_user(user_id, actor_id)
         
         if success:
-            await query.edit_message_text(
-                f"❌ Заявка #{user_id} отклонена",
+            await safe_edit_message(
+                query,
+                text=f"❌ Заявка #{user_id} отклонена",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton(
                         "◀️ К списку",
-                        callback_data=self._build_list_callback(status_filter)
+                        callback_data=self._build_list_callback(status_filter, page)
                     )
-                ]])
+                ]]),
             )
         else:
             await query.answer("❌ Ошибка", show_alert=True)
@@ -264,15 +360,15 @@ class AdminUsersHandler:
             describe_user(update.effective_user),
             user_id,
             success,
+            extra={"action": "decline_user", "result": "success" if success else "error", "target_user_id": user_id},
         )
     
     @log_async_exceptions
     async def handle_block(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Блокирует пользователя."""
         query = update.callback_query
-        parts = query.data.split(':')
-        status_filter = parts[3] if len(parts) > 3 else self.default_filter
-        user_id = int(parts[-1])
+        status_filter, page = self._parse_status_page(query.data)
+        user_id = self._extract_user_id(query.data)
         actor_id = update.effective_user.id
         
         can_manage = await self.permissions.can_approve(actor_id, update.effective_user.username)
@@ -282,6 +378,7 @@ class AdminUsersHandler:
                 "Попытка блокировки без прав: %s -> target_id=%s",
                 describe_user(update.effective_user),
                 user_id,
+                extra={"action": "block_user", "result": "permission_denied", "target_user_id": user_id},
             )
             return
         
@@ -289,7 +386,7 @@ class AdminUsersHandler:
         
         if success:
             await query.answer("🚫 Пользователь заблокирован. Он больше не сможет пользоваться ботом.", show_alert=True)
-            await self._render_user_details(query, user_id, status_filter)
+            await self._render_user_details(query, update.effective_user, user_id, status_filter, page)
         else:
             await query.answer("❌ Ошибка", show_alert=True)
         logger.info(
@@ -297,15 +394,15 @@ class AdminUsersHandler:
             describe_user(update.effective_user),
             user_id,
             success,
+            extra={"action": "block_user", "result": "success" if success else "error", "target_user_id": user_id},
         )
     
     @log_async_exceptions
     async def handle_unblock(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Разблокирует пользователя."""
         query = update.callback_query
-        parts = query.data.split(':')
-        status_filter = parts[3] if len(parts) > 3 else self.default_filter
-        user_id = int(parts[-1])
+        status_filter, page = self._parse_status_page(query.data)
+        user_id = self._extract_user_id(query.data)
         actor_id = update.effective_user.id
         
         can_manage = await self.permissions.can_approve(actor_id, update.effective_user.username)
@@ -315,6 +412,7 @@ class AdminUsersHandler:
                 "Попытка разблокировки без прав: %s -> target_id=%s",
                 describe_user(update.effective_user),
                 user_id,
+                extra={"action": "unblock_user", "result": "permission_denied", "target_user_id": user_id},
             )
             return
         
@@ -322,7 +420,7 @@ class AdminUsersHandler:
         
         if success:
             await query.answer("✅ Пользователь разблокирован и снова активен.", show_alert=True)
-            await self._render_user_details(query, user_id, status_filter)
+            await self._render_user_details(query, update.effective_user, user_id, status_filter, page)
         else:
             await query.answer("❌ Ошибка", show_alert=True)
         logger.info(
@@ -330,6 +428,7 @@ class AdminUsersHandler:
             describe_user(update.effective_user),
             user_id,
             success,
+            extra={"action": "unblock_user", "result": "success" if success else "error", "target_user_id": user_id},
         )
 
 

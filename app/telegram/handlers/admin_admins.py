@@ -14,6 +14,7 @@ from app.logging_config import get_watchdog_logger
 from app.utils.error_handlers import log_async_exceptions
 from app.core.roles import role_name_from_id
 from app.telegram.utils.logging import describe_user
+from app.telegram.utils.messages import safe_edit_message
 
 logger = get_watchdog_logger(__name__)
 
@@ -31,6 +32,28 @@ class AdminAdminsHandler:
         self.permissions = permissions
         self.notifications = notifications
         self._candidates_limit = 10
+        self._page_size = 10
+
+    def _parse_list_page(self, data: str) -> int:
+        parts = data.split(":")
+        if len(parts) > 3:
+            try:
+                return max(0, int(parts[3]))
+            except ValueError:
+                return 0
+        return 0
+
+    def _parse_page_from_data(self, data: str) -> int:
+        parts = data.split(":")
+        if len(parts) > 4 and parts[-2].isdigit():
+            return max(0, int(parts[-2]))
+        return 0
+
+    def _build_list_callback(self, page: int = 0) -> str:
+        return f"admin:admins:list:{page}"
+
+    def _build_details_callback(self, user_id: int, page: int = 0) -> str:
+        return f"admin:admins:details:{page}:{user_id}"
 
     @log_async_exceptions
     async def show_admins_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -40,26 +63,55 @@ class AdminAdminsHandler:
         logger.info(
             "Админ %s открыл список администраторов",
             describe_user(update.effective_user),
+            extra={"action": "open_admin_list", "result": "success"},
         )
         admins = await self.admin_repo.get_admins()
-        message = "👑 <b>Администраторы</b>\n\n"
+        page = self._parse_list_page(query.data)
+        total = len(admins)
+        max_page = max(0, (total - 1) // self._page_size) if total else 0
+        page = min(page, max_page)
+        start = page * self._page_size
+        end = start + self._page_size
+        page_items = admins[start:end]
+        message = "👑 <b>Администраторы</b>\n"
         keyboard: List[List[InlineKeyboardButton]] = []
 
         if not admins:
             message += "Список администраторов пуст."
         else:
+            message += f"Показано {start + 1}-{min(end, total)} из {total}\n\n"
             for admin in admins:
                 message += self._format_admin_line(admin)
-            for admin in admins[: self._candidates_limit]:
+            for admin in page_items:
                 keyboard.append(
                     [
                         InlineKeyboardButton(
                             admin.get("full_name") or admin.get("username") or "Без имени",
-                            callback_data=f"admin:admins:details:{admin['id']}",
+                            callback_data=self._build_details_callback(admin["id"], page),
                         )
                     ]
                 )
 
+        keyboard.append(
+            [InlineKeyboardButton("🔄 Обновить", callback_data=self._build_list_callback(page))]
+        )
+        nav_row: List[InlineKeyboardButton] = []
+        if page > 0:
+            nav_row.append(
+                InlineKeyboardButton(
+                    "⬅️ Назад",
+                    callback_data=self._build_list_callback(page - 1),
+                )
+            )
+        if page < max_page:
+            nav_row.append(
+                InlineKeyboardButton(
+                    "➡️ Далее",
+                    callback_data=self._build_list_callback(page + 1),
+                )
+            )
+        if nav_row:
+            keyboard.append(nav_row)
         keyboard.append(
             [
                 InlineKeyboardButton(
@@ -72,7 +124,8 @@ class AdminAdminsHandler:
             [InlineKeyboardButton("◀️ Назад", callback_data="admin:back")]
         )
 
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             text=message,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML",
@@ -86,6 +139,7 @@ class AdminAdminsHandler:
         logger.info(
             "Админ %s просматривает кандидатов для назначения",
             describe_user(update.effective_user),
+            extra={"action": "list_admin_candidates", "result": "success"},
         )
         candidates = await self.admin_repo.get_admin_candidates(
             limit=self._candidates_limit
@@ -94,6 +148,7 @@ class AdminAdminsHandler:
         if not candidates:
             message = "✅ Все утверждённые пользователи уже имеют роль администратора."
             keyboard = [
+                [InlineKeyboardButton("🔄 Обновить", callback_data="admin:admins:candidates")],
                 [InlineKeyboardButton("◀️ Назад", callback_data="admin:admins:list")]
             ]
         else:
@@ -105,17 +160,23 @@ class AdminAdminsHandler:
                 [
                     InlineKeyboardButton(
                         candidate.get("full_name") or candidate.get("username") or "Без имени",
-                        callback_data=f"admin:admins:promote_admin:{candidate['id']}",
+                        callback_data=self._build_details_callback(candidate["id"], 0),
                     )
                 ]
                 for candidate in candidates
             ]
             keyboard.append(
+                [InlineKeyboardButton("🔄 Обновить", callback_data="admin:admins:candidates")]
+            )
+            keyboard.append(
                 [InlineKeyboardButton("◀️ Назад", callback_data="admin:admins:list")]
             )
 
-        await query.edit_message_text(
-            message, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML"
+        await safe_edit_message(
+            query,
+            text=message,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML",
         )
 
     @log_async_exceptions
@@ -124,6 +185,7 @@ class AdminAdminsHandler:
         await query.answer()
 
         user_id = self._extract_user_id(query.data)
+        page = self._parse_page_from_data(query.data)
         if not user_id:
             await query.answer("Некорректный пользователь", show_alert=True)
             return
@@ -132,7 +194,7 @@ class AdminAdminsHandler:
             describe_user(update.effective_user),
             user_id,
         )
-        await self._render_admin_details(query, update.effective_user, user_id)
+        await self._render_admin_details(query, update.effective_user, user_id, page)
 
     @log_async_exceptions
     async def promote_to_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -141,6 +203,7 @@ class AdminAdminsHandler:
 
         actor = update.effective_user
         user_id = self._extract_user_id(query.data)
+        page = self._parse_page_from_data(query.data)
 
         if not await self.permissions.can_promote(actor.id, "admin", actor.username):
             await query.answer("Недостаточно прав", show_alert=True)
@@ -148,6 +211,7 @@ class AdminAdminsHandler:
                 "Попытка назначить администратора без прав: %s -> target_id=%s",
                 describe_user(actor),
                 user_id,
+                extra={"action": "promote_admin", "result": "permission_denied", "target_user_id": user_id},
             )
             return
 
@@ -155,18 +219,8 @@ class AdminAdminsHandler:
 
         if success:
             await self._notify_promotion(user_id, "admin", actor.full_name)
-            await query.edit_message_text(
-                "✅ Пользователь назначен администратором.",
-                reply_markup=InlineKeyboardMarkup(
-                    [
-                        [
-                            InlineKeyboardButton(
-                                "◀️ К списку", callback_data="admin:admins:list"
-                            )
-                        ]
-                    ]
-                ),
-            )
+            await query.answer("✅ Пользователь назначен администратором", show_alert=False)
+            await self._render_admin_details(query, actor, user_id, page)
         else:
             await query.answer("Не удалось обновить роль", show_alert=True)
         logger.info(
@@ -174,6 +228,7 @@ class AdminAdminsHandler:
             describe_user(actor),
             user_id,
             success,
+            extra={"action": "promote_admin", "result": "success" if success else "error", "target_user_id": user_id},
         )
 
     @log_async_exceptions
@@ -183,6 +238,7 @@ class AdminAdminsHandler:
 
         actor = update.effective_user
         user_id = self._extract_user_id(query.data)
+        page = self._parse_page_from_data(query.data)
 
         if not await self.permissions.can_promote(
             actor.id, "superadmin", actor.username
@@ -192,6 +248,7 @@ class AdminAdminsHandler:
                 "Попытка назначить супер-админа без прав: %s -> target_id=%s",
                 describe_user(actor),
                 user_id,
+                extra={"action": "promote_superadmin", "result": "permission_denied", "target_user_id": user_id},
             )
             return
 
@@ -201,7 +258,7 @@ class AdminAdminsHandler:
 
         if success:
             await self._notify_promotion(user_id, "superadmin", actor.full_name)
-            await self._refresh_details(update, query, user_id)
+            await self._render_admin_details(query, actor, user_id, page)
         else:
             await query.answer("Не удалось обновить роль", show_alert=True)
         logger.info(
@@ -209,6 +266,7 @@ class AdminAdminsHandler:
             describe_user(actor),
             user_id,
             success,
+            extra={"action": "promote_superadmin", "result": "success" if success else "error", "target_user_id": user_id},
         )
 
     @log_async_exceptions
@@ -218,6 +276,7 @@ class AdminAdminsHandler:
 
         actor = update.effective_user
         user_id = self._extract_user_id(query.data)
+        page = self._parse_page_from_data(query.data)
         user = await self.admin_repo.get_user_by_id(user_id)
 
         if not user:
@@ -232,13 +291,14 @@ class AdminAdminsHandler:
                 "Попытка понижения admin->admin без прав: %s -> target_id=%s",
                 describe_user(actor),
                 user_id,
+                extra={"action": "demote_to_admin", "result": "permission_denied", "target_user_id": user_id},
             )
             return
 
         success = await self.admin_repo.demote_user(user_id, "admin", actor.id)
 
         if success:
-            await self._refresh_details(update, query, user_id)
+            await self._render_admin_details(query, actor, user_id, page)
         else:
             await query.answer("Не удалось изменить роль", show_alert=True)
         logger.info(
@@ -246,6 +306,7 @@ class AdminAdminsHandler:
             describe_user(actor),
             user_id,
             success,
+            extra={"action": "demote_to_admin", "result": "success" if success else "error", "target_user_id": user_id},
         )
 
     @log_async_exceptions
@@ -255,6 +316,7 @@ class AdminAdminsHandler:
 
         actor = update.effective_user
         user_id = self._extract_user_id(query.data)
+        page = self._parse_page_from_data(query.data)
         user = await self.admin_repo.get_user_by_id(user_id)
 
         if not user:
@@ -269,13 +331,14 @@ class AdminAdminsHandler:
                 "Попытка понижения до оператора без прав: %s -> target_id=%s",
                 describe_user(actor),
                 user_id,
+                extra={"action": "demote_to_operator", "result": "permission_denied", "target_user_id": user_id},
             )
             return
 
         success = await self.admin_repo.demote_user(user_id, "operator", actor.id)
 
         if success:
-            await self._refresh_details(update, query, user_id)
+            await self._render_admin_details(query, actor, user_id, page)
         else:
             await query.answer("Не удалось изменить роль", show_alert=True)
         logger.info(
@@ -283,20 +346,23 @@ class AdminAdminsHandler:
             describe_user(actor),
             user_id,
             success,
+            extra={"action": "demote_to_operator", "result": "success" if success else "error", "target_user_id": user_id},
         )
 
     async def _refresh_details(self, update: Update, query, user_id: int):
-        await self._render_admin_details(query, update.effective_user, user_id)
+        page = self._parse_page_from_data(query.data)
+        await self._render_admin_details(query, update.effective_user, user_id, page)
 
     async def _render_admin_details(
         self,
         query,
         actor,
         user_id: int,
+        page: int = 0,
     ):
         user = await self.admin_repo.get_user_by_id(user_id)
         if not user:
-            await query.edit_message_text("❌ Пользователь не найден")
+            await safe_edit_message(query, text="❌ Пользователь не найден")
             return
 
         role_name = user.get("role") or role_name_from_id(user.get("role_id"))
@@ -308,12 +374,22 @@ class AdminAdminsHandler:
             f"Статус: <b>{user.get('status')}</b>\n"
         )
 
-        keyboard = await self._build_admin_actions(actor, user)
+        keyboard = await self._build_admin_actions(actor, user, page)
         keyboard.append(
-            [InlineKeyboardButton("◀️ К списку", callback_data="admin:admins:list")]
+            [
+                InlineKeyboardButton(
+                    "🔄 Обновить",
+                    callback_data=self._build_details_callback(user_id, page),
+                )
+            ]
         )
+        keyboard.append(
+            [InlineKeyboardButton("◀️ К списку", callback_data=self._build_list_callback(page))]
+        )
+        keyboard.append([InlineKeyboardButton("🏠 В панель", callback_data="admin:back")])
 
-        await query.edit_message_text(
+        await safe_edit_message(
+            query,
             text=message,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML",
@@ -323,6 +399,7 @@ class AdminAdminsHandler:
         self,
         actor,
         target: Dict[str, Optional[str]],
+        page: int,
     ) -> List[List[InlineKeyboardButton]]:
         role_name = target.get("role") or role_name_from_id(target.get("role_id"))
         keyboard: List[List[InlineKeyboardButton]] = []
@@ -335,7 +412,7 @@ class AdminAdminsHandler:
                     [
                         InlineKeyboardButton(
                             "⭐ Сделать супер-админом",
-                            callback_data=f"admin:admins:promote_super:{target['id']}",
+                            callback_data=f"admin:admins:promote_super:{page}:{target['id']}",
                         )
                     ]
                 )
@@ -346,7 +423,7 @@ class AdminAdminsHandler:
                     [
                         InlineKeyboardButton(
                             "⬇️ В операторов",
-                            callback_data=f"admin:admins:demote_operator:{target['id']}",
+                            callback_data=f"admin:admins:demote_operator:{page}:{target['id']}",
                         )
                     ]
                 )
@@ -358,7 +435,20 @@ class AdminAdminsHandler:
                     [
                         InlineKeyboardButton(
                             "⬇️ Понизить до admin",
-                            callback_data=f"admin:admins:demote_admin:{target['id']}",
+                            callback_data=f"admin:admins:demote_admin:{page}:{target['id']}",
+                        )
+                    ]
+                )
+
+        elif role_name == "operator":
+            if await self.permissions.can_promote(
+                actor.id, "admin", actor.username
+            ):
+                keyboard.append(
+                    [
+                        InlineKeyboardButton(
+                            "⬆️ Назначить админом",
+                            callback_data=f"admin:admins:promote_admin:{target['id']}",
                         )
                     ]
                 )
@@ -379,7 +469,7 @@ class AdminAdminsHandler:
         if not hasattr(self.notifications, "notify_promotion"):
             return
         user = await self.admin_repo.db.execute_with_retry(
-            "SELECT telegram_id FROM users WHERE id = %s",
+            "SELECT telegram_id FROM users WHERE user_id = %s",
             params=(user_id,),
             fetchone=True,
         )

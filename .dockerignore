@@ -4,5 +4,12 @@ __pycache__
 *.pyd
 .Python
 env/
+venv/
+ENV/
+.venv/
+.venv*/
+.pytest_cache/
+logs/
+*.log
 build/
 dist/

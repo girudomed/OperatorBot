@@ -52,7 +52,6 @@ class LMCalculatorWorker:
         query = """
         SELECT 
             ch.history_id,
-            ch.id,
             ch.call_date,
             ch.talk_duration,
             ch.call_type,
@@ -161,7 +160,6 @@ class LMCalculatorWorker:
         history_query = f"""
         SELECT 
             ch.history_id,
-            ch.id,
             ch.call_date,
             ch.talk_duration,
             ch.call_type,
@@ -244,7 +242,6 @@ class LMCalculatorWorker:
         query = """
         SELECT 
             ch.history_id,
-            ch.id,
             ch.call_date,
             ch.talk_duration,
             ch.call_type,

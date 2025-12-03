@@ -40,7 +40,7 @@ class AdminRepository:
     async def get_pending_users(self) -> List[Dict[str, Any]]:
         """Получает список пользователей со статусом pending."""
         query = """
-            SELECT id, telegram_id, username, full_name, extension, 
+            SELECT user_id AS id, telegram_id, username, full_name, extension,
                    role_id, status, created_at
             FROM users
             WHERE status = 'pending'
@@ -53,7 +53,7 @@ class AdminRepository:
     async def get_user_by_telegram_id(self, telegram_id: int) -> Optional[Dict[str, Any]]:
         """Получает пользователя по telegram_id."""
         query = """
-            SELECT id, telegram_id, username, full_name, extension,
+            SELECT user_id AS id, telegram_id, username, full_name, extension,
                    role_id, status, approved_by, blocked_at, operator_id
             FROM users
             WHERE telegram_id = %s
@@ -67,10 +67,10 @@ class AdminRepository:
     async def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
         """Получает пользователя по внутреннему ID."""
         query = """
-            SELECT id, telegram_id, username, full_name, extension,
-                   role_id, status, approved_by, blocked_at, operator_id
+            SELECT user_id AS id, telegram_id, username, full_name, extension,
+                   role_id, status, approved_by, blocked_at, operator_id, created_at
             FROM users
-            WHERE id = %s
+            WHERE user_id = %s
             LIMIT 1
         """
         row = await self.db.execute_with_retry(
@@ -88,7 +88,7 @@ class AdminRepository:
             approver_id: Telegram ID утверждающего админа
         """
         # Получаем ID утверждающего из users
-        approver_query = "SELECT id FROM users WHERE telegram_id = %s"
+        approver_query = "SELECT user_id AS id FROM users WHERE telegram_id = %s"
         approver_row = await self.db.execute_with_retry(
             approver_query, params=(approver_id,), fetchone=True
         )
@@ -101,9 +101,9 @@ class AdminRepository:
         
         # Обновляем пользователя
         query = """
-            UPDATE users 
+            UPDATE users
             SET status = 'approved', approved_by = %s
-            WHERE id = %s AND status = 'pending'
+            WHERE user_id = %s AND status = 'pending'
         """
         result = await self.db.execute_with_retry(
             query, params=(approver_db_id, user_id), commit=True
@@ -123,7 +123,7 @@ class AdminRepository:
     @log_async_exceptions
     async def decline_user(self, user_id: int, decliner_id: int, reason: Optional[str] = None) -> bool:
         """Отклоняет заявку пользователя (удаляет или блокирует)."""
-        decliner_query = "SELECT id FROM users WHERE telegram_id = %s"
+        decliner_query = "SELECT user_id AS id FROM users WHERE telegram_id = %s"
         decliner_row = await self.db.execute_with_retry(
             decliner_query, params=(decliner_id,), fetchone=True
         )
@@ -135,9 +135,9 @@ class AdminRepository:
         
         # Блокируем вместо удаления
         query = """
-            UPDATE users 
+            UPDATE users
             SET status = 'blocked', blocked_at = NOW()
-            WHERE id = %s
+            WHERE user_id = %s
         """
         await self.db.execute_with_retry(query, params=(user_id,), commit=True)
         
@@ -154,7 +154,7 @@ class AdminRepository:
     @log_async_exceptions
     async def block_user(self, user_id: int, blocker_id: int, reason: Optional[str] = None) -> bool:
         """Блокирует пользователя."""
-        blocker_query = "SELECT id FROM users WHERE telegram_id = %s"
+        blocker_query = "SELECT user_id AS id FROM users WHERE telegram_id = %s"
         blocker_row = await self.db.execute_with_retry(
             blocker_query, params=(blocker_id,), fetchone=True
         )
@@ -165,9 +165,9 @@ class AdminRepository:
         blocker_db_id = blocker_row['id']
         
         query = """
-            UPDATE users 
+            UPDATE users
             SET status = 'blocked', blocked_at = NOW()
-            WHERE id = %s
+            WHERE user_id = %s
         """
         await self.db.execute_with_retry(query, params=(user_id,), commit=True)
         
@@ -183,7 +183,7 @@ class AdminRepository:
     @log_async_exceptions
     async def unblock_user(self, user_id: int, unblocker_id: int) -> bool:
         """Разблокирует пользователя."""
-        unblocker_query = "SELECT id FROM users WHERE telegram_id = %s"
+        unblocker_query = "SELECT user_id AS id FROM users WHERE telegram_id = %s"
         unblocker_row = await self.db.execute_with_retry(
             unblocker_query, params=(unblocker_id,), fetchone=True
         )
@@ -194,9 +194,9 @@ class AdminRepository:
         unblocker_db_id = unblocker_row['id']
         
         query = """
-            UPDATE users 
+            UPDATE users
             SET status = 'approved', blocked_at = NULL
-            WHERE id = %s
+            WHERE user_id = %s
         """
         await self.db.execute_with_retry(query, params=(user_id,), commit=True)
         
@@ -223,7 +223,7 @@ class AdminRepository:
             new_role: Новая роль ('admin' или 'superadmin')
             promoter_id: Telegram ID повышающего
         """
-        promoter_query = "SELECT id FROM users WHERE telegram_id = %s"
+        promoter_query = "SELECT user_id AS id FROM users WHERE telegram_id = %s"
         promoter_row = await self.db.execute_with_retry(
             promoter_query, params=(promoter_id,), fetchone=True
         )
@@ -239,9 +239,9 @@ class AdminRepository:
             return False
         
         query = """
-            UPDATE users 
+            UPDATE users
             SET role_id = %s
-            WHERE id = %s AND status = 'approved'
+            WHERE user_id = %s AND status = 'approved'
         """
         await self.db.execute_with_retry(
             query, params=(new_role_id, user_id), commit=True
@@ -265,7 +265,7 @@ class AdminRepository:
         demoter_id: int
     ) -> bool:
         """Понижает роль пользователя."""
-        demoter_query = "SELECT id FROM users WHERE telegram_id = %s"
+        demoter_query = "SELECT user_id AS id FROM users WHERE telegram_id = %s"
         demoter_row = await self.db.execute_with_retry(
             demoter_query, params=(demoter_id,), fetchone=True
         )
@@ -280,7 +280,7 @@ class AdminRepository:
             logger.warning(f"Unknown role '{new_role}' for demotion")
             return False
         
-        query = "UPDATE users SET role_id = %s WHERE id = %s"
+        query = "UPDATE users SET role_id = %s WHERE user_id = %s"
         await self.db.execute_with_retry(
             query, params=(new_role_id, user_id), commit=True
         )
@@ -298,7 +298,7 @@ class AdminRepository:
     async def get_admins(self) -> List[Dict[str, Any]]:
         """Получает список всех админов и супер-админов."""
         query = """
-            SELECT id, telegram_id, username, full_name, extension, role_id, status
+            SELECT user_id AS id, telegram_id, username, full_name, extension, role_id, status
             FROM users
             WHERE role_id IN (2, 3) AND status = 'approved'
             ORDER BY role_id DESC, full_name
@@ -314,7 +314,7 @@ class AdminRepository:
     ) -> List[Dict[str, Any]]:
         """Получает список утверждённых операторов для назначения админами."""
         query = """
-            SELECT id, telegram_id, username, full_name, extension,
+            SELECT user_id AS id, telegram_id, username, full_name, extension,
                    role_id, status
             FROM users
             WHERE status = 'approved' AND (role_id IS NULL OR role_id = %s)
@@ -333,7 +333,7 @@ class AdminRepository:
         """Получает всех пользователей с опциональным фильтром по статусу."""
         if status_filter:
             query = """
-                SELECT id, telegram_id, username, full_name, extension,
+                SELECT user_id AS id, telegram_id, username, full_name, extension,
                        role_id, status, created_at, approved_by
                 FROM users
                 WHERE status = %s
@@ -342,7 +342,7 @@ class AdminRepository:
             params = (status_filter,)
         else:
             query = """
-                SELECT id, telegram_id, username, full_name, extension,
+                SELECT user_id AS id, telegram_id, username, full_name, extension,
                        role_id, status, created_at, approved_by
                 FROM users
                 ORDER BY created_at DESC
@@ -351,6 +351,73 @@ class AdminRepository:
         
         rows = await self.db.execute_with_retry(
             query, params=params, fetchall=True
+        ) or []
+        return self._attach_role_names(rows)
+
+    @log_async_exceptions
+    async def get_users_counters(self) -> Dict[str, int]:
+        """Возвращает агрегированные счётчики пользователей по статусам и ролям."""
+        query = f"""
+            SELECT
+                COUNT(*) AS total_users,
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_users,
+                SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved_users,
+                SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked_users,
+                SUM(
+                    CASE
+                        WHEN status = 'approved' AND role_id IN (%s, %s) THEN 1
+                        ELSE 0
+                    END
+                ) AS admins_count,
+                SUM(
+                    CASE
+                        WHEN status = 'approved' AND (role_id IS NULL OR role_id = %s) THEN 1
+                        ELSE 0
+                    END
+                ) AS operators_count
+            FROM users
+        """
+        params = (
+            ROLE_NAME_TO_ID.get('admin'),
+            ROLE_NAME_TO_ID.get('superadmin'),
+            ROLE_NAME_TO_ID.get('operator'),
+        )
+        row = await self.db.execute_with_retry(query, params=params, fetchone=True) or {}
+        return {
+            'total_users': int(row.get('total_users') or 0),
+            'pending_users': int(row.get('pending_users') or 0),
+            'approved_users': int(row.get('approved_users') or 0),
+            'blocked_users': int(row.get('blocked_users') or 0),
+            'admins': int(row.get('admins_count') or 0),
+            'operators': int(row.get('operators_count') or 0),
+        }
+
+    @log_async_exceptions
+    async def get_users_for_promotion(
+        self,
+        target_role: str = "admin",
+        limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """
+        Возвращает список пользователей, которых можно повысить.
+
+        По умолчанию — все утверждённые операторы.
+        """
+        role_id = ROLE_NAME_TO_ID.get("operator")
+        if target_role == "superadmin":
+            role_id = ROLE_NAME_TO_ID.get("admin")
+
+        query = """
+            SELECT user_id AS id, telegram_id, username, full_name, extension, role_id, status, created_at
+            FROM users
+            WHERE status = 'approved' AND role_id = %s
+            ORDER BY created_at DESC
+            LIMIT %s
+        """
+        rows = await self.db.execute_with_retry(
+            query,
+            params=(role_id, limit),
+            fetchall=True,
         ) or []
         return self._attach_role_names(rows)
     
@@ -400,8 +467,8 @@ class AdminRepository:
                        a.username as actor_username,
                        t.username as target_username
                 FROM admin_action_logs l
-                LEFT JOIN users a ON l.actor_id = a.id
-                LEFT JOIN users t ON l.target_id = t.id
+                LEFT JOIN users a ON l.actor_id = a.user_id
+                LEFT JOIN users t ON l.target_id = t.user_id
                 WHERE l.actor_id = %s
                 ORDER BY l.created_at DESC
                 LIMIT %s
@@ -413,8 +480,8 @@ class AdminRepository:
                        a.username as actor_username,
                        t.username as target_username
                 FROM admin_action_logs l
-                LEFT JOIN users a ON l.actor_id = a.id
-                LEFT JOIN users t ON l.target_id = t.id
+                LEFT JOIN users a ON l.actor_id = a.user_id
+                LEFT JOIN users t ON l.target_id = t.user_id
                 ORDER BY l.created_at DESC
                 LIMIT %s
             """
