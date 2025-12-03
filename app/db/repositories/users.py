@@ -2,7 +2,7 @@
 Репозиторий для работы с пользователями и ролями.
 """
 
-from typing import Optional, Union
+from typing import Optional, Union, Dict
 
 from app.db.manager import DatabaseManager
 from app.db.models import UserRecord, RoleRecord
