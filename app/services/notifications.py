@@ -130,3 +130,11 @@ class NotificationsManager:
             logger.info(f"[КРОТ]: Все отчеты за день успешно отправлены.")
         except Exception as e:
             logger.error(f"[КРОТ]: Ошибка при отправке отчетов: {e}")
+
+
+# Backward compatibility
+class NotificationService(NotificationsManager):
+    """
+    Legacy alias for NotificationsManager.
+    """
+    pass

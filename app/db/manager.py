@@ -52,6 +52,10 @@ class DatabaseManager:
             await self.pool.wait_closed()
             self.pool = None
             logger.info("Пул соединений с БД закрыт.")
+    
+    async def close(self) -> None:
+        """Совместимость с прежним интерфейсом."""
+        await self.close_pool()
 
     @asynccontextmanager
     async def acquire(self):
