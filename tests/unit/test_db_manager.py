@@ -3,13 +3,14 @@ Unit tests for DatabaseManager.
 """
 
 import pytest
+import pytest_asyncio
 from unittest.mock import Mock, AsyncMock, patch
 from app.db.manager import DatabaseManager
 
 class TestDatabaseManager:
     """Тесты для DatabaseManager"""
     
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def db_manager(self):
         """Фикстура для DatabaseManager"""
         manager = DatabaseManager()

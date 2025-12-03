@@ -12,6 +12,7 @@ from app.db.manager import DatabaseManager
 from app.db.repositories.lm_repository import LMRepository
 from app.services.lm_service import LMService
 
+pytestmark = pytest.mark.integration
 
 @pytest.mark.asyncio
 class TestLMIntegration:
@@ -76,28 +77,10 @@ class TestLMIntegration:
         history_id = call_history['history_id']
         
         # Mock database responses for save operations
-        mock_db_manager.execute_with_retry.side_effect = [
-            # Batch save will call save_lm_value for each metric
-            # Each save_lm_value makes 2 calls: INSERT/UPDATE + SELECT
-            None, {'id': 1},   # Metric 1
-            None, {'id': 2},   # Metric 2
-            None, {'id': 3},   # Metric 3
-            None, {'id': 4},   # Metric 4
-            None, {'id': 5},   # Metric 5
-            None, {'id': 6},   # Metric 6
-            None, {'id': 7},   # Metric 7
-            None, {'id': 8},   # Metric 8
-            None, {'id': 9},   # Metric 9
-            None, {'id': 10},  # Metric 10
-            None, {'id': 11},  # Metric 11
-            None, {'id': 12},  # Metric 12
-            None, {'id': 13},  # Metric 13
-            None, {'id': 14},  # Metric 14
-            None, {'id': 15},  # Metric 15
-            None, {'id': 16},  # Metric 16
-            None, {'id': 17},  # Metric 17
-            None, {'id': 18},  # Metric 18
-        ]
+        responses = []
+        for i in range(18):
+            responses.extend([True, {'id': i + 1}])
+        mock_db_manager.execute_with_retry.side_effect = responses
         
         # Calculate all metrics
         saved_count = await lm_service.calculate_all_metrics(
@@ -127,7 +110,7 @@ class TestLMIntegration:
         # Mock save operations (simplified)
         save_responses = []
         for i in range(18):  # Expect ~18 metrics
-            save_responses.extend([None, {'id': i + 1}])
+            save_responses.extend([True, {'id': i + 1}])
         
         mock_db_manager.execute_with_retry.side_effect = save_responses
         

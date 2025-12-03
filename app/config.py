@@ -67,6 +67,8 @@ if not IS_CI_ENV and _get_bool(os.getenv("CHECK_ENV_VARS", "true"), True):
 
 # Конфигурация OpenAI
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+if IS_CI_ENV and not OPENAI_API_KEY:
+    OPENAI_API_KEY = "ci-test-key"
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
 
 OPENAI_COMPLETION_OPTIONS: Dict[str, Any] = {

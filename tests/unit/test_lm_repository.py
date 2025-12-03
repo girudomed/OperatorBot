@@ -27,7 +27,7 @@ class TestLMRepository:
         """Test saving a single LM value."""
         # Mock successful insert and fetch
         mock_db_manager.execute_with_retry.side_effect = [
-            None,  # INSERT/UPDATE result
+            True,  # INSERT/UPDATE result
             {'id': 100}  # SELECT result
         ]
         
@@ -47,7 +47,7 @@ class TestLMRepository:
     async def test_save_lm_value_with_json(self, lm_repo, mock_db_manager):
         """Test saving LM value with JSON data."""
         mock_db_manager.execute_with_retry.side_effect = [
-            None,
+            True,
             {'id': 101}
         ]
         
@@ -88,9 +88,9 @@ class TestLMRepository:
         """Test batch saving of LM values."""
         # Mock successful saves
         mock_db_manager.execute_with_retry.side_effect = [
-            None, {'id': 1},  # First metric
-            None, {'id': 2},  # Second metric
-            None, {'id': 3},  # Third metric
+            True, {'id': 1},  # First metric
+            True, {'id': 2},  # Second metric
+            True, {'id': 3},  # Third metric
         ]
         
         values = [
@@ -130,9 +130,9 @@ class TestLMRepository:
         """Test batch saving with some errors."""
         # Mock: first succeeds, second fails, third succeeds
         mock_db_manager.execute_with_retry.side_effect = [
-            None, {'id': 1},  # First succeeds
+            True, {'id': 1},  # First succeeds
             Exception("DB error"),  # Second fails
-            None, {'id': 3},  # Third succeeds
+            True, {'id': 3},  # Third succeeds
         ]
         
         values = [

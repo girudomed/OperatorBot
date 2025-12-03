@@ -28,7 +28,7 @@ class TestPermissionsManager:
     async def test_get_user_role(self, permissions, mock_db):
         """Тест получения роли пользователя."""
         mock_db.execute_with_retry.return_value = {
-            'role': 'admin',
+            'role_id': 2,
             'status': 'approved'
         }
         
@@ -56,7 +56,7 @@ class TestPermissionsManager:
     @pytest.mark.asyncio
     async def test_can_promote_superadmin_can_all(self, permissions, mock_db):
         """Тест что superadmin может повышать всех."""
-        mock_db.execute_with_retry.return_value = {'role': 'superadmin', 'status': 'approved'}
+        mock_db.execute_with_retry.return_value = {'role_id': 3, 'status': 'approved'}
         
         can_promote = await permissions.can_promote(123, 'admin')
         assert can_promote is True
@@ -67,7 +67,7 @@ class TestPermissionsManager:
     @pytest.mark.asyncio
     async def test_can_promote_admin_limited(self, permissions, mock_db):
         """Тест что admin не может повышать до superadmin."""
-        mock_db.execute_with_retry.return_value = {'role': 'admin', 'status': 'approved'}
+        mock_db.execute_with_retry.return_value = {'role_id': 2, 'status': 'approved'}
         
         can_promote = await permissions.can_promote(123, 'admin')
         assert can_promote is True
@@ -93,8 +93,8 @@ class TestAdminRepository:
     async def test_get_pending_users(self, admin_repo, mock_db):
         """Тест получения pending пользователей."""
         mock_db.execute_with_retry.return_value = [
-            {'id': 1, 'username': 'user1', 'status': 'pending'},
-            {'id': 2, 'username': 'user2', 'status': 'pending'}
+            {'id': 1, 'username': 'user1', 'status': 'pending', 'role_id': 1},
+            {'id': 2, 'username': 'user2', 'status': 'pending', 'role_id': 1}
         ]
         
         pending = await admin_repo.get_pending_users()
@@ -107,7 +107,8 @@ class TestAdminRepository:
         # Mock approver lookup
         mock_db.execute_with_retry.side_effect = [
             {'id': 10},  # approver DB id
-            True  # update result
+            True,        # update result
+            True         # log entry
         ]
         
         result = await admin_repo.approve_user(user_id=5, approver_id=999)
@@ -117,8 +118,8 @@ class TestAdminRepository:
     async def test_get_admins(self, admin_repo, mock_db):
         """Тест получения списка админов."""
         mock_db.execute_with_retry.return_value = [
-            {'id': 1, 'role': 'admin', 'username': 'admin1'},
-            {'id': 2, 'role': 'superadmin', 'username': 'super1'}
+            {'id': 1, 'role_id': 2, 'username': 'admin1'},
+            {'id': 2, 'role_id': 3, 'username': 'super1'}
         ]
         
         admins = await admin_repo.get_admins()

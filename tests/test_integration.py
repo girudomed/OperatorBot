@@ -2,17 +2,20 @@
 Интеграционные тесты для очереди задач и сервисов.
 """
 import pytest
+import pytest_asyncio
 import asyncio
 from unittest.mock import Mock, AsyncMock, patch
 from app.workers.task_worker import add_task, start_workers, TaskStatus, QueueFullError
 from app.services.reports import ReportService
 from app.db.manager import DatabaseManager
 
+pytestmark = pytest.mark.integration
+
 
 class TestQueueIntegration:
     """Интеграционные тесты для очереди задач."""
 
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def mock_application(self):
         """Мок экземпляра приложения с необходимыми атрибутами в bot_data."""
         app = Mock()

@@ -26,15 +26,13 @@ jobs:
     
     - name: Run mypy type checking
       run: |
-        mypy bot.py bot/ --ignore-missing-imports --no-strict-optional
+        mypy app/ --ignore-missing-imports --no-strict-optional
       continue-on-error: true
     
     - name: Run tests
       run: |
-        pytest tests/ -v --cov=. --cov-report=term-missing
+        pytest tests/ -v --cov=app --cov-report=term-missing
     
     - name: Check code compilation
       run: |
-        python -m py_compile bot.py
-        python -m py_compile bot/services/*.py
-        python -m py_compile bot/repositories/*.py
+        python -m compileall app

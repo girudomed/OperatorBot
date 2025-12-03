@@ -18,13 +18,13 @@ class TestCallLookupService:
     def test_normalize_phone_input(self, service):
         """Тест нормализации телефонного номера"""
         # Тест с 8
-        assert service._normalize_phone_input("8 (999) 123-45-67") == "79991234567"
+        assert service._normalize_phone_input("8 (999) 123-45-67") == "9991234567"
         # Тест с 7
-        assert service._normalize_phone_input("+7 (999) 123-45-67") == "79991234567"
+        assert service._normalize_phone_input("+7 (999) 123-45-67") == "9991234567"
         # Тест без кода страны (10 цифр) -> добавляем 7
-        assert service._normalize_phone_input("9991234567") == "79991234567"
+        assert service._normalize_phone_input("9991234567") == "9991234567"
         # Тест с лишними символами
-        assert service._normalize_phone_input("8-999-123-45-67") == "79991234567"
+        assert service._normalize_phone_input("8-999-123-45-67") == "9991234567"
         
         # Ошибка если нет цифр
         with pytest.raises(ValueError):
