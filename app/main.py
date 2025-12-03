@@ -182,6 +182,10 @@ async def main():
         register_admin_stats_handlers(application, admin_repo, metrics_service, permissions_manager)
         register_admin_lookup_handlers(application, permissions_manager)
         
+        # LM Metrics
+        from app.telegram.handlers.admin_lm import register_admin_lm_handlers
+        register_admin_lm_handlers(application, lm_repo, permissions_manager)
+        
         # Call Lookup (/call_lookup)
         register_call_lookup_handlers(application, call_lookup_service, permissions_manager)
         
@@ -191,7 +195,7 @@ async def main():
         # Reports (/report)
         register_report_handlers(application, report_service, permissions_manager, db_manager)
 
-        await _configure_bot_commands(application)
+        await set_bot_commands(application)
 
         # 5. Настройка планировщика (APScheduler)
         scheduler = AsyncIOScheduler()
@@ -251,24 +255,23 @@ async def main():
         lock_fp.close()
 
 
-async def _configure_bot_commands(application):
-    """Устанавливает список доступных команд бота."""
+async def set_bot_commands(application):
+    """Устанавливает команды бота для меню."""
     commands = [
-        BotCommand("start", "Перезапустить диалог"),
-        BotCommand("help", "Показать список команд"),
-        BotCommand("register", "Отправить заявку на доступ"),
-        BotCommand("weekly_quality", "Еженедельный отчёт качества"),
-        BotCommand("report", "AI-отчёт"),
-        BotCommand("call_lookup", "Поиск звонков по номеру"),
-        BotCommand("admin", "Открыть админ-панель"),
-        BotCommand("approve", "Одобрить пользователя"),
-        BotCommand("make_admin", "Назначить администратора"),
-        BotCommand("make_superadmin", "Назначить супер-админа"),
-        BotCommand("admins", "Показать администраторов"),
+        BotCommand("start", "🏠 Главное меню"),
+        BotCommand("help", "❓ Справка и инструкции"),
+        BotCommand("admin", "👑 Админ-панель"),
     ]
-    await application.bot.set_my_commands(commands)
+    
+    try:
+        await application.bot.set_my_commands(commands)
+        logger.info("✅ Команды бота установлены: /start, /help, /admin")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при установке команд бота: {e}")
+
 
 if __name__ == "__main__":
+
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

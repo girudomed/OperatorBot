@@ -1,0 +1,121 @@
+"""
+Методы для агрегации LM метрик (добавить в конец lm_repository.py)
+"""
+
+async def get_aggregated_metrics(
+    self,
+    metric_group: str,
+    days: int = 7
+) -> Dict[str, Dict[str, float]]:
+    """
+    Получает агрегированные метрики по группе за последние N дней.
+    
+    Returns:
+        {metric_code: {avg: float, min: float, max: float, count: int}}
+    """
+    from datetime import datetime, timedelta
+    
+    start_date = datetime.now() - timedelta(days=days)
+    
+    query = """
+        SELECT 
+            metric_code,
+            AVG(value_numeric) as avg_value,
+            MIN(value_numeric) as min_value,
+            MAX(value_numeric) as max_value,
+            COUNT(*) as count_value
+        FROM lm_value
+        WHERE metric_group = %s
+        AND created_at >= %s
+        AND value_numeric IS NOT NULL
+        GROUP BY metric_code
+    """
+    
+    rows = await self.db_manager.execute_with_retry(
+        query,
+        (metric_group, start_date),
+        fetchall=True
+    ) or []
+    
+    result = {}
+    for row in rows:
+        result[row['metric_code']] = {
+            'avg': float(row['avg_value'] or 0),
+            'min': float(row['min_value'] or 0),
+            'max': float(row['max_value'] or 0),
+            'count': int(row['count_value'] or 0)
+        }
+    
+    return result
+
+
+async def get_risk_summary(self, days: int = 7) -> Dict[str, int]:
+    """
+    Получает сводку по метрикам рисков.
+    
+    Returns:
+        {
+            'churn_risk_high': int,
+            'churn_risk_medium': int,
+            'complaint_risk_count': int,
+            'followup_needed_count': int
+        }
+    """
+    from datetime import datetime, timedelta
+    
+    start_date = datetime.now() - timedelta(days=days)
+    
+    # Churn risk levels
+    churn_query = """
+        SELECT value_label, COUNT(*) as count
+        FROM lm_value
+        WHERE metric_code = 'churn_risk_level'
+        AND created_at >= %s
+        GROUP BY value_label
+    """
+    
+    churn_rows = await self.db_manager.execute_with_retry(
+        churn_query,
+        (start_date,),
+        fetchall=True
+    ) or []
+    
+    churn_counts = {row['value_label']: int(row['count']) for row in churn_rows}
+    
+    # Complaint risk (flag true)
+    complaint_query = """
+        SELECT COUNT(*) as count
+        FROM lm_value
+        WHERE metric_code = 'complaint_risk_flag'
+        AND value_label = 'true'
+        AND created_at >= %s
+    """
+    
+    complaint_row = await self.db_manager.execute_with_retry(
+        complaint_query,
+        (start_date,),
+        fetchone=True
+    )
+    
+    # Followup needed
+    followup_query = """
+        SELECT COUNT(*) as count
+        FROM lm_value
+        WHERE metric_code = 'followup_needed_flag'
+        AND value_label = 'true'
+        AND created_at >= %s
+    """
+    
+    followup_row = await self.db_manager.execute_with_retry(
+        followup_query,
+        (start_date,),
+        fetchone=True
+    )
+    
+    return {
+        'churn_risk_high': churn_counts.get('high', 0),
+        'churn_risk_medium': churn_counts.get('medium', 0),
+        'churn_risk_low': churn_counts.get('low', 0),
+        'complaint_risk_count': int(complaint_row['count'] if complaint_row else 0),
+        'followup_needed_count': int(followup_row['count'] if followup_row else 0)
+    }

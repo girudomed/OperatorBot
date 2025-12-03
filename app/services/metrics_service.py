@@ -78,31 +78,63 @@ class MetricsService:
         # Merge data to get full context (scores + history)
         operator_calls = self._merge_call_data(call_history_data, call_scores_data)
         
-        accepted_calls = [c for c in operator_calls if c.get('transcript') is not None]
-        missed_calls = [c for c in operator_calls if c.get('transcript') is None]
+        # ИСПРАВЛЕНИЕ: Пропущенный = входящий звонок с нулевой длительностью разговора
+        # (не используем transcript, так как это не надёжный признак)
+        missed_calls = [
+            c for c in operator_calls 
+            if c.get('call_type') == 'входящий' and float(c.get('talk_duration', 0)) == 0
+        ]
+        accepted_calls = [c for c in operator_calls if c not in missed_calls]
         
         total_calls = len(operator_calls)
         accepted_count = len(accepted_calls)
         missed_count = len(missed_calls)
         missed_rate = (missed_count / total_calls * 100) if total_calls > 0 else 0.0
 
-        # Leads & Conversion
-        booked_services = sum(1 for c in accepted_calls if c.get('call_category') == 'Запись на услугу (успешная)')
-        total_leads = sum(1 for c in accepted_calls if c.get('call_category') in ['Лид (без записи)', 'Запись на услугу (успешная)'])
+        # ИСПРАВЛЕНИЕ: Записавшийся лид = outcome='record' (а не категория)
+        booked_services = sum(
+            1 for c in accepted_calls 
+            if c.get('outcome') == 'record'
+        )
+        
+        # ИСПРАВЛЕНИЕ: Лид = только outcome='lead_no_record' ИЛИ категория содержит 'Лид'
+        # НО исключаем записи (это уже конверсия!)
+        total_leads = sum(
+            1 for c in accepted_calls 
+            if (c.get('outcome') == 'lead_no_record' or 
+                (c.get('call_category') and 'Лид' in c.get('call_category')))
+            and c.get('outcome') != 'record'  # ИСКЛЮЧИТЬ записи
+        )
+        
         conversion_rate = (booked_services / accepted_count * 100) if accepted_count > 0 else 0.0
 
         # Ratings
         avg_call_rating = self._calculate_avg_score(accepted_calls)
         
-        lead_calls = [c for c in accepted_calls if c.get('call_category') in ['Лид (без записи)', 'Запись на услугу (успешная)']]
+        lead_calls = [
+            c for c in accepted_calls 
+            if (c.get('outcome') == 'lead_no_record' or 
+                (c.get('call_category') and 'Лид' in c.get('call_category')))
+            and c.get('outcome') != 'record'
+        ]
         avg_lead_call_rating = self._calculate_avg_score(lead_calls)
 
-        # Cancellations
-        total_cancellations = sum(1 for c in accepted_calls if c.get('call_category') == 'Отмена записи')
-        cancel_calls = [c for c in accepted_calls if c.get('call_category') == 'Отмена записи']
+        # ИСПРАВЛЕНИЕ: Отмена = outcome='cancel' ИЛИ есть refusal_reason
+        total_cancellations = sum(
+            1 for c in accepted_calls 
+            if c.get('outcome') == 'cancel' or c.get('refusal_reason') is not None
+        )
+        
+        cancel_calls = [
+            c for c in accepted_calls 
+            if c.get('outcome') == 'cancel' or c.get('refusal_reason') is not None
+        ]
         avg_cancel_score = self._calculate_avg_score(cancel_calls)
         
-        cancel_reschedule_count = sum(1 for c in accepted_calls if c.get('call_category') in ['Отмена записи', 'Перенос записи'])
+        cancel_reschedule_count = sum(
+            1 for c in accepted_calls 
+            if c.get('call_category') in ['Отмена записи', 'Перенос записи']
+        )
         cancellation_rate = (total_cancellations / cancel_reschedule_count * 100) if cancel_reschedule_count > 0 else 0.0
 
         # Durations

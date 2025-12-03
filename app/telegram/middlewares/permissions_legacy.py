@@ -33,8 +33,8 @@ class PermissionsManager:
         try:
             start_time = time.time()
 
-            # Получаем role_id из таблицы UsersTelegaBot
-            query = "SELECT role_id FROM UsersTelegaBot WHERE user_id = %s"
+            # Получаем role_id из таблицы users
+            query = "SELECT role_id FROM users WHERE user_id = %s"
             async with self.db_manager.acquire() as connection:
                 async with connection.cursor() as cursor:
                     await cursor.execute(query, (user_id,))
@@ -176,7 +176,7 @@ class PermissionsManager:
             new_role_id = role_result['id']
 
             # Обновляем role_id пользователя
-            query_update = "UPDATE UsersTelegaBot SET role_id = %s WHERE user_id = %s"
+            query_update = "UPDATE users SET role_id = %s WHERE user_id = %s"
             async with self.db_manager.acquire() as connection:
                 async with connection.cursor() as cursor:
                     await cursor.execute(query_update, (new_role_id, user_id))
@@ -236,7 +236,7 @@ class PermissionsManager:
             role_id = role_result['id']
 
             # Получаем пользователей с заданным role_id
-            query = "SELECT user_id, full_name FROM UsersTelegaBot WHERE role_id = %s"
+            query = "SELECT user_id, full_name FROM users WHERE role_id = %s"
             async with self.db_manager.acquire() as connection:
                 async with connection.cursor() as cursor:
                     await cursor.execute(query, (role_id,))
@@ -260,7 +260,7 @@ class PermissionsManager:
         """
         role_query = """
             SELECT r.permission
-            FROM UsersTelegaBot u
+            FROM users u
             JOIN PermissionsTelegaBot r ON u.role_id = r.role_id
             WHERE u.user_id = %s
         """

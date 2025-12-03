@@ -27,12 +27,12 @@ class UserRepository:
         """Регистрация пользователя, если он не существует в базе данных."""
         if not await self.user_exists(user_id):
             query_insert = """
-                INSERT INTO UsersTelegaBot (user_id, username, full_name, operator_id, password, role_id)
+                INSERT INTO users (user_id, username, full_name, operator_id, password, role_id)
                 VALUES (%s, %s, %s, %s, %s, %s)
             """
             await self.db_manager.execute_query(
                 query_insert, 
-                (user_id, username, full_name, operator_id, password or "", role_id)
+                (user_id, username, full_name, operator_id, password, role_id)
             )
             logger.info(f"Пользователь '{full_name}' зарегистрирован.")
         else:
@@ -40,13 +40,13 @@ class UserRepository:
 
     async def user_exists(self, user_id: int) -> bool:
         """Проверка существования пользователя по user_id."""
-        query = "SELECT 1 FROM UsersTelegaBot WHERE user_id = %s"
+        query = "SELECT 1 FROM users WHERE user_id = %s"
         result = await self.db_manager.execute_query(query, (user_id,), fetchone=True)
         return bool(result)
 
     async def get_user_by_id(self, user_id: int) -> Optional[UserRecord]:
         """Получение пользователя по user_id."""
-        query = "SELECT * FROM UsersTelegaBot WHERE user_id = %s"
+        query = "SELECT * FROM users WHERE user_id = %s"
         result = await self.db_manager.execute_query(query, (user_id,), fetchone=True)
         if not result or not isinstance(result, dict):
             logger.warning(f"Пользователь с ID {user_id} не найден.")
@@ -55,7 +55,7 @@ class UserRepository:
 
     async def get_user_role(self, user_id: int) -> Optional[int]:
         """Получение роли пользователя по user_id."""
-        query = "SELECT role_id FROM UsersTelegaBot WHERE user_id = %s"
+        query = "SELECT role_id FROM users WHERE user_id = %s"
         user_role = await self.db_manager.execute_query(query, (user_id,), fetchone=True)
         if not user_role:
             logger.warning(f"Роль для пользователя с ID {user_id} не найдена.")

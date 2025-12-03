@@ -23,17 +23,17 @@ class OperatorRepository:
     # === Методы из bot/repositories/operators.py ===
     
     async def get_extension_by_user_id(self, user_id: int) -> Optional[str]:
-        query = "SELECT extension FROM users WHERE user_id = %s"
+        query = "SELECT extension FROM users WHERE id = %s"
         rows = await self.db_manager.execute_with_retry(query, (user_id,), fetchall=True)
         if not rows:
             return None
         return rows[0].get('extension')
 
     async def get_name_by_extension(self, extension: str) -> str:
-        query = "SELECT name FROM users WHERE extension = %s"
+        query = "SELECT full_name FROM users WHERE extension = %s"
         rows = await self.db_manager.execute_with_retry(query, (extension,), fetchall=True)
-        if rows and rows[0].get('name'):
-            return rows[0]['name']
+        if rows and rows[0].get('full_name'):
+            return rows[0]['full_name']
         return 'Неизвестно'
 
     async def get_call_data(
@@ -108,7 +108,7 @@ class OperatorRepository:
                 COUNT(*) AS total_calls,
                 SUM(CASE WHEN cs.history_id IS NULL THEN 1 ELSE 0 END) AS missed_calls
             FROM call_history ch
-            LEFT JOIN call_scores cs ON cs.history_id = ch.history_id
+            LEFT JOIN call_scores cs ON cs.history_id = COALESCE(ch.id, ch.history_id)
             WHERE ch.context_start_time BETWEEN %s AND %s
         """
         log_extra = {
@@ -136,20 +136,19 @@ class OperatorRepository:
             )
             raise
 
-        lead_categories = (
-            "Запись на услугу (успешная)",
-            "Лид (без записи)",
-            "record",
-            "lead_no_record",
-        )
-        lead_cats_str = "', '".join(lead_categories)
-        
-        scores_query = f"""
+        # ИСПРАВЛЕНИЕ: Используем поля outcome и refusal_reason вместо текстовых категорий
+        scores_query = """
             SELECT
                 AVG(cs.call_score) AS avg_score,
-                SUM(CASE WHEN cs.call_category IN ('{lead_cats_str}') THEN 1 ELSE 0 END) AS total_leads,
-                SUM(CASE WHEN cs.call_category = 'Запись на услугу (успешная)' THEN 1 ELSE 0 END) AS booked_leads,
-                SUM(CASE WHEN cs.call_category = 'Отмена записи' THEN 1 ELSE 0 END) AS cancellations
+                SUM(CASE 
+                    WHEN cs.outcome = 'lead_no_record' OR cs.call_category LIKE '%Лид%' 
+                    THEN 1 ELSE 0 
+                END) AS total_leads,
+                SUM(CASE WHEN cs.outcome = 'record' THEN 1 ELSE 0 END) AS booked_leads,
+                SUM(CASE 
+                    WHEN cs.outcome = 'cancel' OR cs.refusal_reason IS NOT NULL 
+                    THEN 1 ELSE 0 
+                END) AS cancellations
             FROM call_scores cs
             WHERE cs.call_date BETWEEN %s AND %s
         """
@@ -229,7 +228,12 @@ class OperatorRepository:
 
         placeholders = ",".join(["%s"] * len(statuses))
         query = f"""
-            SELECT user_id AS id, user_id, telegram_id, full_name, username, extension, status
+            SELECT id AS user_id,
+                   user_id AS telegram_id,
+                   full_name,
+                   username,
+                   extension,
+                   status
             FROM users
             WHERE status IN ({placeholders}) AND role_id = %s
             ORDER BY COALESCE(full_name, username, 'Без имени')
@@ -253,9 +257,9 @@ class OperatorRepository:
     async def get_operator_info_by_user_id(self, user_id: int) -> Optional[Dict[str, Any]]:
         """Получает информацию об операторе по user_id."""
         query = """
-            SELECT user_id AS id, user_id, telegram_id, full_name, username, extension
+            SELECT id AS user_id, user_id AS telegram_id, full_name, username, extension
             FROM users
-            WHERE user_id = %s
+            WHERE id = %s
             LIMIT 1
         """
         return await self.db_manager.execute_with_retry(
@@ -270,7 +274,7 @@ class OperatorRepository:
         """
         Поиск оператора по его ID.
         """
-        query = "SELECT * FROM users WHERE user_id = %s"
+        query = "SELECT * FROM users WHERE id = %s"
         result = await self.db_manager.execute_query(query, (user_id,), fetchone=True)
         if not result:
             logger.warning(f"Оператор с ID {user_id} не найден.")
@@ -286,7 +290,7 @@ class OperatorRepository:
 
     async def find_operator_by_name(self, operator_name: str) -> Optional[OperatorRecord]:
         """Поиск оператора по имени в таблице users."""
-        query = "SELECT * FROM users WHERE name = %s"
+        query = "SELECT * FROM users WHERE full_name = %s"
         result = await self.db_manager.execute_query(query, (operator_name,), fetchone=True)
         if not result:
             logger.warning(f"Оператор с именем {operator_name} не найден.")
@@ -296,7 +300,7 @@ class OperatorRepository:
         """
         Получение extension по user_id из таблицы users.
         """
-        query = "SELECT extension FROM users WHERE user_id = %s"
+        query = "SELECT extension FROM users WHERE id = %s"
         result = await self.db_manager.execute_query(query, (user_id,), fetchone=True)
         if result and 'extension' in result:
             extension = result['extension']
@@ -320,9 +324,9 @@ class OperatorRepository:
 
         query = """
         SELECT u.*, cs.call_date, cs.call_score, cs.result, cs.talk_duration
-        FROM UsersTelegaBot u
+        FROM users u
         JOIN call_scores cs 
-        ON SUBSTRING_INDEX(cs.called_info, ' ', 1) = u.extension
+            ON SUBSTRING_INDEX(cs.called_info, ' ', 1) = u.extension
         WHERE u.extension = %s
         """
         params = [extension]

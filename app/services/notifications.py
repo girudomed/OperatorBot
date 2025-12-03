@@ -112,8 +112,8 @@ class NotificationsManager:
                 user_id = report['user_id']
                 report_text = report['report_text']
 
-                # Получаем chat_id из таблицы UsersTelegaBot по user_id
-                query_user = "SELECT chat_id FROM UsersTelegaBot WHERE user_id = %s"
+                # Получаем chat_id из таблицы users по user_id
+                query_user = "SELECT chat_id FROM users WHERE user_id = %s"
                 user = await self.execute_query(query_user, (user_id,), fetchone=True)
 
                 if user and user.get('chat_id'):

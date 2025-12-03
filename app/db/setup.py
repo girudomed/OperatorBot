@@ -6,6 +6,7 @@ import secrets
 import bcrypt
 
 from app.db.connection import execute_query
+from app.core.roles import role_name_from_id
 
 # Настройка логирования
 log_handler = logging.FileHandler('logs.log')
@@ -41,13 +42,13 @@ async def add_user(user_id, username, full_name, role_name="Operator"):
 async def get_user_role(user_id):
     logger.info(f"Получение роли для пользователя с user_id: {user_id}")
     query = """
-    SELECT R.role_name FROM UsersTelegaBot U
-    JOIN RolesTelegaBot R ON U.role_id = R.id
-    WHERE U.user_id = %s
+    SELECT role_id FROM users WHERE user_id = %s
     """
     try:
         user_role = await execute_query(query, (user_id,), fetchone=True)
-        return user_role['role_name'] if user_role else None
+        if not user_role:
+            return None
+        return role_name_from_id(user_role.get('role_id'))
     except Exception as e:
         logger.error(f"Ошибка при получении роли пользователя: {e}")
         return None
@@ -56,7 +57,7 @@ async def get_user_role(user_id):
 async def get_user_password(user_id):
     logger.info(f"Получение пароля для пользователя с user_id: {user_id}")
     query = """
-    SELECT password FROM UsersTelegaBot WHERE user_id = %s
+    SELECT password FROM users WHERE user_id = %s
     """
     try:
         user_password = await execute_query(query, (user_id,), fetchone=True)

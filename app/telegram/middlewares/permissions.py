@@ -50,7 +50,7 @@ class PermissionsManager:
             query = """
                 SELECT role_id, status 
                 FROM users 
-                WHERE telegram_id = %s
+                WHERE user_id = %s
             """
             row = await self.db_manager.execute_with_retry(
                 query, params=(user_id,), fetchone=True
@@ -78,7 +78,7 @@ class PermissionsManager:
             Status ('pending', 'approved', 'blocked') или None
         """
         try:
-            query = "SELECT status FROM users WHERE telegram_id = %s"
+            query = "SELECT status FROM users WHERE user_id = %s"
             row = await self.db_manager.execute_with_retry(
                 query, params=(user_id,), fetchone=True
             )
