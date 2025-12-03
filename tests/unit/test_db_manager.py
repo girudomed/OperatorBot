@@ -39,7 +39,7 @@ class TestDatabaseManager:
         mock_cursor = AsyncMock()
         mock_cursor.__aenter__.return_value = mock_cursor
         mock_cursor.__aexit__.return_value = False
-        mock_conn.cursor.return_value = mock_cursor
+        mock_conn.cursor = Mock(return_value=mock_cursor)
         db_manager.pool.acquire = AsyncMock(return_value=mock_conn)
         
         # Mock result
