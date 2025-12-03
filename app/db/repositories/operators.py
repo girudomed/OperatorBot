@@ -23,7 +23,7 @@ class OperatorRepository:
     # === Методы из bot/repositories/operators.py ===
     
     async def get_extension_by_user_id(self, user_id: int) -> Optional[str]:
-        query = "SELECT extension FROM users WHERE id = %s"
+        query = "SELECT extension FROM users WHERE user_id = %s"
         rows = await self.db_manager.execute_with_retry(query, (user_id,), fetchall=True)
         if not rows:
             return None
@@ -274,7 +274,7 @@ class OperatorRepository:
         """
         Поиск оператора по его ID.
         """
-        query = "SELECT * FROM users WHERE id = %s"
+        query = "SELECT * FROM users WHERE user_id = %s"
         result = await self.db_manager.execute_query(query, (user_id,), fetchone=True)
         if not result:
             logger.warning(f"Оператор с ID {user_id} не найден.")
@@ -300,7 +300,7 @@ class OperatorRepository:
         """
         Получение extension по user_id из таблицы users.
         """
-        query = "SELECT extension FROM users WHERE id = %s"
+        query = "SELECT extension FROM users WHERE user_id = %s"
         result = await self.db_manager.execute_query(query, (user_id,), fetchone=True)
         if result and 'extension' in result:
             extension = result['extension']

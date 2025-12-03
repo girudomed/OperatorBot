@@ -42,7 +42,7 @@ class AdminRepository:
         query = """
             SELECT id AS id, user_id AS telegram_id, username, full_name, extension,
                    role_id, status, created_at
-            FROM users
+            FROM UsersTelegaBot
             WHERE status = 'pending'
             ORDER BY created_at DESC
         """
@@ -55,7 +55,7 @@ class AdminRepository:
         query = """
             SELECT id AS id, user_id AS telegram_id, username, full_name, extension,
                    role_id, status, approved_by, blocked_at, operator_id
-            FROM users
+            FROM UsersTelegaBot
             WHERE user_id = %s
         """
         row = await self.db.execute_with_retry(
@@ -69,7 +69,7 @@ class AdminRepository:
         query = """
             SELECT id AS id, user_id AS telegram_id, username, full_name, extension,
                    role_id, status, approved_by, blocked_at, operator_id, created_at
-            FROM users
+            FROM UsersTelegaBot
             WHERE id = %s
             LIMIT 1
         """
@@ -88,7 +88,7 @@ class AdminRepository:
             approver_id: Telegram ID утверждающего админа
         """
         # Получаем ID утверждающего из users
-        approver_query = "SELECT id FROM users WHERE user_id = %s"
+        approver_query = "SELECT id FROM UsersTelegaBot WHERE user_id = %s"
         approver_row = await self.db.execute_with_retry(
             approver_query, params=(approver_id,), fetchone=True
         )
@@ -101,7 +101,7 @@ class AdminRepository:
         
         # Обновляем пользователя
         query = """
-            UPDATE users
+            UPDATE UsersTelegaBot
             SET status = 'approved', approved_by = %s
             WHERE id = %s AND status = 'pending'
         """
@@ -123,7 +123,7 @@ class AdminRepository:
     @log_async_exceptions
     async def decline_user(self, user_id: int, decliner_id: int, reason: Optional[str] = None) -> bool:
         """Отклоняет заявку пользователя (удаляет или блокирует)."""
-        decliner_query = "SELECT id FROM users WHERE user_id = %s"
+        decliner_query = "SELECT id FROM UsersTelegaBot WHERE user_id = %s"
         decliner_row = await self.db.execute_with_retry(
             decliner_query, params=(decliner_id,), fetchone=True
         )
@@ -135,7 +135,7 @@ class AdminRepository:
         
         # Блокируем вместо удаления
         query = """
-            UPDATE users
+            UPDATE UsersTelegaBot
             SET status = 'blocked', blocked_at = NOW()
             WHERE id = %s
         """
@@ -154,7 +154,7 @@ class AdminRepository:
     @log_async_exceptions
     async def block_user(self, user_id: int, blocker_id: int, reason: Optional[str] = None) -> bool:
         """Блокирует пользователя."""
-        blocker_query = "SELECT id FROM users WHERE user_id = %s"
+        blocker_query = "SELECT id FROM UsersTelegaBot WHERE user_id = %s"
         blocker_row = await self.db.execute_with_retry(
             blocker_query, params=(blocker_id,), fetchone=True
         )
@@ -165,7 +165,7 @@ class AdminRepository:
         blocker_db_id = blocker_row['id']
         
         query = """
-            UPDATE users
+            UPDATE UsersTelegaBot
             SET status = 'blocked', blocked_at = NOW()
             WHERE id = %s
         """
@@ -183,7 +183,7 @@ class AdminRepository:
     @log_async_exceptions
     async def unblock_user(self, user_id: int, unblocker_id: int) -> bool:
         """Разблокирует пользователя."""
-        unblocker_query = "SELECT id FROM users WHERE user_id = %s"
+        unblocker_query = "SELECT id FROM UsersTelegaBot WHERE user_id = %s"
         unblocker_row = await self.db.execute_with_retry(
             unblocker_query, params=(unblocker_id,), fetchone=True
         )
@@ -194,7 +194,7 @@ class AdminRepository:
         unblocker_db_id = unblocker_row['id']
         
         query = """
-            UPDATE users
+            UPDATE UsersTelegaBot
             SET status = 'approved', blocked_at = NULL
             WHERE id = %s
         """
@@ -223,7 +223,7 @@ class AdminRepository:
             new_role: Новая роль ('admin' или 'superadmin')
             promoter_id: Telegram ID повышающего
         """
-        promoter_query = "SELECT id FROM users WHERE user_id = %s"
+        promoter_query = "SELECT id FROM UsersTelegaBot WHERE user_id = %s"
         promoter_row = await self.db.execute_with_retry(
             promoter_query, params=(promoter_id,), fetchone=True
         )
@@ -239,7 +239,7 @@ class AdminRepository:
             return False
         
         query = """
-            UPDATE users
+            UPDATE UsersTelegaBot
             SET role_id = %s
             WHERE id = %s AND status = 'approved'
         """
@@ -265,7 +265,7 @@ class AdminRepository:
         demoter_id: int
     ) -> bool:
         """Понижает роль пользователя."""
-        demoter_query = "SELECT id FROM users WHERE user_id = %s"
+        demoter_query = "SELECT id FROM UsersTelegaBot WHERE user_id = %s"
         demoter_row = await self.db.execute_with_retry(
             demoter_query, params=(demoter_id,), fetchone=True
         )
@@ -280,7 +280,7 @@ class AdminRepository:
             logger.warning(f"Unknown role '{new_role}' for demotion")
             return False
         
-        query = "UPDATE users SET role_id = %s WHERE id = %s"
+        query = "UPDATE UsersTelegaBot SET role_id = %s WHERE id = %s"
         await self.db.execute_with_retry(
             query, params=(new_role_id, user_id), commit=True
         )
@@ -299,11 +299,15 @@ class AdminRepository:
         """Получает список всех админов и супер-админов."""
         query = """
             SELECT id AS id, user_id AS telegram_id, username, full_name, extension, role_id, status
-            FROM users
-            WHERE role_id IN (2, 3) AND status = 'approved'
+            FROM UsersTelegaBot
+            WHERE role_id IN (%s, %s) AND status != 'blocked'
             ORDER BY role_id DESC, full_name
         """
-        rows = await self.db.execute_with_retry(query, fetchall=True) or []
+        rows = await self.db.execute_with_retry(
+            query,
+            params=(ROLE_NAME_TO_ID.get('admin'), ROLE_NAME_TO_ID.get('superadmin')),
+            fetchall=True
+        ) or []
         return self._attach_role_names(rows)
 
     @log_async_exceptions
@@ -316,7 +320,7 @@ class AdminRepository:
         query = """
             SELECT id AS id, user_id AS telegram_id, username, full_name, extension,
                    role_id, status
-            FROM users
+            FROM UsersTelegaBot
             WHERE status = 'approved' AND (role_id IS NULL OR role_id = %s)
             ORDER BY created_at DESC
             LIMIT %s OFFSET %s
@@ -335,7 +339,7 @@ class AdminRepository:
             query = """
                 SELECT id AS id, user_id AS telegram_id, username, full_name, extension,
                        role_id, status, created_at, approved_by
-                FROM users
+                FROM UsersTelegaBot
                 WHERE status = %s
                 ORDER BY created_at DESC
             """
@@ -344,7 +348,7 @@ class AdminRepository:
             query = """
                 SELECT id AS id, user_id AS telegram_id, username, full_name, extension,
                        role_id, status, created_at, approved_by
-                FROM users
+                FROM UsersTelegaBot
                 ORDER BY created_at DESC
             """
             params = None
@@ -375,7 +379,7 @@ class AdminRepository:
                         ELSE 0
                     END
                 ) AS operators_count
-            FROM users
+            FROM UsersTelegaBot
         """
         params = (
             ROLE_NAME_TO_ID.get('admin'),
@@ -409,7 +413,7 @@ class AdminRepository:
 
         query = """
             SELECT id AS id, user_id AS telegram_id, username, full_name, extension, role_id, status, created_at
-            FROM users
+            FROM UsersTelegaBot
             WHERE status = 'approved' AND role_id = %s
             ORDER BY created_at DESC
             LIMIT %s
