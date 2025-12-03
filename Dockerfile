@@ -28,4 +28,4 @@ ENV PYTHONUNBUFFERED=1
 EXPOSE 5001
 
 # Запускаем приложение
-CMD ["python", "bot.py"]
+CMD ["python", "-m", "app.main"]
