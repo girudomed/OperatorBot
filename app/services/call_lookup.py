@@ -134,6 +134,9 @@ class CallLookupService:
         start_dt, end_dt = self._resolve_period(period, None, None)
         normalized_like = f"%{normalized_phone}%"
 
+        called_expr = _normalize_phone_sql("COALESCE(ch.called_info, '')")
+        caller_expr = _normalize_phone_sql("COALESCE(ch.caller_info, '')")
+
         query = f"""
             SELECT
                 ch.id AS history_id,
@@ -147,8 +150,8 @@ class CallLookupService:
             FROM call_history ch
             LEFT JOIN call_scores cs ON cs.history_id = ch.id
             WHERE (
-                {_normalize_phone_sql('COALESCE(ch.called_info, \'\')')} LIKE %s
-                OR {_normalize_phone_sql('COALESCE(ch.caller_info, \'\')')} LIKE %s
+                {called_expr} LIKE %s
+                OR {caller_expr} LIKE %s
             )
             AND ch.call_time BETWEEN %s AND %s
             ORDER BY ch.call_time DESC

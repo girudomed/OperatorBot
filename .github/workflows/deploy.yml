@@ -15,6 +15,8 @@ jobs:
 
       - name: Set up SSH and deploy
         uses: appleboy/ssh-action@v0.1.4
+        env:
+          PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
@@ -39,9 +41,11 @@ jobs:
             git fetch origin
             git reset --hard origin/main
 
-            if [ -n "${{ secrets.PROD_ENV_FILE }}" ]; then
-              echo "=== Обновляем .env ==="
-              printf "%s" "${{ secrets.PROD_ENV_FILE }}" > .env
+            echo "=== Обновляем .env ==="
+            if [ -n "$PROD_ENV_FILE" ]; then
+              printf "%s" "$PROD_ENV_FILE" > .env
+            else
+              touch .env
             fi
 
             echo "=== Принудительно удаляем существующий контейнер ==="
