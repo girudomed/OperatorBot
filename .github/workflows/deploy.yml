@@ -41,9 +41,7 @@ jobs:
 
             if [ -n "${{ secrets.PROD_ENV_FILE }}" ]; then
               echo "=== Обновляем .env ==="
-              cat <<'EOF' > .env
-${{ secrets.PROD_ENV_FILE }}
-EOF
+              printf "%s" "${{ secrets.PROD_ENV_FILE }}" > .env
             fi
 
             echo "=== Принудительно удаляем существующий контейнер ==="

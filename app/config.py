@@ -11,6 +11,8 @@ from typing import Dict, Any
 # Загрузка переменных окружения из файла .env
 load_dotenv()
 
+IS_CI_ENV = os.getenv("CI", "").lower() == "true"
+
 
 def _get_bool(value: str | None, default: bool = False) -> bool:
     """
@@ -60,7 +62,7 @@ REQUIRED_ENV_VARS = [
 ]
 
 # Проверка обязательных переменных только когда запущены рабочие сервисы
-if _get_bool(os.getenv("CHECK_ENV_VARS", "true"), True):
+if not IS_CI_ENV and _get_bool(os.getenv("CHECK_ENV_VARS", "true"), True):
     check_required_env_vars(REQUIRED_ENV_VARS)
 
 # Конфигурация OpenAI
@@ -80,7 +82,7 @@ OPENAI_COMPLETION_OPTIONS: Dict[str, Any] = {
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-if not TELEGRAM_TOKEN:
+if not TELEGRAM_TOKEN and not IS_CI_ENV:
     raise EnvironmentError("Telegram Bot Token не найден.")
 
 # Конфигурация базы данных
@@ -96,7 +98,7 @@ DB_CONFIG: Dict[str, Any] = {
 }
 
 # Проверка конфигурации базы данных
-if not all(DB_CONFIG[key] for key in ["host", "user", "password", "db", "port"]):
+if not IS_CI_ENV and not all(DB_CONFIG[key] for key in ["host", "user", "password", "db", "port"]):
     raise EnvironmentError("Конфигурация базы данных неполная.")
 
 # Параметры для планировщика задач
