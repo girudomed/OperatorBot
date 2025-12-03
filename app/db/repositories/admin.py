@@ -350,50 +350,53 @@ class AdminRepository:
                        role_id, status, created_at, approved_by
                 FROM UsersTelegaBot
                 ORDER BY created_at DESC
-            """
             params = None
         
         rows = await self.db.execute_with_retry(
             query, params=params, fetchall=True
         ) or []
         return self._attach_role_names(rows)
-
+    
     @log_async_exceptions
     async def get_users_counters(self) -> Dict[str, int]:
-        """Возвращает агрегированные счётчики пользователей по статусам и ролям."""
-        query = f"""
-            SELECT
-                COUNT(*) AS total_users,
-                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_users,
-                SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved_users,
-                SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked_users,
-                SUM(
-                    CASE
-                        WHEN status = 'approved' AND role_id IN (%s, %s) THEN 1
-                        ELSE 0
-                    END
-                ) AS admins_count,
-                SUM(
-                    CASE
-                        WHEN status = 'approved' AND (role_id IS NULL OR role_id = %s) THEN 1
-                        ELSE 0
-                    END
-                ) AS operators_count
+        """
+        Возвращает счётчики пользователей для Dashboard.
+        
+        Логика:
+        - total_users, operators - из users (ВАТС операторы)
+        - pending_users, approved_users, blocked_users, admins - из UsersTelegaBot
+        """
+        # Операторы из users (ВАТС)
+        operators_query = """
+            SELECT COUNT(*) as count
+            FROM users
+            WHERE extension IS NOT NULL
+        """
+        operators_row = await self.db.execute_with_retry(operators_query, fetchone=True) or {}
+        
+        # Telegram пользователи из UsersTelegaBot
+        telegram_query = """
+            SELECT 
+                COUNT(*) as total_users,
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_users,
+                SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved_users,
+                SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) as blocked_users,
+                SUM(CASE WHEN role_id IN (%s, %s) THEN 1 ELSE 0 END) as admins_count
             FROM UsersTelegaBot
         """
         params = (
             ROLE_NAME_TO_ID.get('admin'),
             ROLE_NAME_TO_ID.get('superadmin'),
-            ROLE_NAME_TO_ID.get('operator'),
         )
-        row = await self.db.execute_with_retry(query, params=params, fetchone=True) or {}
+        telegram_row = await self.db.execute_with_retry(telegram_query, params=params, fetchone=True) or {}
+        
         return {
-            'total_users': int(row.get('total_users') or 0),
-            'pending_users': int(row.get('pending_users') or 0),
-            'approved_users': int(row.get('approved_users') or 0),
-            'blocked_users': int(row.get('blocked_users') or 0),
-            'admins': int(row.get('admins_count') or 0),
-            'operators': int(row.get('operators_count') or 0),
+            'total_users': int(telegram_row.get('total_users') or 0),
+            'pending_users': int(telegram_row.get('pending_users') or 0),
+            'approved_users': int(telegram_row.get('approved_users') or 0),
+            'blocked_users': int(telegram_row.get('blocked_users') or 0),
+            'admins': int(telegram_row.get('admins_count') or 0),
+            'operators': int(operators_row.get('count') or 0),
         }
 
     @log_async_exceptions

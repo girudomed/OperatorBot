@@ -108,7 +108,7 @@ class OperatorRepository:
                 COUNT(*) AS total_calls,
                 SUM(CASE WHEN cs.history_id IS NULL THEN 1 ELSE 0 END) AS missed_calls
             FROM call_history ch
-            LEFT JOIN call_scores cs ON cs.history_id = COALESCE(ch.id, ch.history_id)
+            LEFT JOIN call_scores cs ON cs.history_id = ch.history_id
             WHERE ch.context_start_time BETWEEN %s AND %s
         """
         log_extra = {
@@ -137,8 +137,10 @@ class OperatorRepository:
             raise
 
         # ИСПРАВЛЕНИЕ: Используем поля outcome и refusal_reason вместо текстовых категорий
+        # Метрики из call_scores
         scores_query = """
             SELECT
+                COUNT(*) AS total_scored_calls,
                 AVG(cs.call_score) AS avg_score,
                 SUM(CASE 
                     WHEN cs.outcome = 'lead_no_record' OR cs.call_category LIKE '%Лид%' 
@@ -160,7 +162,7 @@ class OperatorRepository:
         )
 
         try:
-            score_stats = await self.db_manager.execute_with_retry(
+            scores_stats = await self.db_manager.execute_with_retry(
                 scores_query,
                 (start_str, end_str),
                 fetchone=True,
