@@ -12,7 +12,9 @@ from app.services.metrics_service import MetricsService
 class TestMetricsService:
     @pytest.fixture
     def mock_repo(self):
-        return Mock()
+        repo = Mock()
+        repo.get_quality_summary = AsyncMock()
+        return repo
 
     @pytest.fixture
     def service(self, mock_repo):
