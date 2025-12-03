@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock
-from bot.services.reports import ReportService
+from app.services.reports import ReportService
 
 @pytest.fixture
 def mock_db_manager():
