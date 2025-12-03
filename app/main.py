@@ -6,6 +6,7 @@ import asyncio
 import fcntl
 import sys
 import logging
+import signal
 from typing import Optional
 
 from telegram import BotCommand, Update
@@ -116,6 +117,15 @@ async def main():
     await db_manager.create_pool()
     logger.info("Пул соединений с БД создан.")
 
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop_event.set)
+        except (NotImplementedError, RuntimeError):
+            # Например, on Windows или если цикл уже завершается
+            pass
+
     try:
         # 2. Инициализация сервисов
         permissions_manager = PermissionsManager(db_manager)
@@ -217,12 +227,10 @@ async def main():
 
         await application.updater.start_polling()
         logger.info("Бот запущен и готов к работе (Polling).")
-        await application.updater.wait_for_stop()
+        await stop_event.wait()
 
-    except Exception:
-        logger.exception("Критическая ошибка во время работы бота.")
-        raise
     finally:
+        stop_event.set()
         # Остановка и очистка ресурсов
         logger.info("Остановка бота...")
         if 'scheduler' in locals():
