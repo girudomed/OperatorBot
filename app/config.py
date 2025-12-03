@@ -59,8 +59,9 @@ REQUIRED_ENV_VARS = [
     "DB_PORT"
 ]
 
-# Проверка обязательных переменных
-check_required_env_vars(REQUIRED_ENV_VARS)
+# Проверка обязательных переменных только когда запущены рабочие сервисы
+if _get_bool(os.getenv("CHECK_ENV_VARS", "true"), True):
+    check_required_env_vars(REQUIRED_ENV_VARS)
 
 # Конфигурация OpenAI
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")

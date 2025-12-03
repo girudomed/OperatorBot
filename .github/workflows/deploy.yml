@@ -20,17 +20,31 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_KEY }}
           script: |
-            echo "=== Проверяем наличие проекта на сервере ==="
-            if [ ! -d ~/operators_bot ]; then
+            set -e
+            APP_DIR="/opt/operabot"
+            REPO_URL="https://github.com/girudomed/OperatorBot.git"
+
+            echo "=== Создаём директорию проекта ${APP_DIR} ==="
+            sudo mkdir -p "${APP_DIR}"
+            sudo chown "${USER}:${USER}" "${APP_DIR}"
+
+            if [ ! -d "${APP_DIR}/.git" ]; then
               echo "Репозиторий не найден. Клонируем заново..."
-              git clone https://github.com/girudomed/OperatorBot.git ~/operators_bot
+              git clone "${REPO_URL}" "${APP_DIR}"
             fi
 
-            cd ~/operators_bot
+            cd "${APP_DIR}"
 
             echo "=== Обновляем репозиторий ==="
             git fetch origin
             git reset --hard origin/main
+
+            if [ -n "${{ secrets.PROD_ENV_FILE }}" ]; then
+              echo "=== Обновляем .env ==="
+              cat <<'EOF' > .env
+${{ secrets.PROD_ENV_FILE }}
+EOF
+            fi
 
             echo "=== Принудительно удаляем существующий контейнер ==="
             docker stop operators_bot_container || true
