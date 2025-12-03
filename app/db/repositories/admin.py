@@ -62,6 +62,21 @@ class AdminRepository:
             query, params=(telegram_id,), fetchone=True
         )
         return self._attach_role_name(row)
+
+    @log_async_exceptions
+    async def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """Получает пользователя по внутреннему ID."""
+        query = """
+            SELECT id, telegram_id, username, full_name, extension,
+                   role_id, status, approved_by, blocked_at, operator_id
+            FROM users
+            WHERE id = %s
+            LIMIT 1
+        """
+        row = await self.db.execute_with_retry(
+            query, params=(user_id,), fetchone=True
+        )
+        return self._attach_role_name(row)
     
     @log_async_exceptions
     async def approve_user(self, user_id: int, approver_id: int) -> bool:
@@ -289,6 +304,28 @@ class AdminRepository:
             ORDER BY role_id DESC, full_name
         """
         rows = await self.db.execute_with_retry(query, fetchall=True) or []
+        return self._attach_role_names(rows)
+
+    @log_async_exceptions
+    async def get_admin_candidates(
+        self,
+        limit: int = 10,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """Получает список утверждённых операторов для назначения админами."""
+        query = """
+            SELECT id, telegram_id, username, full_name, extension,
+                   role_id, status
+            FROM users
+            WHERE status = 'approved' AND (role_id IS NULL OR role_id = %s)
+            ORDER BY created_at DESC
+            LIMIT %s OFFSET %s
+        """
+        rows = await self.db.execute_with_retry(
+            query,
+            params=(ROLE_NAME_TO_ID['operator'], limit, offset),
+            fetchall=True,
+        ) or []
         return self._attach_role_names(rows)
     
     @log_async_exceptions

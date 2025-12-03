@@ -18,10 +18,14 @@ from telegram.ext import (
 
 from app.services.call_lookup import CallLookupService
 from app.telegram.middlewares.permissions import PermissionsManager
+from app.logging_config import get_watchdog_logger
+from app.telegram.utils.logging import describe_user
 
 CALL_LOOKUP_COMMAND = "call_lookup"
 CALL_LOOKUP_PERMISSION = "call_lookup"
 CALL_LOOKUP_CALLBACK_PREFIX = "calllookup"
+
+logger = get_watchdog_logger(__name__)
 
 
 def register_call_lookup_handlers(
@@ -68,6 +72,10 @@ class _CallLookupHandlers:
             return
 
         if not await self._is_allowed(user.id, user.username):
+            logger.warning(
+                "Отказ в /call_lookup для %s",
+                describe_user(user),
+            )
             await message.reply_text(
                 "Команда доступна только старшим администраторам. "
                 "Обратитесь к администратору для получения доступа."
@@ -85,6 +93,12 @@ class _CallLookupHandlers:
         phone = "".join(args[0:2]) if args[0] == "+7" and len(args) > 1 else args[0]
         period = args[1] if len(args) > 1 else "monthly"
 
+        logger.info(
+            "Пользователь %s выполняет /call_lookup (phone=%s, period=%s)",
+            describe_user(user),
+            phone,
+            period,
+        )
         try:
             response = await self.service.lookup_calls(
                 phone=phone,
@@ -93,9 +107,18 @@ class _CallLookupHandlers:
                 requesting_user_id=user.id,
             )
         except ValueError as exc:
+            logger.warning(
+                "Ошибка валидации /call_lookup (%s): %s",
+                describe_user(user),
+                exc,
+            )
             await message.reply_text(f"Ошибка: {exc}")
             return
         except Exception:
+            logger.exception(
+                "Не удалось выполнить /call_lookup для %s",
+                describe_user(user),
+            )
             await message.reply_text(
                 "Не удалось выполнить поиск. Попробуйте позже."
             )
@@ -113,6 +136,11 @@ class _CallLookupHandlers:
         )
 
         await message.reply_text(text, reply_markup=markup)
+        logger.info(
+            "Пользователь %s получил %s звонков по запросу /call_lookup",
+            describe_user(user),
+            response.get("count"),
+        )
 
     async def handle_callback(self, update: Update, context: CallbackContext) -> None:
         query = update.callback_query
@@ -131,7 +159,17 @@ class _CallLookupHandlers:
 
         if not await self._is_allowed(user.id, user.username):
             await query.edit_message_text("Доступ запрещён.")
+            logger.warning(
+                "Call lookup callback отклонён для %s (action=%s)",
+                describe_user(user),
+                action,
+            )
             return
+        logger.info(
+            "Call lookup callback получен: action=%s user=%s",
+            action,
+            describe_user(user),
+        )
 
         if action == "page":
             request = _LookupRequest(
@@ -139,6 +177,11 @@ class _CallLookupHandlers:
                 period=payload["period"],
                 offset=max(0, int(payload.get("offset", 0))),
                 limit=int(payload.get("limit", 5)),
+            )
+            logger.info(
+                "Call lookup пагинация (%s) пользователем %s",
+                request,
+                describe_user(user),
             )
             response = await self.service.lookup_calls(
                 phone=request.phone,
@@ -162,21 +205,34 @@ class _CallLookupHandlers:
         elif action == "transcript":
             history_id = int(payload["history_id"])
             details = await self.service.fetch_call_details(history_id)
-            transcript = details.get("transcript") if details else None
-            if not transcript:
-                transcript = "Расшифровка отсутствует."
+            details_payload = details or {}
+            transcript = details_payload.get("transcript")
+            text = self._format_transcript_details(details_payload, transcript)
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
-                text=f"ℹ️ Расшифровка звонка #{history_id}:\n{transcript}",
+                text=text,
+                parse_mode="HTML",
+            )
+            logger.info(
+                "Пользователь %s запросил расшифровку звонка %s",
+                describe_user(user),
+                history_id,
             )
         elif action == "record":
             history_id = int(payload["history_id"])
             details = await self.service.fetch_call_details(history_id)
-            record_url = details.get("record_url") if details else None
+            details_payload = details or {}
+            record_url = details_payload.get("record_url")
             if record_url:
                 await context.bot.send_message(
                     chat_id=query.message.chat_id,
-                    text=f"🎧 Запись звонка #{history_id}: {record_url}",
+                    text=self._format_record_message(history_id, details_payload),
+                    parse_mode="HTML",
+                )
+                logger.info(
+                    "Пользователь %s запросил запись звонка %s",
+                    describe_user(user),
+                    history_id,
                 )
             else:
                 await context.bot.send_message(
@@ -220,8 +276,10 @@ class _CallLookupHandlers:
             timestamp = self._format_datetime(item.get("call_time"))
             duration = self._format_duration(item.get("talk_duration"))
             info = f"{item.get('caller_info') or '-'} → {item.get('called_info') or '-'}"
+            patient = item.get("caller_number") or "—"
             piece = (
                 f"{idx}. {timestamp} | {info}\n"
+                f"   Пациент: {patient}\n"
                 f"   ID: {item.get('history_id')} | Длительность: {duration} | "
                 f"Оценка: {item.get('score') if item.get('score') is not None else '—'}"
             )
@@ -340,3 +398,67 @@ class _CallLookupHandlers:
         if minutes:
             return f"{minutes}м {secs:02d}с"
         return f"{secs}с"
+
+    def _format_transcript_details(
+        self,
+        details: Dict[str, Any],
+        transcript: Optional[str],
+    ) -> str:
+        if not details:
+            return "ℹ️ Расшифровка недоступна."
+
+        patient = details.get("caller_number") or "-"
+        call_time = self._format_datetime(details.get("call_time"))
+        record_url = details.get("record_url")
+        recording_id = details.get("recording_id") or "—"
+        lm_metrics = details.get("lm_metrics") or []
+        transcript_text = transcript or "Расшифровка отсутствует."
+
+        metrics_lines = self._format_metrics(lm_metrics)
+
+        message_lines = [
+            f"ℹ️ <b>Звонок #{details.get('history_id')}</b>",
+            f"Пациент: {patient}",
+            f"Время: {call_time}",
+            f"recording_id: {recording_id}",
+            "",
+            f"<b>Расшифровка:</b>\n{transcript_text}",
+        ]
+
+        if metrics_lines:
+            message_lines.append("")
+            message_lines.append("<b>Метрики:</b>")
+            message_lines.extend(metrics_lines)
+
+        if record_url:
+            message_lines.append("")
+            message_lines.append(f"🎧 <a href=\"{record_url}\">Слушать запись</a>")
+
+        return "\n".join(message_lines)
+
+    def _format_metrics(self, metrics: List[Dict[str, Any]]) -> List[str]:
+        lines: List[str] = []
+        for metric in metrics:
+            code = metric.get("metric_code")
+            value = metric.get("value_numeric")
+            label = metric.get("value_label")
+            if isinstance(value, (int, float)):
+                formatted_value = f"{value:.2f}"
+            else:
+                formatted_value = value if value is not None else label or "-"
+            lines.append(f"• {code}: {formatted_value}")
+        return lines
+
+    def _format_record_message(
+        self,
+        history_id: int,
+        details: Dict[str, Any],
+    ) -> str:
+        record_url = details.get("record_url") if details else None
+        recording_id = details.get("recording_id") if details else None
+        parts = [f"🎧 Запись звонка #{history_id}"]
+        if recording_id:
+            parts.append(f"recording_id: {recording_id}")
+        if record_url:
+            parts.append(record_url)
+        return "\n".join(parts)

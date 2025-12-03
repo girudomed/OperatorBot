@@ -11,6 +11,7 @@ from app.services.notifications import NotificationService
 from app.logging_config import get_watchdog_logger
 from app.utils.error_handlers import log_async_exceptions
 from app.core.roles import role_name_from_id
+from app.telegram.utils.logging import describe_user
 
 logger = get_watchdog_logger(__name__)
 
@@ -27,6 +28,20 @@ class AdminUsersHandler:
         self.admin_repo = admin_repo
         self.permissions = permissions
         self.notifications = notifications
+        self.default_filter = "pending"
+
+    def _parse_filter(self, data: str) -> str:
+        parts = data.split(':')
+        return parts[3] if len(parts) > 3 else self.default_filter
+
+    def _extract_user_id(self, data: str) -> int:
+        try:
+            return int(data.split(':')[-1])
+        except (ValueError, IndexError):
+            return 0
+
+    def _build_list_callback(self, status: str) -> str:
+        return f"admin:users:list:{status}"
     
     @log_async_exceptions
     async def show_users_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -34,16 +49,19 @@ class AdminUsersHandler:
         query = update.callback_query
         await query.answer()
         
-        # Получаем параметр фильтра из callback_data
-        # Формат: admin_users:pending или admin_users:approved
-        parts = query.data.split(':')
-        status_filter = parts[1] if len(parts) > 1 else 'pending'
+        # Формат: admin:users:list:<status>
+        status_filter = self._parse_filter(query.data)
+        logger.info(
+            "Админ %s открыл список пользователей (%s)",
+            describe_user(update.effective_user),
+            status_filter,
+        )
         
         users = await self.admin_repo.get_all_users(status_filter)
         
         if not users:
             message = f"📋 Нет пользователей со статусом: {status_filter}"
-            keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="admin_back")]]
+            keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="admin:back")]]
         else:
             message = f"👥 <b>Пользователи ({status_filter})</b>\n\n"
             
@@ -55,23 +73,29 @@ class AdminUsersHandler:
                 keyboard.append([
                     InlineKeyboardButton(
                         user_text,
-                        callback_data=f"admin_user_details:{user_id}"
+                        callback_data=f"admin:users:details:{status_filter}:{user_id}"
                     )
                 ])
             
             # Фильтры
             filters = [
-                InlineKeyboardButton("⏳ Pending", callback_data="admin_users:pending"),
-                InlineKeyboardButton("✅ Approved", callback_data="admin_users:approved"),
-                InlineKeyboardButton("🚫 Blocked", callback_data="admin_users:blocked")
+                InlineKeyboardButton("⏳ Pending", callback_data=self._build_list_callback('pending')),
+                InlineKeyboardButton("✅ Approved", callback_data=self._build_list_callback('approved')),
+                InlineKeyboardButton("🚫 Blocked", callback_data=self._build_list_callback('blocked'))
             ]
             keyboard.append(filters)
-            keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="admin_back")])
+            keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="admin:back")])
         
         await query.edit_message_text(
             text=message,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='HTML'
+        )
+        logger.info(
+            "Админ %s просматривает пользователя id=%s (статус=%s)",
+            describe_user(query.from_user),
+            user_id,
+            user.get('status', status_filter),
         )
     
     @log_async_exceptions
@@ -80,10 +104,20 @@ class AdminUsersHandler:
         query = update.callback_query
         await query.answer()
         
-        # Извлекаем user_id из callback_data
-        user_id = int(query.data.split(':')[1])
-        
-        # Получаем информацию о пользователе из БД
+        status_filter = self._parse_filter(query.data)
+        user_id = self._extract_user_id(query.data)
+        if not user_id:
+            await query.answer("❌ Пользователь не найден", show_alert=True)
+            return
+
+        await self._render_user_details(query, user_id, status_filter)
+
+    async def _render_user_details(
+        self,
+        query,
+        user_id: int,
+        status_filter: str,
+    ):
         user_query = "SELECT * FROM users WHERE id = %s"
         user = await self.admin_repo.db.execute_with_retry(
             user_query, params=(user_id,), fetchone=True
@@ -104,24 +138,29 @@ class AdminUsersHandler:
             f"Статус: <b>{user.get('status', 'pending')}</b>\n"
         )
         
-        # Кнопки действий в зависимости от статуса
         keyboard = []
+        base_callback_suffix = f"{status_filter}:{user_id}"
         
         if user.get('status') == 'pending':
             keyboard.append([
-                InlineKeyboardButton("✅ Approve", callback_data=f"admin_approve:{user_id}"),
-                InlineKeyboardButton("❌ Decline", callback_data=f"admin_decline:{user_id}")
+                InlineKeyboardButton("✅ Approve", callback_data=f"admin:users:approve:{base_callback_suffix}"),
+                InlineKeyboardButton("❌ Decline", callback_data=f"admin:users:decline:{base_callback_suffix}")
             ])
         elif user.get('status') == 'approved':
             keyboard.append([
-                InlineKeyboardButton("🚫 Block", callback_data=f"admin_block:{user_id}")
+                InlineKeyboardButton("🚫 Block", callback_data=f"admin:users:block:{base_callback_suffix}")
             ])
         elif user.get('status') == 'blocked':
             keyboard.append([
-                InlineKeyboardButton("🔓 Unblock", callback_data=f"admin_unblock:{user_id}")
+                InlineKeyboardButton("🔓 Unblock", callback_data=f"admin:users:unblock:{base_callback_suffix}")
             ])
         
-        keyboard.append([InlineKeyboardButton("◀️ К списку", callback_data="admin_users")])
+        keyboard.append([
+            InlineKeyboardButton(
+                "◀️ К списку",
+                callback_data=self._build_list_callback(status_filter)
+            )
+        ])
         
         await query.edit_message_text(
             text=message,
@@ -135,13 +174,20 @@ class AdminUsersHandler:
         query = update.callback_query
         await query.answer()
         
-        user_id = int(query.data.split(':')[1])
+        parts = query.data.split(':')
+        status_filter = parts[3] if len(parts) > 3 else self.default_filter
+        user_id = int(parts[-1])
         actor_id = update.effective_user.id
         
         # Проверяем права
         can_approve = await self.permissions.can_approve(actor_id, update.effective_user.username)
         if not can_approve:
             await query.answer("❌ Недостаточно прав", show_alert=True)
+            logger.warning(
+                "Попытка approve без прав: %s -> target_id=%s",
+                describe_user(update.effective_user),
+                user_id,
+            )
             return
         
         # Утверждаем
@@ -154,7 +200,7 @@ class AdminUsersHandler:
                 params=(user_id,), fetchone=True
             )
             
-            if user:
+            if user and hasattr(self.notifications, "notify_approval"):
                 await self.notifications.notify_approval(
                     user['telegram_id'],
                     update.effective_user.full_name
@@ -163,11 +209,20 @@ class AdminUsersHandler:
             await query.edit_message_text(
                 "✅ Пользователь успешно одобрен. Теперь он может пользоваться ботом.",
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("◀️ К списку", callback_data="admin_users")
+                    InlineKeyboardButton(
+                        "◀️ К списку",
+                        callback_data=self._build_list_callback(status_filter)
+                    )
                 ]])
             )
         else:
             await query.answer("❌ Ошибка при утверждении", show_alert=True)
+        logger.info(
+            "Админ %s утвердил пользователя id=%s (успех=%s)",
+            describe_user(update.effective_user),
+            user_id,
+            success,
+        )
     
     @log_async_exceptions
     async def handle_decline(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -175,12 +230,19 @@ class AdminUsersHandler:
         query = update.callback_query
         await query.answer()
         
-        user_id = int(query.data.split(':')[1])
+        parts = query.data.split(':')
+        status_filter = parts[3] if len(parts) > 3 else self.default_filter
+        user_id = int(parts[-1])
         actor_id = update.effective_user.id
         
         can_approve = await self.permissions.can_approve(actor_id, update.effective_user.username)
         if not can_approve:
             await query.answer("❌ Недостаточно прав", show_alert=True)
+            logger.warning(
+                "Попытка decline без прав: %s -> target_id=%s",
+                describe_user(update.effective_user),
+                user_id,
+            )
             return
         
         success = await self.admin_repo.decline_user(user_id, actor_id)
@@ -189,51 +251,86 @@ class AdminUsersHandler:
             await query.edit_message_text(
                 f"❌ Заявка #{user_id} отклонена",
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("◀️ К списку", callback_data="admin_users")
+                    InlineKeyboardButton(
+                        "◀️ К списку",
+                        callback_data=self._build_list_callback(status_filter)
+                    )
                 ]])
             )
         else:
             await query.answer("❌ Ошибка", show_alert=True)
+        logger.info(
+            "Админ %s отклонил заявку пользователя id=%s (успех=%s)",
+            describe_user(update.effective_user),
+            user_id,
+            success,
+        )
     
     @log_async_exceptions
     async def handle_block(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Блокирует пользователя."""
         query = update.callback_query
-        user_id = int(query.data.split(':')[1])
+        parts = query.data.split(':')
+        status_filter = parts[3] if len(parts) > 3 else self.default_filter
+        user_id = int(parts[-1])
         actor_id = update.effective_user.id
         
         can_manage = await self.permissions.can_approve(actor_id, update.effective_user.username)
         if not can_manage:
             await query.answer("❌ Недостаточно прав", show_alert=True)
+            logger.warning(
+                "Попытка блокировки без прав: %s -> target_id=%s",
+                describe_user(update.effective_user),
+                user_id,
+            )
             return
         
         success = await self.admin_repo.block_user(user_id, actor_id)
         
         if success:
             await query.answer("🚫 Пользователь заблокирован. Он больше не сможет пользоваться ботом.", show_alert=True)
-            await self.show_user_details(update, context)
+            await self._render_user_details(query, user_id, status_filter)
         else:
             await query.answer("❌ Ошибка", show_alert=True)
+        logger.info(
+            "Админ %s заблокировал пользователя id=%s (успех=%s)",
+            describe_user(update.effective_user),
+            user_id,
+            success,
+        )
     
     @log_async_exceptions
     async def handle_unblock(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Разблокирует пользователя."""
         query = update.callback_query
-        user_id = int(query.data.split(':')[1])
+        parts = query.data.split(':')
+        status_filter = parts[3] if len(parts) > 3 else self.default_filter
+        user_id = int(parts[-1])
         actor_id = update.effective_user.id
         
         can_manage = await self.permissions.can_approve(actor_id, update.effective_user.username)
         if not can_manage:
             await query.answer("❌ Недостаточно прав", show_alert=True)
+            logger.warning(
+                "Попытка разблокировки без прав: %s -> target_id=%s",
+                describe_user(update.effective_user),
+                user_id,
+            )
             return
         
         success = await self.admin_repo.unblock_user(user_id, actor_id)
         
         if success:
             await query.answer("✅ Пользователь разблокирован и снова активен.", show_alert=True)
-            await self.show_user_details(update, context)
+            await self._render_user_details(query, user_id, status_filter)
         else:
             await query.answer("❌ Ошибка", show_alert=True)
+        logger.info(
+            "Админ %s разблокировал пользователя id=%s (успех=%s)",
+            describe_user(update.effective_user),
+            user_id,
+            success,
+        )
 
 
 def register_admin_users_handlers(
@@ -247,26 +344,26 @@ def register_admin_users_handlers(
     
     # Список пользователей
     application.add_handler(
-        CallbackQueryHandler(handler.show_users_list, pattern="^admin_users")
+        CallbackQueryHandler(handler.show_users_list, pattern=r"^admin:users:list")
     )
     
     # Детали пользователя
     application.add_handler(
-        CallbackQueryHandler(handler.show_user_details, pattern="^admin_user_details:")
+        CallbackQueryHandler(handler.show_user_details, pattern=r"^admin:users:details:")
     )
     
     # Действия
     application.add_handler(
-        CallbackQueryHandler(handler.handle_approve, pattern="^admin_approve:")
+        CallbackQueryHandler(handler.handle_approve, pattern=r"^admin:users:approve:")
     )
     application.add_handler(
-        CallbackQueryHandler(handler.handle_decline, pattern="^admin_decline:")
+        CallbackQueryHandler(handler.handle_decline, pattern=r"^admin:users:decline:")
     )
     application.add_handler(
-        CallbackQueryHandler(handler.handle_block, pattern="^admin_block:")
+        CallbackQueryHandler(handler.handle_block, pattern=r"^admin:users:block:")
     )
     application.add_handler(
-        CallbackQueryHandler(handler.handle_unblock, pattern="^admin_unblock:")
+        CallbackQueryHandler(handler.handle_unblock, pattern=r"^admin:users:unblock:")
     )
     
     logger.info("Admin users handlers registered")

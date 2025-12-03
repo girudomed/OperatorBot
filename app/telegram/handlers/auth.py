@@ -5,7 +5,10 @@ Telegram хендлеры авторизации и регистрации.
 import time
 from functools import partial
 
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup
+from typing import List
+
+from app.telegram.utils.buttons import ADMIN_PANEL_BUTTON, CALL_LOOKUP_BUTTON
 from telegram.ext import (
     CallbackContext,
     CommandHandler,
@@ -20,6 +23,27 @@ from app.telegram.middlewares.permissions import PermissionsManager
 from app.logging_config import get_watchdog_logger
 
 logger = get_watchdog_logger(__name__)
+
+COMMON_COMMANDS = ["start", "help"]
+OPERATOR_COMMANDS = COMMON_COMMANDS + ["weekly_quality", "report"]
+ADMIN_COMMANDS = OPERATOR_COMMANDS + ["call_lookup", "admin", "approve", "make_admin", "admins"]
+SUPERADMIN_COMMANDS = ADMIN_COMMANDS + ["make_superadmin", "register"]
+
+COMMAND_DESCRIPTIONS = {
+    "start": "Перезапустить диалог с ботом",
+    "help": "Показать список доступных команд",
+    "register": "Отправить заявку на доступ",
+    "weekly_quality": "Получить еженедельный отчёт качества",
+    "report": "Сформировать AI-отчёт",
+    "call_lookup": "Найти звонки по номеру",
+    "admin": "Открыть админ-панель",
+    "approve": "Утвердить пользователя по ID",
+    "make_admin": "Назначить администратора",
+    "make_superadmin": "Назначить супер-админа",
+    "admins": "Показать текущий список админов",
+    "verify_password": "Проверить пароль роли",
+    "reset_password": "Сбросить пароль роли",
+}
 
 # Стадии диалога для регистрации
 ASK_NAME, ASK_ROLE, ASK_OPERATOR_ID = range(3)
@@ -249,13 +273,16 @@ async def start_command(update: Update, context: CallbackContext, permissions: P
     if not message or not user:
         return
     
-    if permissions.is_supreme_admin(user.id, user.username) or permissions.is_dev_admin(user.id, user.username):
-        await message.reply_text(
-            "Вы вошли как superadmin. Вам доступны все команды и управление ролями."
-        )
-        return
+    role = 'operator'
+    status = None
+    is_super = permissions.is_supreme_admin(user.id, user.username) or permissions.is_dev_admin(user.id, user.username)
     
-    status = await permissions.get_user_status(user.id)
+    if is_super:
+        role = 'superadmin'
+        status = 'approved'
+    else:
+        status = await permissions.get_user_status(user.id)
+    
     if status is None:
         await message.reply_text(
             "Привет! Ты не зарегистрирован в системе. Используй /register, чтобы отправить заявку."
@@ -277,19 +304,69 @@ async def start_command(update: Update, context: CallbackContext, permissions: P
     role = await permissions.get_effective_role(user.id, user.username)
     if role == 'operator':
         text = (
-            "Добро пожаловать! Ваш статус подтверждён. "
-            "Используйте рабочие команды бота для получения отчётов и метрик."
+            "Добро пожаловать! Ваш статус подтверждён.\n"
+            "Используйте команды ниже, чтобы получить отчёты и справочную информацию."
         )
     elif role == 'admin':
         text = (
             "Вы вошли как администратор. Вам доступна админ-панель, утверждение пользователей "
-            "и просмотр статистики."
+            "и просмотр статистики. Используйте команды ниже."
         )
     else:
         text = (
-            "Вы вошли как superadmin. Вам доступны все функции, включая управление ролями."
+            "Вы вошли как superadmin. Вам доступны все функции, включая управление ролями.\n"
+            "Список команд и кнопки приведены ниже."
         )
-    await message.reply_text(text)
+    
+    keyboard = _build_keyboard_for_role(role)
+    commands_text = _format_commands_for_role(role)
+    
+    await message.reply_text(
+        f"{text}\n\n<b>Доступные команды:</b>\n{commands_text}",
+        reply_markup=keyboard,
+        parse_mode='HTML'
+    )
+
+
+async def help_command(update: Update, context: CallbackContext, permissions: PermissionsManager):
+    """Команда /help: выводит список команд и доступных функций."""
+    message = update.effective_message
+    user = update.effective_user
+    if not message or not user:
+        return
+    
+    role = 'operator'
+    status = None
+    
+    if permissions.is_supreme_admin(user.id, user.username) or permissions.is_dev_admin(user.id, user.username):
+        role = 'superadmin'
+        status = 'approved'
+    else:
+        status = await permissions.get_user_status(user.id)
+    
+    if status is None:
+        await message.reply_text("Вы ещё не зарегистрированы. Используйте /register, чтобы получить доступ.")
+        return
+    
+    if status == 'pending':
+        await message.reply_text("Ваш аккаунт пока ожидает подтверждения. Как только статус станет approved, команды появятся автоматически.")
+        return
+    
+    if status == 'blocked':
+        await message.reply_text("Ваш аккаунт заблокирован. Свяжитесь с администратором для разблокировки.")
+        return
+    
+    if role != 'superadmin':
+        role = await permissions.get_effective_role(user.id, user.username)
+    
+    keyboard = _build_keyboard_for_role(role)
+    commands_text = _format_commands_for_role(role)
+    
+    await message.reply_text(
+        f"<b>Доступные команды ({role}):</b>\n{commands_text}",
+        reply_markup=keyboard,
+        parse_mode='HTML'
+    )
 
 
 def setup_auth_handlers(application, db_manager: DatabaseManager, permissions_manager: PermissionsManager):
@@ -309,7 +386,34 @@ def setup_auth_handlers(application, db_manager: DatabaseManager, permissions_ma
 
     application.add_handler(registration_conv_handler)
     application.add_handler(CommandHandler('start', partial(start_command, permissions=permissions_manager)))
+    application.add_handler(CommandHandler('help', partial(help_command, permissions=permissions_manager)))
     application.add_handler(CommandHandler('verify_password', partial(verify_password_handle, auth_manager=auth_manager)))
     application.add_handler(CommandHandler('reset_password', partial(reset_password_handle, auth_manager=auth_manager)))
 
     logger.info("Хендлеры авторизации зарегистрированы.")
+
+
+def _commands_for_role(role: str) -> List[str]:
+    if role == 'superadmin':
+        return SUPERADMIN_COMMANDS
+    if role == 'admin':
+        return ADMIN_COMMANDS
+    return OPERATOR_COMMANDS
+
+
+def _build_keyboard_for_role(role: str) -> ReplyKeyboardMarkup:
+    commands = _commands_for_role(role)
+    buttons = [f"/{cmd}" for cmd in commands]
+    rows = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
+    if role in ("admin", "superadmin"):
+        rows.append([ADMIN_PANEL_BUTTON, CALL_LOOKUP_BUTTON])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=False)
+
+
+def _format_commands_for_role(role: str) -> str:
+    commands = _commands_for_role(role)
+    lines = []
+    for cmd in commands:
+        description = COMMAND_DESCRIPTIONS.get(cmd, "Команда")
+        lines.append(f"/{cmd} — {description}")
+    return "\n".join(lines)

@@ -59,8 +59,8 @@ class AdminStatsHandler:
         )
         
         keyboard = [
-            [InlineKeyboardButton("🔄 Обновить", callback_data="admin_stats")],
-            [InlineKeyboardButton("◀️ Назад", callback_data="admin_back")]
+            [InlineKeyboardButton("🔄 Обновить", callback_data="admin:stats")],
+            [InlineKeyboardButton("◀️ Назад", callback_data="admin:back")]
         ]
         
         await query.edit_message_text(
@@ -80,7 +80,7 @@ def register_admin_stats_handlers(
     handler = AdminStatsHandler(admin_repo, metrics_service, permissions)
     
     application.add_handler(
-        CallbackQueryHandler(handler.show_stats, pattern="^admin_stats$")
+        CallbackQueryHandler(handler.show_stats, pattern=r"^admin:stats$")
     )
     
     logger.info("Admin stats handlers registered")

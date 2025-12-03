@@ -8,6 +8,7 @@ import sys
 import logging
 
 import nest_asyncio
+from telegram import BotCommand
 from telegram.ext import ApplicationBuilder
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -82,7 +83,10 @@ async def main():
         # 2. Инициализация сервисов
         permissions_manager = PermissionsManager(db_manager)
         
-        call_lookup_service = CallLookupService(db_manager)
+        from app.db.repositories.lm_repository import LMRepository
+
+        lm_repo = LMRepository(db_manager)
+        call_lookup_service = CallLookupService(db_manager, lm_repo)
         weekly_quality_service = WeeklyQualityService(db_manager)
         report_service = ReportService(db_manager)
         
@@ -113,6 +117,8 @@ async def main():
         from app.telegram.handlers.admin_users import register_admin_users_handlers
         from app.telegram.handlers.admin_commands import register_admin_commands_handlers
         from app.telegram.handlers.admin_stats import register_admin_stats_handlers
+        from app.telegram.handlers.admin_admins import register_admin_admins_handlers
+        from app.telegram.handlers.admin_lookup import register_admin_lookup_handlers
         
         # Initialize MetricsService for stats
         from app.services.metrics_service import MetricsService
@@ -122,8 +128,10 @@ async def main():
         
         register_admin_panel_handlers(application, admin_repo, permissions_manager)
         register_admin_users_handlers(application, admin_repo, permissions_manager, notification_service)
+        register_admin_admins_handlers(application, admin_repo, permissions_manager, notification_service)
         register_admin_commands_handlers(application, admin_repo, permissions_manager, notification_service)
         register_admin_stats_handlers(application, admin_repo, metrics_service, permissions_manager)
+        register_admin_lookup_handlers(application, permissions_manager)
         
         # Call Lookup (/call_lookup)
         register_call_lookup_handlers(application, call_lookup_service, permissions_manager)
@@ -133,6 +141,8 @@ async def main():
         
         # Reports (/report)
         register_report_handlers(application, report_service, permissions_manager, db_manager)
+
+        await _configure_bot_commands(application)
 
         # 5. Запуск воркеров очереди
         await start_workers(application)
@@ -184,6 +194,26 @@ async def main():
         
         # Освобождение блокировки (хотя ОС сделает это сама при выходе)
         lock_fp.close()
+
+
+async def _configure_bot_commands(application):
+    """Устанавливает список доступных команд бота."""
+    commands = [
+        BotCommand("start", "Перезапустить диалог"),
+        BotCommand("help", "Показать список команд"),
+        BotCommand("register", "Отправить заявку на доступ"),
+        BotCommand("verify_password", "Проверить пароль роли"),
+        BotCommand("reset_password", "Сбросить пароль роли"),
+        BotCommand("weekly_quality", "Еженедельный отчёт качества"),
+        BotCommand("report", "AI-отчёт"),
+        BotCommand("call_lookup", "Поиск звонков по номеру"),
+        BotCommand("admin", "Открыть админ-панель"),
+        BotCommand("approve", "Одобрить пользователя"),
+        BotCommand("make_admin", "Назначить администратора"),
+        BotCommand("make_superadmin", "Назначить супер-админа"),
+        BotCommand("admins", "Показать администраторов"),
+    ]
+    await application.bot.set_my_commands(commands)
 
 if __name__ == "__main__":
     try:
