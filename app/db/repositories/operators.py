@@ -222,23 +222,19 @@ class OperatorRepository:
         Args:
             include_pending: включать ли пользователей со статусом pending.
         """
-        statuses = ["approved"]
-        if include_pending:
-            statuses.append("pending")
-
-        placeholders = ",".join(["%s"] * len(statuses))
+        # The 'statuses' and 'placeholders' logic is no longer needed as 'status' and 'role_id' are removed from WHERE clause.
+        # The instruction implies removing these fields and filtering by extension IS NOT NULL instead.
         query = f"""
-            SELECT id AS user_id,
-                   user_id AS telegram_id,
+            SELECT user_id,
                    full_name,
                    username,
-                   extension,
-                   status
+                   extension
             FROM users
-            WHERE status IN ({placeholders}) AND role_id = %s
+            WHERE extension IS NOT NULL
             ORDER BY COALESCE(full_name, username, 'Без имени')
         """
-        params = (*statuses, ROLE_NAME_TO_ID["operator"])
+        # The 'params' should be empty as there are no dynamic parameters in the new WHERE clause.
+        params = () 
         rows = await self.db_manager.execute_with_retry(
             query,
             params=params,
@@ -257,9 +253,9 @@ class OperatorRepository:
     async def get_operator_info_by_user_id(self, user_id: int) -> Optional[Dict[str, Any]]:
         """Получает информацию об операторе по user_id."""
         query = """
-            SELECT id AS user_id, user_id AS telegram_id, full_name, username, extension
+            SELECT user_id, full_name, username, extension
             FROM users
-            WHERE id = %s
+            WHERE user_id = %s
             LIMIT 1
         """
         return await self.db_manager.execute_with_retry(
