@@ -40,7 +40,7 @@ class TestDatabaseManager:
         mock_cursor.__aenter__.return_value = mock_cursor
         mock_cursor.__aexit__.return_value = False
         mock_conn.cursor.return_value = mock_cursor
-        db_manager.pool.acquire.return_value = mock_conn
+        db_manager.pool.acquire = AsyncMock(return_value=mock_conn)
         
         # Mock result
         mock_cursor.fetchone.return_value = {"id": 1}

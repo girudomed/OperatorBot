@@ -4,7 +4,7 @@ Unit tests for MetricsService aligned with the new logic.
 
 import pytest
 from datetime import datetime
-from unittest.mock import Mock
+from unittest.mock import Mock, AsyncMock
 
 from app.services.metrics_service import MetricsService
 
