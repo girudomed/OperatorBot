@@ -1,15 +1,10 @@
 """
 Роли и права пользователей на основе таблицы roles_reference.
 
-Роли:
-    1 - Оператор
-    2 - Администратор (старший админ регистратуры)
-    3 - Маркетолог
-    4 - ЗавРег (заведующий регистратурой)
-    5 - Ст.админ (старший администратор)
-    6 - Руководство
-    7 - SuperAdmin
-    8 - Dev
+Роли (актуальная схема БД):
+    1 - operator
+    2 - admin
+    3 - superadmin
 """
 
 from typing import Dict, Optional
@@ -28,13 +23,8 @@ class RolePermissions:
 # Соответствие role_id -> имя роли
 ROLE_ID_TO_NAME: Dict[int, str] = {
     1: "operator",
-    2: "admin",          # Администратор / Ст.админ рег.
-    3: "marketer",       # Маркетолог
-    4: "zavreg",         # ЗавРег
-    5: "senior_admin",   # Ст.админ
-    6: "management",     # Руководство
-    7: "superadmin",     # SuperAdmin
-    8: "dev",            # Dev
+    2: "admin",
+    3: "superadmin",
 }
 
 ROLE_NAME_TO_ID: Dict[str, int] = {name: role_id for role_id, name in ROLE_ID_TO_NAME.items()}
@@ -43,34 +33,24 @@ ROLE_NAME_TO_ID: Dict[str, int] = {name: role_id for role_id, name in ROLE_ID_TO
 ROLE_DISPLAY_NAMES: Dict[int, str] = {
     1: "Оператор",
     2: "Администратор",
-    3: "Маркетолог",
-    4: "ЗавРег",
-    5: "Ст.админ",
-    6: "Руководство",
-    7: "SuperAdmin",
-    8: "Dev",
+    3: "SuperAdmin",
 }
 
 # Права ролей согласно roles_reference
 ROLE_PERMISSIONS: Dict[int, RolePermissions] = {
-    1: RolePermissions(can_view_own_stats=True, can_view_all_stats=False, can_manage_users=False, can_debug=False),
-    2: RolePermissions(can_view_own_stats=True, can_view_all_stats=True, can_manage_users=True, can_debug=False),
-    3: RolePermissions(can_view_own_stats=True, can_view_all_stats=True, can_manage_users=False, can_debug=False),
-    4: RolePermissions(can_view_own_stats=True, can_view_all_stats=True, can_manage_users=True, can_debug=False),
-    5: RolePermissions(can_view_own_stats=True, can_view_all_stats=True, can_manage_users=True, can_debug=False),
-    6: RolePermissions(can_view_own_stats=True, can_view_all_stats=True, can_manage_users=False, can_debug=False),
-    7: RolePermissions(can_view_own_stats=True, can_view_all_stats=True, can_manage_users=True, can_debug=True),
-    8: RolePermissions(can_view_own_stats=True, can_view_all_stats=True, can_manage_users=True, can_debug=True),
+    1: RolePermissions(can_view_own_stats=True),
+    2: RolePermissions(can_view_own_stats=True, can_view_all_stats=True, can_manage_users=True),
+    3: RolePermissions(can_view_own_stats=True, can_view_all_stats=True, can_manage_users=True, can_debug=True),
 }
 
 # Роли с админскими правами (can_manage_users=True)
-ADMIN_ROLE_IDS = {2, 4, 5, 7, 8}
+ADMIN_ROLE_IDS = {2, 3}
 
 # Роли с полным доступом к статистике (can_view_all_stats=True)
-STATS_VIEWER_ROLE_IDS = {2, 3, 4, 5, 6, 7, 8}
+STATS_VIEWER_ROLE_IDS = {2, 3}
 
 # Роли с правами отладки (can_debug=True) 
-DEBUG_ROLE_IDS = {7, 8}
+DEBUG_ROLE_IDS = {3}
 
 DEFAULT_ROLE_ID = 1
 
@@ -130,8 +110,7 @@ def is_admin_role(role_id: int | None) -> bool:
 
 
 def is_superadmin_or_higher(role_id: int | None) -> bool:
-    """Проверяет, имеет ли роль максимальные права (SuperAdmin/Dev)."""
+    """Проверяет, имеет ли роль максимальные права (SuperAdmin)."""
     if role_id is None:
         return False
-    return int(role_id) in {7, 8}
-
+    return int(role_id) == 3
