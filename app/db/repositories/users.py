@@ -1,5 +1,7 @@
 """
-Репозиторий для работы с пользователями и ролями.
+Репозиторий для работы с Telegram пользователями и ролями.
+ВАЖНО: Использует таблицу UsersTelegaBot, а НЕ users!
+Таблица users - это справочник Mango (телефонные пользователи).
 """
 
 from typing import Optional, Dict
@@ -12,70 +14,243 @@ logger = get_watchdog_logger(__name__)
 
 
 class UserRepository:
+    """
+    Repository для работы с Telegram пользователями.
+    Использует таблицу UsersTelegaBot для ролей, статусов, и связи с Telegram.
+    """
+    
     def __init__(self, db_manager: DatabaseManager):
         self.db_manager = db_manager
 
-    async def register_user_if_not_exists(
+    async def register_telegram_user(
         self, 
-        user_id: int, 
+        user_id: int,  # Telegram ID
         username: Optional[str], 
-        full_name: str, 
-        operator_id: Optional[int] = None, 
-        password: Optional[str] = None, 
-        role_id: Optional[int] = None
+        full_name: str,
+        role_id: int = 1,  # По умолчанию - Оператор
+        status: str = 'pending',  # pending, approved, blocked
+        operator_name: Optional[str] = None,
+        extension: Optional[str] = None
     ) -> None:
-        """Регистрация пользователя, если он не существует в базе данных."""
-        if not await self.user_exists(user_id):
-            query_insert = """
-                INSERT INTO users (user_id, username, full_name, operator_id, password, role_id)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """
-            await self.db_manager.execute_query(
-                query_insert, 
-                (user_id, username, full_name, operator_id, password, role_id)
-            )
-            logger.info(f"Пользователь '{full_name}' зарегистрирован.")
-        else:
-            logger.info(f"Пользователь '{full_name}' уже существует.")
+        """
+        Регистрация Telegram пользователя в UsersTelegaBot.
+        
+        Args:
+            user_id: Telegram user ID
+            username: Telegram username (@username)
+            full_name: Полное имя
+            role_id: ID роли (по умолчанию 1 = Оператор)
+            status: Статус (pending/approved/blocked)
+            operator_name: Имя оператора для связки с users (Mango)
+            extension: Extension для связки с users (Mango)
+        """
+        logger.info(f"[USER_REPO] Registering Telegram user: {user_id}, {full_name}")
+        
+        try:
+            if not await self.user_exists(user_id):
+                query_insert = """
+                    INSERT INTO UsersTelegaBot 
+                        (user_id, username, full_name, role_id, status, operator_name, extension, registered_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                """
+                await self.db_manager.execute_query(
+                    query_insert, 
+                    (user_id, username, full_name, role_id, status, operator_name, extension)
+                )
+                logger.info(f"[USER_REPO] Telegram user '{full_name}' registered successfully")
+            else:
+                logger.info(f"[USER_REPO] Telegram user '{full_name}' already exists")
+        except Exception as e:
+            logger.error(f"[USER_REPO] Error registering user {user_id}: {e}", exc_info=True)
+            raise
 
     async def user_exists(self, user_id: int) -> bool:
-        """Проверка существования пользователя по user_id."""
-        query = "SELECT 1 FROM users WHERE user_id = %s"
+        """Проверка существования Telegram пользователя по user_id."""
+        query = "SELECT 1 FROM UsersTelegaBot WHERE user_id = %s"
         result = await self.db_manager.execute_query(query, (user_id,), fetchone=True)
         return bool(result)
 
-    async def get_user_by_id(self, user_id: int) -> Optional[UserRecord]:
-        """Получение пользователя по user_id."""
-        query = "SELECT * FROM users WHERE user_id = %s"
-        result = await self.db_manager.execute_query(query, (user_id,), fetchone=True)
-        if not result or not isinstance(result, dict):
-            logger.warning(f"Пользователь с ID {user_id} не найден.")
+    async def get_user_by_telegram_id(self, user_id: int) -> Optional[UserRecord]:
+        """Получение Telegram пользователя по user_id."""
+        logger.debug(f"[USER_REPO] Getting user by Telegram ID: {user_id}")
+        
+        try:
+            query = """
+            SELECT 
+                user_id,
+                username,
+                full_name,
+                role_id,
+                status,
+                operator_name,
+                extension,
+                approved_by,
+                blocked_at,
+                registered_at
+            FROM UsersTelegaBot 
+            WHERE user_id = %s
+            """
+            result = await self.db_manager.execute_query(query, (user_id,), fetchone=True)
+            
+            if not result or not isinstance(result, dict):
+                logger.warning(f"[USER_REPO] Telegram user with ID {user_id} not found")
+                return None
+            
+            logger.debug(f"[USER_REPO] Found user: {result.get('full_name')}, role_id={result.get('role_id')}")
+            return result
+        except Exception as e:
+            logger.error(f"[USER_REPO] Error getting user {user_id}: {e}", exc_info=True)
             return None
-        return result
 
     async def get_user_role(self, user_id: int) -> Optional[int]:
-        """Получение роли пользователя по user_id."""
-        query = "SELECT role_id FROM users WHERE user_id = %s"
-        user_role = await self.db_manager.execute_query(query, (user_id,), fetchone=True)
-        if not user_role:
-            logger.warning(f"Роль для пользователя с ID {user_id} не найдена.")
+        """Получение роли Telegram пользователя по user_id."""
+        logger.debug(f"[USER_REPO] Getting role for user: {user_id}")
+        
+        try:
+            query = "SELECT role_id FROM UsersTelegaBot WHERE user_id = %s"
+            user_role = await self.db_manager.execute_query(query, (user_id,), fetchone=True)
+            
+            if not user_role:
+                logger.warning(f"[USER_REPO] Role for user {user_id} not found")
+                return None
+            
+            role_id = user_role.get('role_id')
+            logger.debug(f"[USER_REPO] User {user_id} has role_id={role_id}")
+            return role_id
+        except Exception as e:
+            logger.error(f"[USER_REPO] Error getting role for user {user_id}: {e}", exc_info=True)
             return None
-        return user_role.get('role_id')
 
-    async def get_role_id_by_name(self, role_name: str) -> Optional[Dict[str, int]]:
-        """Получение role_id по названию роли."""
-        query = "SELECT id FROM RolesTelegaBot WHERE role_name = %s"
-        result = await self.db_manager.execute_query(query, (role_name,), fetchone=True)
-        if not result or not isinstance(result, dict):
-            logger.warning(f"Роль с именем {role_name} не найдена.")
-            return None
-        return result
+    async def update_user_role(self, user_id: int, new_role_id: int) -> None:
+        """Обновление роли пользователя."""
+        logger.info(f"[USER_REPO] Updating role for user {user_id} to {new_role_id}")
+        
+        try:
+            query = "UPDATE UsersTelegaBot SET role_id = %s WHERE user_id = %s"
+            await self.db_manager.execute_query(query, (new_role_id, user_id))
+            logger.info(f"[USER_REPO] Role updated successfully")
+        except Exception as e:
+            logger.error(f"[USER_REPO] Error updating role for user {user_id}: {e}", exc_info=True)
+            raise
 
-    async def get_role_name_by_id(self, role_id: int) -> Optional[Dict[str, str]]:
-        """Получение названия роли по role_id."""
-        query = "SELECT role_name FROM RolesTelegaBot WHERE id = %s"
-        result = await self.db_manager.execute_query(query, (role_id,), fetchone=True)
-        if not result or not isinstance(result, dict):
-            logger.warning(f"Роль с ID {role_id} не найдена.")
+    async def update_user_status(self, user_id: int, new_status: str) -> None:
+        """Обновление статуса пользователя (pending/approved/blocked)."""
+        logger.info(f"[USER_REPO] Updating status for user {user_id} to {new_status}")
+        
+        try:
+            query = "UPDATE UsersTelegaBot SET status = %s WHERE user_id = %s"
+            await self.db_manager.execute_query(query, (new_status, user_id))
+            logger.info(f"[USER_REPO] Status updated successfully")
+        except Exception as e:
+            logger.error(f"[USER_REPO] Error updating status for user {user_id}: {e}", exc_info=True)
+            raise
+
+    async def link_operator(
+        self, 
+        user_id: int, 
+        operator_name: str,
+        extension: Optional[str] = None
+    ) -> None:
+        """
+        Связать Telegram пользователя с оператором из таблицы users (Mango).
+        
+        Args:
+            user_id: Telegram ID
+            operator_name: Имя оператора (из поля full_name в users)
+            extension: Extension номер (из поля extension в users)
+        """
+        logger.info(f"[USER_REPO] Linking user {user_id} to operator: {operator_name}")
+        
+        try:
+            query = """
+            UPDATE UsersTelegaBot 
+            SET operator_name = %s, extension = %s
+            WHERE user_id = %s
+            """
+            await self.db_manager.execute_query(query, (operator_name, extension, user_id))
+            logger.info(f"[USER_REPO] User linked to operator successfully")
+        except Exception as e:
+            logger.error(f"[USER_REPO] Error linking operator for user {user_id}: {e}", exc_info=True)
+            raise
+
+    async def get_role_id_by_name(self, role_name: str) -> Optional[int]:
+        """Получение role_id по названию роли из RolesTelegaBot."""
+        logger.debug(f"[USER_REPO] Getting role_id for role: {role_name}")
+        
+        try:
+            query = "SELECT id FROM RolesTelegaBot WHERE role_name = %s"
+            result = await self.db_manager.execute_query(query, (role_name,), fetchone=True)
+            
+            if not result:
+                logger.warning(f"[USER_REPO] Role {role_name} not found")
+                return None
+            
+            return result.get('id')
+        except Exception as e:
+            logger.error(f"[USER_REPO] Error getting role_id for {role_name}: {e}", exc_info=True)
             return None
-        return result
+
+    async def get_role_name_by_id(self, role_id: int) -> Optional[str]:
+        """Получение названия роли по role_id из RolesTelegaBot."""
+        logger.debug(f"[USER_REPO] Getting role name for id: {role_id}")
+        
+        try:
+            query = "SELECT role_name FROM RolesTelegaBot WHERE id = %s"
+            result = await self.db_manager.execute_query(query, (role_id,), fetchone=True)
+            
+            if not result:
+                logger.warning(f"[USER_REPO] Role with ID {role_id} not found")
+                return None
+            
+            return result.get('role_name')
+        except Exception as e:
+            logger.error(f"[USER_REPO] Error getting role name for id {role_id}: {e}", exc_info=True)
+            return None
+
+    async def approve_user(self, user_id: int, approved_by: int) -> None:
+        """Одобрить пользователя."""
+        logger.info(f"[USER_REPO] Approving user {user_id} by {approved_by}")
+        
+        try:
+            query = """
+            UPDATE UsersTelegaBot 
+            SET status = 'approved', approved_by = %s
+            WHERE user_id = %s
+            """
+            await self.db_manager.execute_query(query, (approved_by, user_id))
+            logger.info(f"[USER_REPO] User {user_id} approved successfully")
+        except Exception as e:
+            logger.error(f"[USER_REPO] Error approving user {user_id}: {e}", exc_info=True)
+            raise
+
+    async def block_user(self, user_id: int) -> None:
+        """Заблокировать пользователя."""
+        logger.info(f"[USER_REPO] Blocking user {user_id}")
+        
+        try:
+            query = """
+            UPDATE UsersTelegaBot 
+            SET status = 'blocked', blocked_at = NOW()
+            WHERE user_id = %s
+            """
+            await self.db_manager.execute_query(query, (user_id,))
+            logger.info(f"[USER_REPO] User {user_id} blocked successfully")
+        except Exception as e:
+            logger.error(f"[USER_REPO] Error blocking user {user_id}: {e}", exc_info=True)
+            raise
+
+    async def unblock_user(self, user_id: int) -> None:
+        """Разблокировать пользователя."""
+        logger.info(f"[USER_REPO] Unblocking user {user_id}")
+        
+        try:
+            query = """
+            UPDATE UsersTelegaBot 
+            SET status = 'approved', blocked_at = NULL
+            WHERE user_id = %s
+            """
+            await self.db_manager.execute_query(query, (user_id,))
+            logger.info(f"[USER_REPO] User {user_id} unblocked successfully")
+        except Exception as e:
+            logger.error(f"[USER_REPO] Error unblocking user {user_id}: {e}", exc_info=True)
+            raise

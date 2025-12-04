@@ -1,7 +1,8 @@
 """
 Менеджер прав доступа для админ-панели.
 
-Использует таблицу users с полями role_id/status.
+Использует таблицу UsersTelegaBot с полями role_id/status.
+Таблица users - это Mango справочник (НЕ использовать для ролей!).
 Поддерживает Supreme Admin и Dev Admin из конфигурации.
 """
 
@@ -28,7 +29,9 @@ CACHE_TTL_SECONDS = 10.0
 
 class PermissionsManager:
     """
-    Управление правами доступа на основе ролей из таблицы users.
+    Управление правами доступа на основе ролей из таблицы UsersTelegaBot.
+    
+    ВАЖНО: НЕ ПУТАТЬ с таблицей users (Mango phone справочник)!
     
     Иерархия ролей:
     - operator: базовый доступ
@@ -78,7 +81,7 @@ class PermissionsManager:
         try:
             query = """
                 SELECT role_id, status 
-                FROM users 
+                FROM UsersTelegaBot 
                 WHERE user_id = %s
             """
             row = await self.db_manager.execute_with_retry(
@@ -116,7 +119,7 @@ class PermissionsManager:
             return status
 
         try:
-            query = "SELECT status FROM users WHERE user_id = %s"
+            query = "SELECT status FROM UsersTelegaBot WHERE user_id = %s"
             row = await self.db_manager.execute_with_retry(
                 query, params=(user_id,), fetchone=True
             )

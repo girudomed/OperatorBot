@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta
 
 from app.db.manager import DatabaseManager
 from app.db.models import DashboardMetrics, OperatorRecommendation
+from app.db.repositories.call_analytics_repo import CallAnalyticsRepository
 from app.logging_config import get_watchdog_logger
 
 logger = get_watchdog_logger(__name__)
@@ -16,6 +17,7 @@ logger = get_watchdog_logger(__name__)
 class AnalyticsRepository:
     def __init__(self, db_manager: DatabaseManager):
         self.db_manager = db_manager
+        self.call_analytics_repo = CallAnalyticsRepository(db_manager)
 
     # ========================================================================
     # Общая статистика по звонкам
@@ -41,26 +43,37 @@ class AnalyticsRepository:
         logger.info(f"[ANALYTICS] Getting daily stats: operator={operator_name}, period={date_from} to {date_to}")
         
         try:
-            query = """
-            SELECT 
-                COUNT(*) as accepted_calls,
-                SUM(CASE WHEN outcome = 'record' AND is_target = 1 THEN 1 ELSE 0 END) as records,
-                SUM(CASE WHEN outcome = 'lead_no_record' AND is_target = 1 THEN 1 ELSE 0 END) as leads_no_record,
-                SUM(CASE WHEN outcome IN ('record','lead_no_record') AND is_target = 1 THEN 1 ELSE 0 END) as wish_to_record
-            FROM call_scores
-            WHERE call_date BETWEEN %s AND %s
-              AND call_type = 'принятый'
-              AND (
-                  (context_type = 'входящий' AND called_info = %s)
-                  OR (context_type = 'исходящий' AND caller_info = %s)
-              )
-            """
-            
-            result = await self.db_manager.execute_query(
-                query,
-                (date_from, date_to, operator_name, operator_name),
-                fetchone=True
+            # Используем call_analytics для быстрого доступа
+            metrics = await self.call_analytics_repo.get_aggregated_metrics(
+                operator_name, date_from, date_to
             )
+            
+            if not metrics:
+                logger.warning(f"[ANALYTICS] No data in call_analytics for {operator_name}")
+                # Fallback на call_scores если call_analytics пуст
+                query = """
+                SELECT 
+                    COUNT(*) as accepted_calls,
+                    SUM(CASE WHEN outcome = 'record' AND is_target = 1 THEN 1 ELSE 0 END) as records,
+                    SUM(CASE WHEN outcome = 'lead_no_record' AND is_target = 1 THEN 1 ELSE 0 END) as leads_no_record,
+                    SUM(CASE WHEN outcome IN ('record','lead_no_record') AND is_target = 1 THEN 1 ELSE 0 END) as wish_to_record
+                FROM call_scores
+                WHERE call_date BETWEEN %s AND %s
+                  AND call_type = 'принятый'
+                  AND (
+                      (context_type = 'входящий' AND called_info = %s)
+                      OR (context_type = 'исходящий' AND caller_info = %s)
+                  )
+                """
+                
+                result = await self.db_manager.execute_query(
+                    query,
+                    (date_from, date_to, operator_name, operator_name),
+                    fetchone=True
+                )
+            else:
+                # Используем данные из call_analytics
+                result = metrics
             
             logger.debug(f"[ANALYTICS] Query executed, result: {result}")
             
@@ -511,47 +524,109 @@ class AnalyticsRepository:
     # Сохранение рекомендаций
     # ========================================================================
 
-    async def save_recommendations(
+    async def save_operator_recommendations(
         self,
         operator_name: str,
         report_date: date,
         recommendations: str,
         call_samples_analyzed: int
-    ) -> None:
-        """Сохранить LLM-рекомендации для оператора."""
-        query = """
-        INSERT INTO operator_recommendations 
-            (operator_name, report_date, recommendations, call_samples_analyzed, generated_at)
-        VALUES (%s, %s, %s, %s, NOW())
-        ON DUPLICATE KEY UPDATE
-            recommendations = VALUES(recommendations),
-            call_samples_analyzed = VALUES(call_samples_analyzed),
-            generated_at = NOW()
+    ) -> bool:
         """
+        Сохранить LLM-рекомендации для оператора в operator_recommendations.
         
-        await self.db_manager.execute_query(
-            query,
-            (operator_name, report_date, recommendations, call_samples_analyzed)
+        Args:
+            operator_name: Имя оператора
+            report_date: Дата отчета
+            recommendations: Текст рекомендаций
+            call_samples_analyzed: Количество проанализированных звонков
+        
+        Returns:
+            True если успешно
+        """
+        logger.info(
+            f"[ANALYTICS] Saving recommendations for {operator_name} "
+            f"on {report_date}, samples={call_samples_analyzed}"
         )
         
-        logger.info(f"Saved recommendations for {operator_name} on {report_date}")
+        try:
+            query = """
+            INSERT INTO operator_recommendations 
+                (operator_name, report_date, recommendations, call_samples_analyzed, generated_at)
+            VALUES (%s, %s, %s, %s, NOW())
+            ON DUPLICATE KEY UPDATE
+                recommendations = VALUES(recommendations),
+                call_samples_analyzed = VALUES(call_samples_analyzed),
+                generated_at = NOW()
+            """
+            
+            await self.db_manager.execute_query(
+                query,
+                (operator_name, report_date, recommendations, call_samples_analyzed)
+            )
+            
+            logger.info(f"[ANALYTICS] Recommendations saved successfully for {operator_name}")
+            return True
+            
+        except Exception as e:
+            logger.error(
+                f"[ANALYTICS] Error saving recommendations for {operator_name}: {e}",
+                exc_info=True
+            )
+            return False
 
-    async def get_recommendations(
+    async def get_operator_recommendations(
         self,
         operator_name: str,
         report_date: date
-    ) -> Optional[str]:
-        """Получить сохраненные рекомендации для оператора."""
-        query = """
-        SELECT recommendations
-        FROM operator_recommendations
-        WHERE operator_name = %s AND report_date = %s
+    ) -> Optional[Dict[str, Any]]:
         """
+        Получить сохраненные рекомендации для оператора из operator_recommendations.
         
-        result = await self.db_manager.execute_query(
-            query,
-            (operator_name, report_date),
-            fetchone=True
+        Args:
+            operator_name: Имя оператора
+            report_date: Дата отчета (берет <= этой даты, последние)
+        
+        Returns:
+            Dict с полями recommendations, call_samples_analyzed, generated_at
+            или None если нет
+        """
+        logger.info(
+            f"[ANALYTICS] Getting recommendations for {operator_name} on/before {report_date}"
         )
         
-        return result.get('recommendations') if result else None
+        try:
+            query = """
+            SELECT 
+                recommendations,
+                call_samples_analyzed,
+                generated_at,
+                report_date
+            FROM operator_recommendations
+            WHERE operator_name = %s
+              AND report_date <= %s
+            ORDER BY report_date DESC
+            LIMIT 1
+            """
+            
+            result = await self.db_manager.execute_query(
+                query,
+                (operator_name, report_date),
+                fetchone=True
+            )
+            
+            if result:
+                logger.info(
+                    f"[ANALYTICS] Found recommendations for {operator_name} "
+                    f"from {result.get('report_date')}"
+                )
+                return dict(result)
+            else:
+                logger.info(f"[ANALYTICS] No recommendations found for {operator_name}")
+                return None
+                
+        except Exception as e:
+            logger.error(
+                f"[ANALYTICS] Error getting recommendations for {operator_name}: {e}",
+                exc_info=True
+            )
+            return None

@@ -1,0 +1,141 @@
+"""
+Обновленный /start handler с динамическим контентом по ролям.
+
+Короткие сообщения, role-based клавиатуры, БЕЗ списков команд.
+"""
+
+from telegram import Update
+from telegram.ext import ContextTypes, CommandHandler
+
+from app.db.manager import DatabaseManager
+from app.db.repositories.users import UserRepository
+from app.db.repositories.roles import RolesRepository
+from app.telegram.utils.keyboard_builder import KeyboardBuilder
+from app.telegram.middlewares.permissions import PermissionsManager
+from app.logging_config import get_watchdog_logger
+
+logger = get_watchdog_logger(__name__)
+
+
+class StartHandler:
+    """Handler для команды /start с role-based UI."""
+    
+    def __init__(self, db_manager: DatabaseManager):
+        self.db_manager = db_manager
+        self.user_repo = UserRepository(db_manager)
+        self.roles_repo = RolesRepository(db_manager)
+        self.keyboard_builder = KeyboardBuilder(self.roles_repo)
+        self.permissions = PermissionsManager(db_manager)
+    
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Команда /start - приветствие с role-based клавиатурой.
+        """
+        user_id = update.effective_user.id
+        username = update.effective_user.username
+        user_name = update.effective_user.full_name
+        
+        logger.info(f"[START] Command from {user_id} ({username})")
+        
+        # Проверить Supreme/Dev Admin
+        is_supreme = self.permissions.is_supreme_admin(user_id, username)
+        is_dev = self.permissions.is_dev_admin(user_id, username)
+        
+        # Получить пользователя
+        user = await self.user_repo.get_user_by_telegram_id(user_id)
+        
+        if not user:
+            # Незарегистрированный пользователь
+            await update.message.reply_text(
+                f"👋 Добро пожаловать, {user_name}!\n\n"
+                "Вы не зарегистрированы в системе.\n"
+                "Используйте /register для регистрации."
+            )
+            return
+        
+        status = user.get('status')
+        
+        if status == 'pending':
+            await update.message.reply_text(
+                f"👋 Здравствуйте, {user_name}!\n\n"
+                "⏳ Ваша заявка ожидает одобрения администратором.\n\n"
+                "Вы получите уведомление когда доступ будет предоставлен."
+            )
+            return
+        
+        if status == 'blocked':
+            await update.message.reply_text(
+                "❌ Ваш доступ к боту заблокирован.\n\n"
+                "Для разъяснений обратитесь к администратору."
+            )
+            return
+        
+        # Approved пользователь
+        role_id = user.get('role_id', 1)
+        role_name = await self.roles_repo.get_role_name(role_id)
+        perms = await self.roles_repo.get_user_permissions(role_id)
+        
+        # Построить клавиатуру
+        keyboard = await self.keyboard_builder.build_main_keyboard(
+            role_id, is_supreme, is_dev
+        )
+        
+        # Сообщение в зависимости от роли
+        if is_supreme or is_dev:
+            message = (
+                f"👋 Добро пожаловать, **{user_name}**!\n\n"
+                f"🔱 Вы авторизованы как **{'Supreme Admin' if is_supreme else 'Dev Admin'}**.\n\n"
+                "Доступен **полный контроль** всех функций системы.\n\n"
+                "⚠️ Опасные операции требуют подтверждения."
+            )
+        elif role_id >= 7:  # SuperAdmin (из БД)
+            message = (
+                f"👋 Добро пожаловать, **{user_name}**!\n\n"
+                f"👑 Вы авторизованы как **{role_name}**.\n\n"
+                "Доступны:\n"
+                "• 📊 Отчёты по всем операторам\n"
+                "• 🔍 Поиск звонков\n"
+                "• 👥 Управление пользователями и ролями\n"
+                "• ⚙️ Системные функции\n\n"
+                "Используйте кнопки ниже для навигации."
+            )
+        elif perms.get('can_manage_users'):  # Админ/Ст.админ/ЗавРег
+            message = (
+                f"👋 Добро пожаловать, **{user_name}**!\n\n"
+                f"🛡️ Вы авторизованы как **{role_name}**.\n\n"
+                "Доступны:\n"
+                "• 📊 Отчёты и статистика\n"
+                "• 🔍 Поиск звонков\n"
+                "• 👥 Управление пользователями\n\n"
+                "Для настройки доступов → «Пользователи и роли»."
+            )
+        elif perms.get('can_view_all_stats'):  # Руководство/Маркетолог
+            message = (
+                f"👋 Добро пожаловать, **{user_name}**!\n\n"
+                f"📊 Вы авторизованы как **{role_name}**.\n\n"
+                "Доступны:\n"
+                "• 📊 Отчёты по всем операторам\n"
+                "• 🔍 Поиск звонков\n\n"
+                "Начните с раздела «Отчёты» или «Поиск звонка»."
+            )
+        else:  # Оператор
+            message = (
+                f"👋 Добро пожаловать, **{user_name}**!\n\n"
+                f"👤 Вы авторизованы как **{role_name}**.\n\n"
+                "Доступны:\n"
+                "• 📊 Моя статистика\n"
+                "• 🔍 Мои звонки\n\n"
+                "Используйте кнопки ниже."
+            )
+        
+        await update.message.reply_text(
+            message,
+            parse_mode='Markdown',
+            reply_markup=keyboard
+        )
+        
+        logger.info(f"[START] Sent welcome for {user_id}, role={role_name}")
+    
+    def get_handler(self):
+        """Получить CommandHandler для регистрации."""
+        return CommandHandler('start', self.start_command)
