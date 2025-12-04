@@ -50,12 +50,12 @@ class UserRepository:
             if not await self.user_exists(user_id):
                 query_insert = """
                     INSERT INTO UsersTelegaBot 
-                        (user_id, username, full_name, role_id, status, operator_name, extension, registered_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                        (user_id, full_name, role_id, status, operator_name, extension)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                 """
                 await self.db_manager.execute_query(
                     query_insert, 
-                    (user_id, username, full_name, role_id, status, operator_name, extension)
+                    (user_id, full_name, role_id, status, operator_name, extension)
                 )
                 logger.info(f"[USER_REPO] Telegram user '{full_name}' registered successfully")
             else:
@@ -78,15 +78,13 @@ class UserRepository:
             query = """
             SELECT 
                 user_id,
-                username,
                 full_name,
                 role_id,
                 status,
                 operator_name,
                 extension,
                 approved_by,
-                blocked_at,
-                registered_at
+                blocked_at
             FROM UsersTelegaBot 
             WHERE user_id = %s
             """

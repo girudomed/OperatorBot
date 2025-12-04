@@ -11,18 +11,33 @@ from typing import Optional, Literal, Dict, Set, Tuple
 from app.db.manager import DatabaseManager
 from app.logging_config import get_watchdog_logger
 from app.config import SUPREME_ADMIN_ID, SUPREME_ADMIN_USERNAME, DEV_ADMIN_ID, DEV_ADMIN_USERNAME
-from app.core.roles import role_name_from_id
+from app.core.roles import (
+    role_name_from_id, 
+    get_role_permissions, 
+    is_admin_role, 
+    is_superadmin_or_higher,
+    can_manage_users as role_can_manage_users,
+    can_view_all_stats as role_can_view_all_stats,
+    ADMIN_ROLE_IDS,
+    STATS_VIEWER_ROLE_IDS,
+)
 
 logger = get_watchdog_logger(__name__)
 
-# Типы ролей
-Role = Literal['operator', 'admin', 'superadmin']
+# Типы ролей (все 8)
+Role = Literal['operator', 'admin', 'marketer', 'zavreg', 'senior_admin', 'management', 'superadmin', 'dev']
 Status = Literal['pending', 'approved', 'blocked']
 
-ROLE_PERMISSIONS: Dict[Role, Set[str]] = {
+# Права доступа по ролям (для обратной совместимости)
+ROLE_PERMISSIONS: Dict[str, Set[str]] = {
     'operator': {'call_lookup', 'weekly_quality', 'report'},
     'admin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'report'},
-    'superadmin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report'},
+    'marketer': {'call_lookup', 'weekly_quality', 'report', 'all_stats'},
+    'zavreg': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'report', 'all_stats'},
+    'senior_admin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'report', 'all_stats'},
+    'management': {'call_lookup', 'weekly_quality', 'report', 'all_stats'},
+    'superadmin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats'},
+    'dev': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats', 'debug'},
 }
 
 CACHE_TTL_SECONDS = 10.0
@@ -153,24 +168,25 @@ class PermissionsManager:
     async def is_admin(self, user_id: int, username: Optional[str] = None) -> bool:
         """
         Проверяет имеет ли пользователь роль admin или выше.
-        Включает supreme/dev админов.
+        Включает supreme/dev админов и все роли с can_manage_users.
+        Роли: admin(2), zavreg(4), senior_admin(5), superadmin(7), dev(8)
         """
         # Проверяем bootstrap админов
         if self.is_supreme_admin(user_id, username) or self.is_dev_admin(user_id, username):
             return True
         
         role = await self.get_user_role(user_id)
-        return role in ('admin', 'superadmin')
+        return role in ('admin', 'zavreg', 'senior_admin', 'superadmin', 'dev')
     
     async def is_superadmin(self, user_id: int, username: Optional[str] = None) -> bool:
         """
-        Проверяет имеет ли пользователь роль superadmin или выше.
+        Проверяет имеет ли пользователь роль superadmin или dev.
         """
         if self.is_supreme_admin(user_id, username) or self.is_dev_admin(user_id, username):
             return True
         
         role = await self.get_user_role(user_id)
-        return role == 'superadmin'
+        return role in ('superadmin', 'dev')
     
     async def can_approve(self, user_id: int, username: Optional[str] = None) -> bool:
         """
@@ -277,9 +293,9 @@ class PermissionsManager:
     async def check_permission(self, role_name: Role, required_permission: str) -> bool:
         """
         Проверяет, есть ли у роли доступ к указанному разрешению.
-        Суперадмины имеют доступ ко всем действиям.
+        SuperAdmin и Dev имеют доступ ко всем действиям.
         """
-        if role_name == 'superadmin':
+        if role_name in ('superadmin', 'dev'):
             return True
         allowed = ROLE_PERMISSIONS.get(role_name, set())
         return required_permission in allowed

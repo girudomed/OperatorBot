@@ -6,7 +6,7 @@ import time
 from functools import partial
 
 from telegram import Update, ReplyKeyboardMarkup
-from typing import List
+from typing import List, Optional
 
 from telegram.ext import (
     CallbackContext,
@@ -44,6 +44,7 @@ COMMAND_DESCRIPTIONS = {
 
 # Стадии диалога для регистрации
 ASK_NAME, ASK_ROLE, ASK_OPERATOR_ID = range(3)
+ALLOWED_PRE_AUTH_COMMANDS = {"/start", "/help", "/register", "/cancel"}
 
 
 class AuthManager:
@@ -331,6 +332,22 @@ def setup_auth_handlers(application, db_manager: DatabaseManager, permissions_ma
     """Функция для добавления всех обработчиков аутентификации в приложение."""
     auth_manager = AuthManager(db_manager)
 
+    application.add_handler(
+        MessageHandler(
+            filters.COMMAND,
+            partial(registration_guard_command, permissions=permissions_manager),
+        ),
+        group=0,
+        block=True,
+    )
+    application.add_handler(
+        CallbackQueryHandler(
+            partial(registration_guard_callback, permissions=permissions_manager)
+        ),
+        group=0,
+        block=True,
+    )
+
     # Используем partial, чтобы передать auth_manager в обработчики
     registration_conv_handler = ConversationHandler(
         entry_points=[CommandHandler('register', partial(register_handler, auth_manager=auth_manager))],
@@ -346,6 +363,74 @@ def setup_auth_handlers(application, db_manager: DatabaseManager, permissions_ma
     application.add_handler(CommandHandler('start', partial(start_command, permissions=permissions_manager)))
     application.add_handler(CommandHandler('help', partial(help_command, permissions=permissions_manager)))
     logger.info("Хендлеры авторизации зарегистрированы.")
+
+
+async def registration_guard_command(update: Update, context: CallbackContext, permissions: PermissionsManager) -> bool:
+    """Блокирует любые команды до завершения регистрации/апрува."""
+    message = update.effective_message
+    user = update.effective_user
+    if not message or not user:
+        return False
+
+    text = (message.text or "").strip()
+    if not text:
+        return False
+
+    command_token: Optional[str] = None
+    if text.startswith("/"):
+        command_token = text.split()[0]
+    else:
+        for token in text.split():
+            if token.startswith("/"):
+                command_token = token
+                break
+
+    if not command_token:
+        return False
+
+    command_base = command_token.lower().split("@")[0]
+    if command_base in ALLOWED_PRE_AUTH_COMMANDS:
+        return False
+
+    if permissions.is_supreme_admin(user.id, user.username) or permissions.is_dev_admin(user.id, user.username):
+        return False
+
+    status = await permissions.get_user_status(user.id)
+    if status is None:
+        await message.reply_text("Вы ещё не зарегистрированы. Используйте /start и /register, чтобы подать заявку.")
+        return True
+    if status == 'pending':
+        await message.reply_text("Ваша заявка ожидает подтверждения администратором. Пожалуйста, дождитесь одобрения.")
+        return True
+    if status == 'blocked':
+        await message.reply_text("Ваш доступ временно ограничен. Обратитесь к администратору.")
+        return True
+
+    return False
+
+
+async def registration_guard_callback(update: Update, context: CallbackContext, permissions: PermissionsManager) -> bool:
+    """Блокирует callback-запросы для незарегистрированных пользователей."""
+    query = update.callback_query
+    user = update.effective_user
+    if not query or not user:
+        return False
+
+    if permissions.is_supreme_admin(user.id, user.username) or permissions.is_dev_admin(user.id, user.username):
+        return False
+
+    status = await permissions.get_user_status(user.id)
+    if status is None:
+        await query.answer("Сначала зарегистрируйтесь через /start → /register.", show_alert=True)
+        return True
+    if status == 'pending':
+        await query.answer("Ваша заявка ещё не одобрена.", show_alert=True)
+        return True
+    if status == 'blocked':
+        await query.answer("Доступ заблокирован. Свяжитесь с администратором.", show_alert=True)
+        return True
+
+    return False
 
 
 def _commands_for_role(role: str) -> List[str]:

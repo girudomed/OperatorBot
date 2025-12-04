@@ -13,7 +13,7 @@ from datetime import datetime
 
 from app.db.manager import DatabaseManager
 from app.db.models import UserRecord, AdminActionLog
-from app.core.roles import role_name_from_id, ROLE_NAME_TO_ID
+from app.core.roles import role_name_from_id, ROLE_NAME_TO_ID, ADMIN_ROLE_IDS
 from app.logging_config import get_watchdog_logger
 from app.utils.error_handlers import log_async_exceptions
 
@@ -56,16 +56,14 @@ class AdminRepository:
                 SELECT 
                     id,
                     user_id as telegram_id,
-                    username,
                     full_name,
                     role_id,
                     status,
                     operator_name,
-                    extension,
-                    registered_at as created_at
+                    extension
                 FROM UsersTelegaBot
                 WHERE status = 'pending'
-                ORDER BY registered_at DESC
+                ORDER BY id DESC
             """
             rows = await self.db.execute_with_retry(query, fetchall=True) or []
             
@@ -85,15 +83,13 @@ class AdminRepository:
                 SELECT 
                     id,
                     user_id as telegram_id,
-                    username,
                     full_name,
                     role_id,
                     status,
                     operator_name,
                     extension,
                     approved_by,
-                    blocked_at,
-                    registered_at as created_at
+                    blocked_at
                 FROM UsersTelegaBot
                 WHERE user_id = %s
             """
@@ -128,15 +124,13 @@ class AdminRepository:
                 SELECT 
                     id,
                     user_id as telegram_id,
-                    username,
                     full_name,
                     role_id,
                     status,
                     operator_name, 
                     extension,
                     approved_by,
-                    blocked_at,
-                    registered_at as created_at
+                    blocked_at
                 FROM UsersTelegaBot
                 WHERE id = %s
                 LIMIT 1
@@ -423,27 +417,28 @@ class AdminRepository:
     
     @log_async_exceptions
     async def get_admins(self) -> List[Dict[str, Any]]:
-        """Получает список всех админов и супер-админов из UsersTelegaBot."""
+        """Получает список всех админов (роли 2,4,5,7,8) из UsersTelegaBot."""
         logger.info("[ADMIN_REPO] Getting admins list")
         
         try:
-            query = """
+            # Динамически строим IN clause для всех админских ролей
+            placeholders = ', '.join(['%s'] * len(ADMIN_ROLE_IDS))
+            query = f"""
                 SELECT 
                     id,
                     user_id as telegram_id,
-                    username,
                     full_name,
                     extension,
                     role_id,
                     status,
                     operator_name
                 FROM UsersTelegaBot
-                WHERE role_id IN (%s, %s) AND status != 'blocked'
+                WHERE role_id IN ({placeholders}) AND status != 'blocked'
                 ORDER BY role_id DESC, full_name
             """
             rows = await self.db.execute_with_retry(
                 query,
-                params=(ROLE_NAME_TO_ID.get('admin'), ROLE_NAME_TO_ID.get('superadmin')),
+                params=tuple(ADMIN_ROLE_IDS),
                 fetchall=True
             ) or []
             
@@ -467,7 +462,6 @@ class AdminRepository:
                 SELECT 
                     id,
                     user_id as telegram_id,
-                    username,
                     full_name,
                     extension,
                     role_id,
@@ -475,7 +469,7 @@ class AdminRepository:
                     operator_name
                 FROM UsersTelegaBot
                 WHERE status = 'approved' AND (role_id IS NULL OR role_id = %s)
-                ORDER BY registered_at DESC
+                ORDER BY id DESC
                 LIMIT %s OFFSET %s
             """
             rows = await self.db.execute_with_retry(
@@ -508,17 +502,15 @@ class AdminRepository:
                     SELECT 
                         id,
                         user_id as telegram_id,
-                        username,
                         full_name,
                         extension,
                         role_id,
                         status,
                         operator_name,
-                        registered_at as created_at,
                         approved_by
                     FROM UsersTelegaBot
                     WHERE status = %s
-                    ORDER BY registered_at DESC
+                    ORDER BY id DESC
                 """
                 params = (status_filter,)
             else:
@@ -526,16 +518,14 @@ class AdminRepository:
                     SELECT 
                         id,
                         user_id as telegram_id,
-                        username,
                         full_name,
                         extension,
                         role_id,
                         status,
                         operator_name,
-                        registered_at as created_at,
                         approved_by
                     FROM UsersTelegaBot
-                    ORDER BY registered_at DESC
+                    ORDER BY id DESC
                 """
                 params = None
             
@@ -559,21 +549,19 @@ class AdminRepository:
         logger.info("[ADMIN_REPO] Getting user counters")
         
         try:
-            query = """
+            # Динамически строим IN clause для всех админских ролей
+            admin_placeholders = ', '.join(['%s'] * len(ADMIN_ROLE_IDS))
+            query = f"""
                 SELECT 
                     COUNT(*) as total_users,
                     SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_users,
                     SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved_users,
                     SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) as blocked_users,
-                    SUM(CASE WHEN role_id IN (%s, %s) THEN 1 ELSE 0 END) as admins_count,
+                    SUM(CASE WHEN role_id IN ({admin_placeholders}) THEN 1 ELSE 0 END) as admins_count,
                     SUM(CASE WHEN role_id = %s THEN 1 ELSE 0 END) as operators_count
                 FROM UsersTelegaBot
             """
-            params = (
-                ROLE_NAME_TO_ID.get('admin'),
-                ROLE_NAME_TO_ID.get('superadmin'),
-                ROLE_NAME_TO_ID.get('operator'),
-            )
+            params = tuple(ADMIN_ROLE_IDS) + (ROLE_NAME_TO_ID.get('operator'),)
             row = await self.db.execute_with_retry(
                 query, params=params, fetchone=True
             ) or {}
@@ -626,16 +614,14 @@ class AdminRepository:
                 SELECT 
                     id,
                     user_id as telegram_id,
-                    username,
                     full_name,
                     extension,
                     role_id,
                     status,
-                    operator_name,
-                    registered_at as created_at
+                    operator_name
                 FROM UsersTelegaBot
                 WHERE status = 'approved' AND role_id = %s
-                ORDER BY registered_at DESC
+                ORDER BY id DESC
                 LIMIT %s
             """
             rows = await self.db.execute_with_retry(
@@ -720,8 +706,8 @@ class AdminRepository:
             if actor_telegram_id:
                 query = """
                     SELECT l.*, 
-                           a.username as actor_username,
-                           t.username as target_username
+                           a.full_name as actor_name,
+                           t.full_name as target_name
                     FROM admin_action_logs l
                     LEFT JOIN UsersTelegaBot a ON l.actor_id = a.user_id
                     LEFT JOIN UsersTelegaBot t ON l.target_id = t.user_id
@@ -733,8 +719,8 @@ class AdminRepository:
             else:
                 query = """
                     SELECT l.*, 
-                           a.username as actor_username,
-                           t.username as target_username
+                           a.full_name as actor_name,
+                           t.full_name as target_name
                     FROM admin_action_logs l
                     LEFT JOIN UsersTelegaBot a ON l.actor_id = a.user_id
                     LEFT JOIN UsersTelegaBot t ON l.target_id = t.user_id

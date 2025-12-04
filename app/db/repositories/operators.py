@@ -138,12 +138,13 @@ class OperatorRepository:
 
         # ИСПРАВЛЕНИЕ: Используем поля outcome и refusal_reason вместо текстовых категорий
         # Метрики из call_scores
+        lead_pattern = '%Лид%'  # Паттерн выносим в переменную
         scores_query = """
             SELECT
                 COUNT(*) AS total_scored_calls,
                 AVG(cs.call_score) AS avg_score,
                 SUM(CASE 
-                    WHEN cs.outcome = 'lead_no_record' OR cs.call_category LIKE '%Лид%' 
+                    WHEN cs.outcome = 'lead_no_record' OR cs.call_category LIKE %s 
                     THEN 1 ELSE 0 
                 END) AS total_leads,
                 SUM(CASE WHEN cs.outcome = 'record' THEN 1 ELSE 0 END) AS booked_leads,
@@ -164,7 +165,7 @@ class OperatorRepository:
         try:
             scores_stats = await self.db_manager.execute_with_retry(
                 scores_query,
-                (start_str, end_str),
+                (lead_pattern, start_str, end_str),
                 fetchone=True,
             ) or {}
         except Exception:
@@ -177,10 +178,10 @@ class OperatorRepository:
         return {
             "total_calls": history_stats.get("total_calls") or 0,
             "missed_calls": history_stats.get("missed_calls") or 0,
-            "avg_score": score_stats.get("avg_score") or 0.0,
-            "total_leads": score_stats.get("total_leads") or 0,
-            "booked_leads": score_stats.get("booked_leads") or 0,
-            "cancellations": score_stats.get("cancellations") or 0,
+            "avg_score": scores_stats.get("avg_score") or 0.0,
+            "total_leads": scores_stats.get("total_leads") or 0,
+            "booked_leads": scores_stats.get("booked_leads") or 0,
+            "cancellations": scores_stats.get("cancellations") or 0,
         }
 
     async def save_report(
@@ -210,10 +211,7 @@ class OperatorRepository:
     def _is_dev_account(self, record: Dict[str, Any]) -> bool:
         """Проверяет, относится ли запись к dev/admin аккаунту, которого нужно скрыть."""
         telegram_id = record.get("telegram_id")
-        username = record.get("username")
         if DEV_ADMIN_ID and telegram_id and str(telegram_id) == str(DEV_ADMIN_ID):
-            return True
-        if DEV_ADMIN_USERNAME and username and username.lower() == DEV_ADMIN_USERNAME.lower():
             return True
         return False
 
@@ -229,11 +227,10 @@ class OperatorRepository:
         query = f"""
             SELECT user_id,
                    full_name,
-                   username,
                    extension
             FROM users
             WHERE extension IS NOT NULL
-            ORDER BY COALESCE(full_name, username, 'Без имени')
+            ORDER BY COALESCE(full_name, 'Без имени')
         """
         # The 'params' should be empty as there are no dynamic parameters in the new WHERE clause.
         params = () 
@@ -255,7 +252,7 @@ class OperatorRepository:
     async def get_operator_info_by_user_id(self, user_id: int) -> Optional[Dict[str, Any]]:
         """Получает информацию об операторе по user_id."""
         query = """
-            SELECT user_id, full_name, username, extension
+            SELECT user_id, full_name, extension
             FROM users
             WHERE user_id = %s
             LIMIT 1

@@ -14,6 +14,8 @@ from telegram.ext import (
     CallbackContext,
     CallbackQueryHandler,
     CommandHandler,
+    MessageHandler,
+    filters,
 )
 
 from app.services.call_lookup import CallLookupService
@@ -49,6 +51,12 @@ def register_call_lookup_handlers(
     handler = _CallLookupHandlers(service, permissions_manager)
     application.add_handler(
         CommandHandler(CALL_LOOKUP_COMMAND, handler.handle_command)
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(r"^@\S+\s+/call_lookup"),
+            handler.handle_mention_command,
+        )
     )
     application.add_handler(
         CallbackQueryHandler(
@@ -151,6 +159,25 @@ class _CallLookupHandlers:
             describe_user(user),
             response.get("count"),
         )
+
+    async def handle_mention_command(
+        self, update: Update, context: CallbackContext
+    ) -> None:
+        """Обрабатывает сообщения вида '@bot /call_lookup ...'."""
+        message = update.effective_message
+        if not message or not message.text:
+            return
+
+        tokens = message.text.strip().split()
+        command_index = next(
+            (i for i, token in enumerate(tokens) if token.startswith("/call_lookup")),
+            None,
+        )
+        if command_index is None:
+            return
+
+        context.args = tokens[command_index + 1 :]
+        await self.handle_command(update, context)
 
     async def handle_callback(self, update: Update, context: CallbackContext) -> None:
         query = update.callback_query
@@ -347,22 +374,19 @@ class _CallLookupHandlers:
     def _parse_command_args(self, args: List[str]) -> Tuple[str, str]:
         tokens = [token for token in args if token.strip()]
         if not tokens:
-            raise ValueError("Укажите период и номер телефона.")
+            raise ValueError("Добавьте номер телефона.")
 
-        first_lower = tokens[0].lower()
         period: Optional[str] = None
         phone_tokens: List[str] = []
 
-        if first_lower in PERIOD_CHOICES:
-            period = first_lower
-            phone_tokens = tokens[1:]
-        else:
-            for token in tokens:
-                lowered = token.lower()
-                if lowered in PERIOD_CHOICES and period is None:
-                    period = lowered
-                else:
-                    phone_tokens.append(token)
+        for token in tokens:
+            if token.startswith("@"):  # игнорируем упоминания бота
+                continue
+            lowered = token.lower()
+            if lowered in PERIOD_CHOICES and period is None:
+                period = lowered
+                continue
+            phone_tokens.append(token)
 
         if not phone_tokens:
             raise ValueError("Добавьте номер телефона в команду.")
