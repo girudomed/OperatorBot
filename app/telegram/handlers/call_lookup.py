@@ -25,6 +25,15 @@ from app.telegram.utils.logging import describe_user
 CALL_LOOKUP_COMMAND = "call_lookup"
 CALL_LOOKUP_PERMISSION = "call_lookup"
 CALL_LOOKUP_CALLBACK_PREFIX = "calllookup"
+PERIOD_CHOICES = {
+    "daily",
+    "weekly",
+    "biweekly",
+    "monthly",
+    "half_year",
+    "yearly",
+    "custom",
+}
 
 logger = get_watchdog_logger(__name__)
 
@@ -88,8 +97,11 @@ class _CallLookupHandlers:
             await self._send_usage_hint(message)
             return
 
-        phone = "".join(args[0:2]) if args[0] == "+7" and len(args) > 1 else args[0]
-        period = args[1] if len(args) > 1 else "monthly"
+        try:
+            phone, period = self._parse_command_args(args)
+        except ValueError as parse_error:
+            await message.reply_text(str(parse_error))
+            return
 
         logger.info(
             "Пользователь %s выполняет /call_lookup (phone=%s, period=%s)",
@@ -332,12 +344,41 @@ class _CallLookupHandlers:
         markup = InlineKeyboardMarkup(keyboard) if keyboard else None
         return "\n".join(lines), markup
 
+    def _parse_command_args(self, args: List[str]) -> Tuple[str, str]:
+        tokens = [token for token in args if token.strip()]
+        if not tokens:
+            raise ValueError("Укажите период и номер телефона.")
+
+        first_lower = tokens[0].lower()
+        period: Optional[str] = None
+        phone_tokens: List[str] = []
+
+        if first_lower in PERIOD_CHOICES:
+            period = first_lower
+            phone_tokens = tokens[1:]
+        else:
+            for token in tokens:
+                lowered = token.lower()
+                if lowered in PERIOD_CHOICES and period is None:
+                    period = lowered
+                else:
+                    phone_tokens.append(token)
+
+        if not phone_tokens:
+            raise ValueError("Добавьте номер телефона в команду.")
+
+        phone = "".join(phone_tokens)
+        if not phone.strip():
+            raise ValueError("Добавьте номер телефона в команду.")
+
+        return phone, (period or "monthly")
+
     async def _send_usage_hint(self, message: Message) -> None:
         text = (
             "📂 <b>Расшифровки</b>\n\n"
             "Используйте формат:\n"
-            "<code>/call_lookup &lt;номер&gt; [период]</code>\n"
-            "Например: <code>/call_lookup +7 999 1234567 weekly</code>.\n\n"
+            "<code>/call_lookup &lt;период&gt; &lt;номер&gt;</code>\n"
+            "Например: <code>/call_lookup monthly +7 999 1234567</code>.\n\n"
             "Выберите период, и бот подставит команду автоматически."
         )
         keyboard = [
@@ -350,15 +391,15 @@ class _CallLookupHandlers:
             [
                 InlineKeyboardButton(
                     "Daily",
-                    switch_inline_query_current_chat="/call_lookup  daily",
+                    switch_inline_query_current_chat="/call_lookup daily ",
                 ),
                 InlineKeyboardButton(
                     "Weekly",
-                    switch_inline_query_current_chat="/call_lookup  weekly",
+                    switch_inline_query_current_chat="/call_lookup weekly ",
                 ),
                 InlineKeyboardButton(
                     "Monthly",
-                    switch_inline_query_current_chat="/call_lookup  monthly",
+                    switch_inline_query_current_chat="/call_lookup monthly ",
                 ),
             ],
         ]

@@ -126,6 +126,94 @@ class LMValueRecord(TypedDict, total=False):
     updated_at: Optional[datetime]
 
 
+class DashboardMetrics(TypedDict, total=False):
+    """Метрики дашборда для оператора."""
+    operator_name: str
+    period_type: str  # 'day', 'week', 'month'
+    period_start: str  # Дата начала периода
+    period_end: str  # Дата окончания периода
+    
+    # Общая статистика
+    total_calls: int
+    accepted_calls: int
+    missed_calls: int
+    records_count: int
+    leads_no_record: int
+    wish_to_record: int
+    conversion_rate: float
+    
+    # Качество
+    avg_score_all: float
+    avg_score_leads: float
+    avg_score_cancel: float
+    
+    # Отмены
+    cancel_calls: int
+    reschedule_calls: int
+    cancel_share: float
+    
+    # Время
+    avg_talk_all: int
+    total_talk_time: int
+    avg_talk_record: int
+    avg_talk_navigation: int
+    avg_talk_spam: int
+    
+    # Жалобы
+    complaint_calls: int
+    avg_score_complaint: float
+    
+    # ML метрики (опционально)
+    expected_records: Optional[float]
+    record_uplift: Optional[float]
+    hot_missed_leads: Optional[int]
+    difficulty_index: Optional[float]
+
+
+class MLPredictionRecord(TypedDict, total=False):
+    """Запись ML-прогноза."""
+    history_id: int
+    call_score_id: Optional[int]
+    ml_p_record: Optional[float]  # Вероятность записи
+    ml_score_pred: Optional[float]  # Прогноз оценки
+    ml_p_complaint: Optional[float]  # Риск жалобы
+    ml_updated_at: Optional[datetime]
+
+
+class OperatorDashboardCache(TypedDict, total=False):
+    """Кешированный дашборд оператора."""
+    id: int
+    operator_name: str
+    period_type: str
+    period_start: datetime
+    period_end: datetime
+    metrics: DashboardMetrics  # JSON с метриками
+    cached_at: datetime
+
+
+class OperatorRecommendation(TypedDict, total=False):
+    """Рекомендации для оператора."""
+    id: int
+    operator_name: str
+    report_date: datetime
+    recommendations: str
+    call_samples_analyzed: int
+    generated_at: datetime
+
+
+class RolePermissions(TypedDict):
+    """Разрешения роли."""
+    role_id: int
+    role_name: str
+    can_view_own_stats: bool
+    can_view_all_stats: bool
+    can_view_dashboard: bool
+    can_generate_reports: bool
+    can_view_transcripts: bool
+    can_manage_users: bool
+    can_debug: bool
+
+
 class LMMetricDictionary(TypedDict, total=False):
     """Запись из таблицы lm_metric_dictionary (если используется)."""
     id: int

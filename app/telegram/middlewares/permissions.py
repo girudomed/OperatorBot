@@ -5,7 +5,8 @@
 Поддерживает Supreme Admin и Dev Admin из конфигурации.
 """
 
-from typing import Optional, Literal, Dict, Set
+import time
+from typing import Optional, Literal, Dict, Set, Tuple
 from app.db.manager import DatabaseManager
 from app.logging_config import get_watchdog_logger
 from app.config import SUPREME_ADMIN_ID, SUPREME_ADMIN_USERNAME, DEV_ADMIN_ID, DEV_ADMIN_USERNAME
@@ -23,6 +24,7 @@ ROLE_PERMISSIONS: Dict[Role, Set[str]] = {
     'superadmin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report'},
 }
 
+CACHE_TTL_SECONDS = 10.0
 
 class PermissionsManager:
     """
@@ -37,6 +39,25 @@ class PermissionsManager:
     
     def __init__(self, db_manager: DatabaseManager):
         self.db_manager = db_manager
+        # user_id -> (role, status, timestamp)
+        self._user_cache: Dict[int, Tuple[Optional[Role], Optional[Status], float]] = {}
+
+    def invalidate_cache(self, user_id: int) -> None:
+        """Сбрасывает кэш роли/статуса пользователя."""
+        self._user_cache.pop(user_id, None)
+
+    def _get_cached_entry(self, user_id: int) -> Optional[Tuple[Optional[Role], Optional[Status]]]:
+        entry = self._user_cache.get(user_id)
+        if not entry:
+            return None
+        role, status, ts = entry
+        if time.monotonic() - ts > CACHE_TTL_SECONDS:
+            self._user_cache.pop(user_id, None)
+            return None
+        return role, status
+
+    def _set_cache_entry(self, user_id: int, role: Optional[Role], status: Optional[Status]) -> None:
+        self._user_cache[user_id] = (role, status, time.monotonic())
     
     async def get_user_role(self, user_id: int) -> Optional[Role]:
         """
@@ -46,6 +67,14 @@ class PermissionsManager:
         Returns:
             Role или None если пользователь not found/not approved
         """
+        cached = self._get_cached_entry(user_id)
+        if cached:
+            role, status = cached
+            if status != 'approved':
+                logger.debug(f"User {user_id} status is {status}, not approved (cached)")
+                return None
+            return role
+
         try:
             query = """
                 SELECT role_id, status 
@@ -60,11 +89,15 @@ class PermissionsManager:
                 logger.debug(f"User {user_id} not found in DB")
                 return None
             
-            if row.get('status') != 'approved':
+            status = row.get('status')
+            role = role_name_from_id(row.get('role_id'))
+            self._set_cache_entry(user_id, role, status)
+
+            if status != 'approved':
                 logger.debug(f"User {user_id} status is {row.get('status')}, not approved")
                 return None
             
-            return role_name_from_id(row.get('role_id'))
+            return role
             
         except Exception as e:
             logger.error(f"Error getting role for user {user_id}: {e}", exc_info=True)
@@ -77,12 +110,19 @@ class PermissionsManager:
         Returns:
             Status ('pending', 'approved', 'blocked') или None
         """
+        cached = self._get_cached_entry(user_id)
+        if cached:
+            _, status = cached
+            return status
+
         try:
             query = "SELECT status FROM users WHERE user_id = %s"
             row = await self.db_manager.execute_with_retry(
                 query, params=(user_id,), fetchone=True
             )
-            return row.get('status') if row else None
+            status = row.get('status') if row else None
+            self._set_cache_entry(user_id, None, status)
+            return status
         except Exception as e:
             logger.error(f"Error getting status for user {user_id}: {e}", exc_info=True)
             return None

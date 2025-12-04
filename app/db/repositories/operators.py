@@ -365,3 +365,96 @@ class OperatorRepository:
         if not result:
             logger.warning(f"Метрики звонков для оператора с extension {extension} за период не найдены.")
         return result
+
+    # ========================================================================
+    # Новые методы для ML Analytics
+    # ========================================================================
+
+    async def find_operator_by_name_fuzzy(self, operator_name: str) -> List[Dict[str, Any]]:
+        """
+        Нечеткий поиск оператора по имени (LIKE поиск).
+        Используется при регистрации для сопоставления Telegram пользователя с оператором.
+        
+        Returns:
+            Список операторов, имена которых частично совпадают
+        """
+        query = """
+        SELECT id, name, extension, user_id
+        FROM users
+        WHERE name LIKE %s OR extension LIKE %s
+        ORDER BY name
+        """
+        search_pattern = f"%{operator_name}%"
+        
+        result = await self.db_manager.execute_query(
+            query,
+            (search_pattern, search_pattern),
+            fetchall=True
+        )
+        
+        return result or []
+
+    async def get_operator_by_extension_from_history(self, extension: str) -> Optional[Dict[str, Any]]:
+        """
+        Поиск оператора по extension в таблице users.
+        Возвращает данные для связывания с Telegram пользователем.
+        """
+        query = """
+        SELECT id, name as full_name, extension, user_id
+        FROM users
+        WHERE extension = %s
+        LIMIT 1
+        """
+        
+        result = await self.db_manager.execute_query(
+            query,
+            (extension,),
+            fetchone=True
+        )
+        
+        return result
+
+    def parse_operator_from_call_info(self, call_info: str) -> Optional[str]:
+        """
+        Парсинг имени/extension оператора из поля called_info/caller_info.
+        
+        Формат called_info обычно: "extension_number Name" или "Name <extension>"
+        
+        Returns:
+            extension или имя оператора
+        """
+        if not call_info:
+            return None
+        
+        # Попробуем извлечь extension (обычно это числа в начале или в скобках)
+        import re
+        
+        # Паттерн 1: "1234 Иванова И.И."
+        match = re.match(r'^(\d+)\s+', call_info)
+        if match:
+            return match.group(1)
+        
+        # Паттерн 2: "Иванова И.И. <1234>"
+        match = re.search(r'<(\d+)>', call_info)
+        if match:
+            return match.group(1)
+        
+        # Если extension не найден, возвращаем само имя
+        # Может быть полезно для дальнейшего fuzzy поиска
+        return call_info.strip()
+
+    async def get_all_operator_names(self) -> List[str]:
+        """Получить список всех имен операторов для отображения при регистрации."""
+        query = """
+        SELECT DISTINCT name
+        FROM users
+        WHERE name IS NOT NULL AND name != ''
+        ORDER BY name
+        """
+        
+        result = await self.db_manager.execute_query(query, fetchall=True)
+        
+        if not result:
+            return []
+        
+        return [row.get('name') for row in result if row.get('name')]

@@ -185,6 +185,54 @@ class AdminCommandsHandler:
 
         await message.reply_text(message_text, parse_mode="HTML")
 
+    @log_async_exceptions
+    async def dev_alert_command(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """
+        Команда /dev
+        Отправляет уведомление о техработах всем пользователям.
+        """
+        message = update.effective_message
+        user = update.effective_user
+        if not message or not user:
+            return
+
+        if not (
+            self.permissions.is_dev_admin(user.id, user.username)
+            or self.permissions.is_supreme_admin(user.id, user.username)
+        ):
+            await message.reply_text("❌ Команда доступна только разработчикам.")
+            return
+
+        alert_text = (
+            "⚙️ Бот временно на техобслуживании.\n"
+            "Возможны перебои в работе, попробуйте позже."
+        )
+
+        recipients = await self.admin_repo.get_users_with_chat_ids()
+        sent = 0
+        failed = 0
+        for recipient in recipients:
+            chat_id = recipient.get("chat_id")
+            if not chat_id:
+                continue
+            try:
+                await context.bot.send_message(chat_id=chat_id, text=alert_text)
+                sent += 1
+            except TelegramError as exc:
+                failed += 1
+                logger.warning(
+                    "Не удалось отправить dev-уведомление chat_id=%s: %s",
+                    chat_id,
+                    exc,
+                )
+
+        await message.reply_text(
+            f"Сообщение отправлено {sent} пользователям."
+            + (f" Ошибок: {failed}." if failed else "")
+        )
+
     # ---------- Helpers ----------
 
     async def _show_pending_requests(self, target) -> None:
@@ -601,6 +649,7 @@ def register_admin_commands_handlers(
         CommandHandler("make_superadmin", handler.make_superadmin_command)
     )
     application.add_handler(CommandHandler("admins", handler.admins_command))
+    application.add_handler(CommandHandler("dev", handler.dev_alert_command))
     application.add_handler(
         CallbackQueryHandler(
             handler.handle_approve_list_callback,

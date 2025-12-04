@@ -153,7 +153,7 @@ class CallLookupService:
         query = f"""
             SELECT
                 ch.history_id AS history_id,
-                ch.call_time,
+                ch.context_start_time AS call_time,
                 ch.caller_info,
                 ch.caller_number,
                 ch.called_info,
@@ -239,7 +239,7 @@ class CallLookupService:
         query = """
             SELECT
                 ch.history_id AS history_id,
-                ch.call_time,
+                ch.context_start_time AS call_time,
                 ch.caller_info,
                 ch.caller_number,
                 ch.called_info,
