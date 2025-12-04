@@ -92,18 +92,28 @@ class MetricsService:
         missed_rate = (missed_count / total_calls * 100) if total_calls > 0 else 0.0
 
         # ИСПРАВЛЕНИЕ: Записавшийся лид = outcome='record' (а не категория)
+        def _is_successful_booking(call: Dict[str, Any]) -> bool:
+            category = (call.get('call_category') or '').lower()
+            if call.get('outcome') == 'record':
+                return True
+            return (
+                category.startswith('запись на услугу')
+                and 'успеш' in category
+            )
+        
         booked_services = sum(
-            1 for c in accepted_calls 
-            if c.get('outcome') == 'record'
+            1 for c in accepted_calls if _is_successful_booking(c)
         )
         
         # ИСПРАВЛЕНИЕ: Лид = только outcome='lead_no_record' ИЛИ категория содержит 'Лид'
         # НО исключаем записи (это уже конверсия!)
         total_leads = sum(
             1 for c in accepted_calls 
-            if (c.get('outcome') == 'lead_no_record' or 
-                (c.get('call_category') and 'Лид' in c.get('call_category')))
-            and c.get('outcome') != 'record'  # ИСКЛЮЧИТЬ записи
+            if (
+                c.get('outcome') == 'lead_no_record' or 
+                (c.get('call_category') and 'Лид' in str(c.get('call_category')))
+            )
+            and not _is_successful_booking(c)  # исключаем записи
         )
         
         conversion_rate = (booked_services / accepted_count * 100) if accepted_count > 0 else 0.0
@@ -113,9 +123,11 @@ class MetricsService:
         
         lead_calls = [
             c for c in accepted_calls 
-            if (c.get('outcome') == 'lead_no_record' or 
-                (c.get('call_category') and 'Лид' in c.get('call_category')))
-            and c.get('outcome') != 'record'
+            if (
+                c.get('outcome') == 'lead_no_record' or 
+                ('Лид' in str(c.get('call_category')))
+            )
+            and not _is_successful_booking(c)
         ]
         avg_lead_call_rating = self._calculate_avg_score(lead_calls)
 

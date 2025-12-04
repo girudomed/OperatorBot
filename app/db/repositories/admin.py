@@ -153,40 +153,61 @@ class AdminRepository:
             return None
     
     @log_async_exceptions
-    async def approve_user(self, telegram_id: int, approver_telegram_id: int) -> bool:
+    async def approve_user(self, user_id: int, approver_id: int) -> bool:
         """
-        Утверждает Telegram пользователя (pending -> approved).
+        Утверждает пользователя (pending -> approved).
         
         Args:
-            telegram_id: Telegram ID пользователя для одобрения
-            approver_telegram_id: Telegram ID утверждающего админа
+            user_id: внутренний ID пользователя (UsersTelegaBot.id)
+            approver_id: Telegram ID утверждающего админа
         """
-        logger.info(f"[ADMIN_REPO] Approving user {telegram_id} by {approver_telegram_id}")
+        logger.info(f"[ADMIN_REPO] Approving user #{user_id} by {approver_id}")
         
         try:
+            approver_row = await self.db.execute_with_retry(
+                "SELECT id FROM UsersTelegaBot WHERE user_id = %s",
+                params=(approver_id,),
+                fetchone=True
+            )
+            if not approver_row:
+                logger.warning(f"[ADMIN_REPO] Approver {approver_id} not found")
+                return False
+            approver_db_id = (
+                approver_row["id"] if isinstance(approver_row, dict) else approver_row
+            )
+            
+            target_row = await self.db.execute_with_retry(
+                "SELECT user_id FROM UsersTelegaBot WHERE id = %s",
+                params=(user_id,),
+                fetchone=True
+            )
+            target_telegram_id = (
+                target_row.get("user_id") if isinstance(target_row, dict) else None
+            ) if target_row else None
+            
             # Обновляем статус пользователя
             query = """
                 UPDATE UsersTelegaBot
                 SET status = 'approved', approved_by = %s
-                WHERE user_id = %s AND status = 'pending'
+                WHERE id = %s AND status = 'pending'
             """
             await self.db.execute_with_retry(
-                query, params=(approver_telegram_id, telegram_id), commit=True
+                query, params=(approver_db_id, user_id), commit=True
             )
             
             # Логируем действие (используем telegram IDs)
             await self.log_admin_action(
-                actor_telegram_id=approver_telegram_id,
+                actor_telegram_id=approver_id,
                 action='approve',
-                target_telegram_id=telegram_id,
+                target_telegram_id=target_telegram_id,
                 payload={'timestamp': datetime.now().isoformat()}
             )
             
-            logger.info(f"[ADMIN_REPO] User {telegram_id} approved successfully")
+            logger.info(f"[ADMIN_REPO] User #{user_id} approved successfully")
             return True
         except Exception as e:
             logger.error(
-                f"[ADMIN_REPO] Error approving user {telegram_id}: {e}\n{traceback.format_exc()}"
+                f"[ADMIN_REPO] Error approving user #{user_id}: {e}\n{traceback.format_exc()}"
             )
             return False
     
@@ -534,49 +555,36 @@ class AdminRepository:
     async def get_users_counters(self) -> Dict[str, int]:
         """
         Возвращает счётчики пользователей для Dashboard.
-        
-        Логика:
-        - operators - из users (Mango ВАТС операторы)
-        - pending_users, approved_users, blocked_users, admins - из UsersTelegaBot
         """
         logger.info("[ADMIN_REPO] Getting user counters")
         
         try:
-            # Операторы из users (Mango ВАТС) - это правильно!
-            operators_query = """
-                SELECT COUNT(*) as count
-                FROM users
-                WHERE extension IS NOT NULL
-            """
-            operators_row = await self.db.execute_with_retry(
-                operators_query, fetchone=True
-            ) or {}
-            
-            # Telegram пользователи из UsersTelegaBot
-            telegram_query = """
+            query = """
                 SELECT 
                     COUNT(*) as total_users,
                     SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_users,
                     SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved_users,
                     SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) as blocked_users,
-                    SUM(CASE WHEN role_id IN (%s, %s) THEN 1 ELSE 0 END) as admins_count
+                    SUM(CASE WHEN role_id IN (%s, %s) THEN 1 ELSE 0 END) as admins_count,
+                    SUM(CASE WHEN role_id = %s THEN 1 ELSE 0 END) as operators_count
                 FROM UsersTelegaBot
             """
             params = (
                 ROLE_NAME_TO_ID.get('admin'),
                 ROLE_NAME_TO_ID.get('superadmin'),
+                ROLE_NAME_TO_ID.get('operator'),
             )
-            telegram_row = await self.db.execute_with_retry(
-                telegram_query, params=params, fetchone=True
+            row = await self.db.execute_with_retry(
+                query, params=params, fetchone=True
             ) or {}
             
             counters = {
-                'total_users': int(telegram_row.get('total_users') or 0),
-                'pending_users': int(telegram_row.get('pending_users') or 0),
-                'approved_users': int(telegram_row.get('approved_users') or 0),
-                'blocked_users': int(telegram_row.get('blocked_users') or 0),
-                'admins': int(telegram_row.get('admins_count') or 0),
-                'operators': int(operators_row.get('count') or 0),
+                'total_users': int(row.get('total_users') or 0),
+                'pending_users': int(row.get('pending_users') or 0),
+                'approved_users': int(row.get('approved_users') or 0),
+                'blocked_users': int(row.get('blocked_users') or 0),
+                'admins': int(row.get('admins_count') or 0),
+                'operators': int(row.get('operators_count') or 0),
             }
             
             logger.info(f"[ADMIN_REPO] Counters: {counters}")
