@@ -103,6 +103,9 @@ DB_CONFIG: Dict[str, Any] = {
 if not IS_CI_ENV and not all(DB_CONFIG[key] for key in ["host", "user", "password", "db", "port"]):
     raise EnvironmentError("Конфигурация базы данных неполная.")
 
+# Совместимость с legacy-конфигом
+DATABASE_CONFIG = DB_CONFIG
+
 # Параметры для планировщика задач
 REPORT_SEND_TIME = os.getenv("REPORT_SEND_TIME", "18:00")
 
