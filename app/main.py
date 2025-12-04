@@ -7,6 +7,7 @@ import fcntl
 import sys
 import logging
 import signal
+import os
 from typing import Optional
 
 from telegram import BotCommand, Update
@@ -46,7 +47,7 @@ setup_watchdog()
 logger = get_watchdog_logger(__name__)
 
 # Блокировка повторного запуска
-LOCK_FILE = "/tmp/operabot.lock"
+LOCK_FILE = "/app/operabot.lock"
 
 
 async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -88,6 +89,7 @@ async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_T
     )
 
 def acquire_lock():
+    os.makedirs(os.path.dirname(LOCK_FILE), exist_ok=True)
     fp = open(LOCK_FILE, "w")
     try:
         fcntl.lockf(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
