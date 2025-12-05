@@ -288,7 +288,15 @@ async def main():
         logger.info("Бот остановлен.")
         
         # Освобождение блокировки (хотя ОС сделает это сама при выходе)
-        lock_fp.close()
+        try:
+            lock_fp.close()
+        finally:
+            try:
+                os.remove(LOCK_FILE)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                logger.warning("Не удалось удалить lock файл %s: %s", LOCK_FILE, exc)
 
 
 async def set_bot_commands(application):
