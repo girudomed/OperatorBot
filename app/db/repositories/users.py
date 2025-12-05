@@ -205,18 +205,51 @@ class UserRepository:
             logger.error(f"[USER_REPO] Error getting role name for id {role_id}: {e}", exc_info=True)
             return None
 
-    async def approve_user(self, user_id: int, approved_by: int) -> None:
-        """Одобрить пользователя."""
-        logger.info(f"[USER_REPO] Approving user {user_id} by {approved_by}")
+    async def _get_user_pk_by_telegram_id(self, telegram_id: int) -> Optional[int]:
+        """
+        Получить UsersTelegaBot.id (PK) по Telegram user_id.
+        
+        Args:
+            telegram_id: Telegram user ID
+            
+        Returns:
+            UsersTelegaBot.id (PK) или None
+        """
+        try:
+            query = "SELECT id FROM UsersTelegaBot WHERE user_id = %s"
+            result = await self.db_manager.execute_query(query, (telegram_id,), fetchone=True)
+            return result.get('id') if result else None
+        except Exception as e:
+            logger.error(f"[USER_REPO] Error getting user PK: {e}")
+            return None
+
+    async def approve_user(self, user_id: int, approved_by_telegram_id: int) -> None:
+        """
+        Одобрить пользователя.
+        
+        ВАЖНО: approved_by в БД — это UsersTelegaBot.id (PK), не telegram_id!
+        
+        Args:
+            user_id: Telegram ID пользователя для одобрения
+            approved_by_telegram_id: Telegram ID админа, одобрившего
+        """
+        logger.info(f"[USER_REPO] Approving user {user_id} by telegram_id={approved_by_telegram_id}")
         
         try:
+            # Получаем UsersTelegaBot.id (PK) для approved_by
+            approved_by_pk = await self._get_user_pk_by_telegram_id(approved_by_telegram_id)
+            if not approved_by_pk:
+                logger.warning(f"[USER_REPO] Cannot find PK for approver telegram_id={approved_by_telegram_id}")
+                # Если не нашли PK, записываем NULL чтобы не нарушить FK
+                approved_by_pk = None
+            
             query = """
             UPDATE UsersTelegaBot 
             SET status = 'approved', approved_by = %s
             WHERE user_id = %s
             """
-            await self.db_manager.execute_query(query, (approved_by, user_id))
-            logger.info(f"[USER_REPO] User {user_id} approved successfully")
+            await self.db_manager.execute_query(query, (approved_by_pk, user_id))
+            logger.info(f"[USER_REPO] User {user_id} approved successfully (approved_by PK={approved_by_pk})")
         except Exception as e:
             logger.error(f"[USER_REPO] Error approving user {user_id}: {e}", exc_info=True)
             raise

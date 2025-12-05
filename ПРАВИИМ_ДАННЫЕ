@@ -1,0 +1,233 @@
+Сведу к чек-листу: где именно в проекте править и что менять по смыслу, без примеров кода.
+
+⸻
+
+1. UsersTelegaBot: выкидываем telegram_id, first_name, last_name
+
+Ориентир — фактическая таблица.
+
+1.1. Модели и репозитории пользователей бота
+
+Файлы, где почти точно есть привязка к UsersTelegaBot:
+	•	app/db/models.py (или аналог с моделями)
+	•	app/db/repositories/users.py / app/db/repositories/roles.py
+	•	app/services/permissions.py
+	•	app/services/admin_logger.py
+	•	app/telegram/handlers/auth.py
+	•	app/telegram/handlers/admin_users.py
+	•	app/telegram/handlers/admin_panel.py
+
+Что в них править:
+	1.	Везде, где модель/репозиторий считает, что в таблице есть поле:
+	•	telegram_id
+заменить на работу с:
+	•	user_id (это реальный Telegram ID в БД).
+	2.	Везде, где используются:
+	•	first_name, last_name
+заменить на:
+	•	full_name (ФИО целиком)
+либо собрать/разобрать ФИО в коде, не требуя отдельных колонок.
+	3.	Проверить все DTO/сериализаторы/слои маппинга:
+	•	входные данные из Telegram (user.id, user.username, user.first_name/last_name) должны сохраняться в поля:
+	•	user_id (ID из Telegram),
+	•	username,
+	•	full_name,
+	•	при необходимости — operator_name, extension, chat_id.
+
+1.2. Тип operator_id в коде
+
+Где искать:
+	•	app/db/models.py (описание UsersTelegaBot)
+	•	app/db/repositories/users.py / operators.py
+	•	все места, где operator_id используется для связки с Mango-пользователями
+
+Что править по смыслу:
+	1.	Убрать любые предположения, что operator_id — число:
+	•	типы данных int в сигнатурах/докстрингах,
+	•	приведение int(operator_id),
+	•	сравнения/выражения вида operator_id > 0.
+	2.	Трактовать operator_id как строку/идентификатор, просто хранящий внешний ID.
+
+⸻
+
+2. roles_reference: id → role_id
+
+Ориентир — фактическая таблица: PK = role_id.
+
+Где точно смотреть:
+	•	app/core/roles.py
+	•	app/services/permissions.py
+	•	app/db/repositories/roles.py
+	•	всё, что связано с ролями/доступом:
+	•	app/telegram/middlewares/permissions.py
+	•	app/telegram/handlers/admin_users.py
+	•	возможно, app/telegram/handlers/start.py
+
+Что править:
+	1.	В SQL-запросах и моделях:
+	•	вместо roles_reference.id использовать roles_reference.role_id.
+	2.	В моделях/DTO:
+	•	поле, представляющее PK роли, должно называться/ссылаться на role_id, а не id.
+	3.	В логике прав доступа:
+	•	если роль вытаскивается через SELECT id, role_name ... — поменять на SELECT role_id, role_name ....
+	•	все сравнения вида if role.id == 2 привести к использованию role_id.
+
+Если хочешь реально использовать флаги:
+	•	can_view_own_stats, can_view_all_stats, can_manage_users, can_debug
+— убедиться, что вместо “магических чисел ролей” код опирается на эти флаги.
+
+⸻
+
+3. admin_action_logs: проверка привязки к UsersTelegaBot
+
+Где смотреть:
+	•	app/services/admin_logger.py
+	•	app/db/repositories/admin.py
+	•	обработчики:
+	•	app/telegram/handlers/admin_users.py
+	•	app/telegram/handlers/admin_admins.py
+	•	app/telegram/handlers/admin_panel.py
+
+Что править:
+	1.	Убедиться, что в actor_id и target_id записывается именно:
+	•	UsersTelegaBot.id (PK),
+а не user_id (Telegram ID) и не Mango-ID.
+	2.	Все места, где из лога достаётся пользователь:
+	•	при выборке пользователя по actor_id/target_id использовать связь:
+	•	actor_id → UsersTelegaBot.id,
+	•	target_id → UsersTelegaBot.id.
+
+Если где-то сейчас делается JOIN/SELECT по UsersTelegaBot.user_id = admin_action_logs.actor_id — это нужно заменить на связывание через UsersTelegaBot.id.
+
+⸻
+
+4. call_analytics: не использовать несуществующие поля
+
+Тут конфликт между миграцией и реальной БД. Сейчас таблица не содержит:
+	•	response_speed_score
+	•	talk_time_efficiency
+	•	conversion_score
+	•	churn_risk_score
+	•	churn_risk_level
+	•	call_type
+
+И содержит:
+	•	ml_p_record, ml_score_pred, ml_p_complaint, ml_updated_at
+	•	call_scores_id (а не call_score_id)
+
+Где смотреть:
+	•	app/db/repositories/call_analytics_repo.py
+	•	app/services/analytics.py / app/services/metrics_service.py
+	•	app/telegram/handlers/dashboard.py
+	•	возможно, app/telegram/handlers/admin_stats.py
+
+Что нужно сделать в коде:
+	1.	Найти все запросы/модели, которые читают из call_analytics поля:
+	•	response_speed_score,
+	•	talk_time_efficiency,
+	•	conversion_score,
+	•	churn_risk_score,
+	•	churn_risk_level,
+	•	call_type.
+	2.	Для каждого такого использования принять решение:
+	•	либо убрать использование call_analytics и считать эти метрики:
+	•	либо на лету,
+	•	либо из lm_value / call_scores;
+	•	либо временно отключить функциональность, которая их требует (например, не рисовать определённые метрики в дашбордах).
+	3.	Проверить имя поля для связи с call_scores:
+	•	если код ожидает колонку call_score_id — нужно в коде:
+	•	использовать фактическое имя call_scores_id при построении запросов и маппинге результатов.
+	•	убедиться, что никакие ORM-модели не объявляют поле call_score_id для call_analytics — должно быть ровно call_scores_id.
+
+До тех пор, пока не добавишь новые колонки в таблицу, никакой код не должен полагаться на их существование.
+
+⸻
+
+5. operator_dashboards: не опираться на композитный PK
+
+Сейчас в БД:
+	•	есть поле id (PK),
+	•	есть уникальный индекс uk_operator_period(operator_name, period_type, period_start).
+
+Где смотреть:
+	•	app/db/repositories/analytics.py / reports.py
+	•	app/services/dashboard_cache.py
+	•	app/telegram/handlers/dashboard.py
+	•	возможно, app/services/reports.py
+
+Что править:
+	1.	Если где-то модель operator_dashboards объявлена с PK = (operator_name, period_type, period_start):
+	•	изменить представление модели так, чтобы PK считался id,
+	•	а (operator_name, period_type, period_start) использовались как уникальный бизнес-ключ, но не как PK.
+	2.	Запросы выборки по периоду:
+	•	оставить в виде:
+	•	WHERE operator_name = ? AND period_type = ? AND period_start = ?
+	•	не полагаться на то, что это “PRIMARY KEY”, это просто UNIQUE.
+
+⸻
+
+6. operator_recommendations: то же самое
+
+В БД:
+	•	id — PK,
+	•	UNIQUE (operator_name, report_date).
+
+Где смотреть:
+	•	app/db/repositories/recommendations.py
+	•	app/services/recommendations.py
+	•	app/telegram/handlers/weekly_quality.py / раздел, который отдаёт рекомендации
+
+Что править:
+	1.	Если модель/репозиторий считает, что PK — (operator_name, report_date):
+	•	сменить концепцию на:
+	•	PK = id,
+	•	(operator_name, report_date) — уникальный бизнес-ключ для SELECT/UPSERT.
+	2.	В логике вставки/обновления:
+	•	использовать operator_name + report_date для поиска записи,
+	•	а id — для обновления/удаления.
+
+⸻
+
+7. reports: привести миграции к фактической таблице
+
+Это больше про миграции, но затрагивает код:
+
+Где смотреть в коде:
+	•	app/db/repositories/reports.py
+	•	app/services/reports.py
+	•	app/telegram/handlers/reports.py
+	•	app/telegram/handlers/weekly_quality.py
+
+Что по коду:
+	1.	Проверить, что все поля, с которыми работает сервис отчётов, действительно есть в БД:
+	•	total_calls, accepted_calls, booked_services,
+	•	conversion_rate, avg_call_rating,
+	•	total_cancellations, cancellation_rate,
+	•	тайминги разговоров/спама/навигаторов,
+	•	complaint_calls, complaint_rating,
+	•	missed_calls, missed_rate, total_leads,
+	•	и т.д. — всё должно совпадать по имени/типу.
+	2.	Если в коде фигурируют поля, которых в БД нет — вычистить эти обращения, либо добавить поля в схему (но ты просил сейчас именно “что в коде”, поэтому ориентир — убрать/исправить такие обращения).
+
+Отдельно: в миграциях добавить создание этой таблицы по фактической структуре — это не про runtime-код, но важно для CI/CD и развёртываний.
+
+⸻
+
+8. Общая ревизия миграций против кода
+
+Хотя ты просишь про код, миграции тоже код, и именно они сейчас “врут”.
+
+Что сделать в миграциях (в логике, не в SQL-тексте):
+	1.	Переписать миграцию 000 так, чтобы:
+	•	определение UsersTelegaBot совпадало с фактической таблицей (user_id, full_name, operator_name, chat_id, last_active_at, operator_id как VARCHAR и т.д.),
+	•	определение roles_reference использовало role_id, и содержало флаги can_view_*, can_manage_users, can_debug,
+	•	определение call_analytics, operator_dashboards, operator_recommendations, admin_action_logs соответствовало тому, что у тебя реально в БД.
+	2.	Добавить миграцию, создающую reports по фактической схеме.
+
+Это нужно, чтобы:
+	•	локальная разработка,
+	•	тесты в CI,
+	•	новый сервер
+
+разворачивались с такой же схемой, с которой работает текущий код.
+

@@ -31,7 +31,7 @@ class PermissionsManager:
     async def get_user_role(self, user_id: int) -> Optional[str]:
         """Возвращает роль пользователя (operator/admin/superadmin)."""
         try:
-            query = "SELECT role_id FROM users WHERE user_id = %s"
+            query = "SELECT role_id FROM UsersTelegaBot WHERE user_id = %s"
             row = await self.db_manager.execute_with_retry(query, params=(user_id,), fetchone=True)
             if not row:
                 logger.warning("User %s not found when fetching role", user_id)
@@ -44,7 +44,7 @@ class PermissionsManager:
     async def get_user_status(self, user_id: int) -> Optional[str]:
         """Возвращает статус пользователя (pending/approved/blocked)."""
         try:
-            query = "SELECT status FROM users WHERE user_id = %s"
+            query = "SELECT status FROM UsersTelegaBot WHERE user_id = %s"
             row = await self.db_manager.execute_with_retry(query, params=(user_id,), fetchone=True)
             return row.get("status") if row else None
         except Exception as exc:
@@ -66,7 +66,7 @@ class PermissionsManager:
             logger.warning("Unknown role '%s' for user %s", role_name, user_id)
             return False
         try:
-            query = "UPDATE users SET role_id = %s WHERE user_id = %s"
+            query = "UPDATE UsersTelegaBot SET role_id = %s WHERE user_id = %s"
             await self.db_manager.execute_with_retry(query, params=(role_id, user_id), commit=True)
             logger.info("User %s role updated to %s", user_id, role_name)
             return True
@@ -81,7 +81,7 @@ class PermissionsManager:
             logger.warning("Unknown role '%s' when listing users", role_name)
             return []
         try:
-            query = "SELECT user_id, full_name, username, status FROM users WHERE role_id = %s"
+            query = "SELECT user_id, full_name, username, status FROM UsersTelegaBot WHERE role_id = %s"
             rows = await self.db_manager.execute_with_retry(query, params=(role_id,), fetchall=True)
             return rows or []
         except Exception as exc:
@@ -93,7 +93,7 @@ class PermissionsManager:
         try:
             query = """
                 SELECT user_id, full_name, username, role_id, status
-                FROM users
+                FROM UsersTelegaBot
                 WHERE role_id IN (%s, %s)
                 ORDER BY role_id DESC, full_name
             """

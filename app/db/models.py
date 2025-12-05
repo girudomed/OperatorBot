@@ -81,9 +81,19 @@ class RoleRecord(TypedDict, total=False):
 
 
 class ReportRecord(TypedDict, total=False):
-    """Запись отчёта из таблицы reports."""
+    """
+    Запись отчёта из таблицы reports.
+    
+    ВАЖНО:
+    - PK: report_id (не id!)
+    - period и report_date — VARCHAR (строки), не DATE!
+    """
+    report_id: int  # PK
     user_id: int
-    report_date: datetime
+    name: Optional[str]  # Имя оператора
+    period: str  # VARCHAR(20): 'day', 'week', 'month'
+    report_date: str  # VARCHAR(50): 'YYYY-MM-DD'
+    report_text: Optional[str]
     total_calls: int
     accepted_calls: int
     booked_services: int
@@ -95,11 +105,14 @@ class ReportRecord(TypedDict, total=False):
     avg_conversation_time: float
     avg_spam_time: float
     total_spam_time: int
-    total_navigation_time: int
     avg_navigation_time: float
     complaint_calls: int
     complaint_rating: float
     recommendations: str
+    # Дополнительные поля
+    missed_calls: Optional[int]
+    missed_rate: Optional[float]
+    total_leads: Optional[int]
 
 
 class CallMetrics(TypedDict):

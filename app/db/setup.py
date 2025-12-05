@@ -37,7 +37,7 @@ async def add_user(user_id, username, full_name, role_name="Operator"):
 async def get_user_role(user_id):
     logger.info(f"Получение роли для пользователя с user_id: {user_id}")
     query = """
-    SELECT role_id FROM users WHERE user_id = %s
+    SELECT role_id FROM UsersTelegaBot WHERE user_id = %s
     """
     try:
         user_role = await execute_query(query, (user_id,), fetchone=True)
@@ -52,7 +52,7 @@ async def get_user_role(user_id):
 async def get_user_password(user_id):
     logger.info(f"Получение пароля для пользователя с user_id: {user_id}")
     query = """
-    SELECT password FROM users WHERE user_id = %s
+    SELECT password FROM UsersTelegaBot WHERE user_id = %s
     """
     try:
         user_password = await execute_query(query, (user_id,), fetchone=True)

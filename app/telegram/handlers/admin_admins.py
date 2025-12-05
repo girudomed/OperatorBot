@@ -469,7 +469,7 @@ class AdminAdminsHandler:
         if not hasattr(self.notifications, "notify_promotion"):
             return
         user = await self.admin_repo.db.execute_with_retry(
-            "SELECT user_id AS telegram_id FROM users WHERE id = %s",
+            "SELECT user_id AS telegram_id FROM UsersTelegaBot WHERE id = %s",
             params=(user_id,),
             fetchone=True,
         )

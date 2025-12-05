@@ -100,8 +100,10 @@ class NotificationsManager:
         """
         try:
             # Получаем все отчеты за текущий день
-            query = "SELECT user_id, report_text FROM reports WHERE report_date = CURRENT_DATE"
-            reports = await self.execute_query(query, fetchall=True)
+            # report_date в БД это VARCHAR, не DATE! Формат: 'YYYY-MM-DD'
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            query = "SELECT user_id, report_text FROM reports WHERE report_date = %s"
+            reports = await self.execute_query(query, (today_str,), fetchall=True)
 
             if not reports:
                 logger.info("[КРОТ]: Нет отчетов для отправки за текущий день.")
@@ -112,8 +114,9 @@ class NotificationsManager:
                 user_id = report['user_id']
                 report_text = report['report_text']
 
-                # Получаем chat_id из таблицы users по user_id
-                query_user = "SELECT chat_id FROM users WHERE user_id = %s"
+                # Получаем chat_id из UsersTelegaBot (не users!)
+                # user_id в reports связан с UsersTelegaBot.user_id (Telegram ID)
+                query_user = "SELECT chat_id FROM UsersTelegaBot WHERE user_id = %s"
                 user = await self.execute_query(query_user, (user_id,), fetchone=True)
 
                 if user and user.get('chat_id'):

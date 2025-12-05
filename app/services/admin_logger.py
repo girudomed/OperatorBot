@@ -2,7 +2,7 @@
 Admin Action Logger Service.
 
 Централизованное логирование всех админских действий в admin_action_logs.
-Использует telegram user_id вместо внутренних DB IDs.
+ВАЖНО: actor_id и target_id = UsersTelegaBot.id (PK), НЕ user_id (Telegram ID)!
 """
 
 import json
@@ -20,11 +20,32 @@ class AdminActionLogger:
     """
     Сервис для логирования админских действий.
     
-    Все действия записываются с telegram user_id (не internal DB IDs).
+    ВАЖНО: В admin_action_logs.actor_id и target_id записываем
+    UsersTelegaBot.id (PK), а не user_id (Telegram ID)!
     """
     
     def __init__(self, db_manager: DatabaseManager):
         self.db = db_manager
+    
+    async def _get_user_pk_by_telegram_id(self, telegram_id: int) -> Optional[int]:
+        """
+        Получить UsersTelegaBot.id (PK) по Telegram user_id.
+        
+        Args:
+            telegram_id: Telegram user ID (user_id в таблице)
+            
+        Returns:
+            UsersTelegaBot.id (PK) или None
+        """
+        try:
+            query = "SELECT id FROM UsersTelegaBot WHERE user_id = %s"
+            result = await self.db.execute_with_retry(
+                query, params=(telegram_id,), fetchone=True
+            )
+            return result.get('id') if result else None
+        except Exception as e:
+            logger.error(f"[ADMIN_LOG] Error getting user PK: {e}")
+            return None
     
     async def log_action(
         self,
@@ -35,6 +56,8 @@ class AdminActionLogger:
     ) -> bool:
         """
         Записать действие админа в лог.
+        
+        ВАЖНО: Принимает Telegram ID, но записывает UsersTelegaBot.id (PK)!
         
         Args:
             actor_telegram_id: Telegram ID того кто совершил действие
@@ -57,11 +80,40 @@ class AdminActionLogger:
             True если успешно, False при ошибке
         """
         logger.info(
-            f"[ADMIN_LOG] Logging action: {action} by {actor_telegram_id} "
-            f"on {target_telegram_id}"
+            f"[ADMIN_LOG] Logging action: {action} by telegram_id={actor_telegram_id} "
+            f"on telegram_id={target_telegram_id}"
         )
         
         try:
+            # Получаем UsersTelegaBot.id (PK) для actor и target
+            actor_pk = await self._get_user_pk_by_telegram_id(actor_telegram_id)
+            if not actor_pk:
+                logger.warning(
+                    f"[ADMIN_LOG] Cannot find actor UsersTelegaBot.id "
+                    f"for telegram_id={actor_telegram_id}"
+                )
+                # Записываем в payload для отладки
+                if payload is None:
+                    payload = {}
+                payload['_actor_telegram_id_fallback'] = actor_telegram_id
+            
+            target_pk = None
+            if target_telegram_id:
+                target_pk = await self._get_user_pk_by_telegram_id(target_telegram_id)
+                if not target_pk:
+                    logger.warning(
+                        f"[ADMIN_LOG] Cannot find target UsersTelegaBot.id "
+                        f"for telegram_id={target_telegram_id}"
+                    )
+                    if payload is None:
+                        payload = {}
+                    payload['_target_telegram_id_fallback'] = target_telegram_id
+            
+            # Если actor_pk не найден, не записываем (нарушит FK constraint)
+            if not actor_pk:
+                logger.error(f"[ADMIN_LOG] Actor not found, cannot log action")
+                return False
+            
             query = """
                 INSERT INTO admin_action_logs 
                 (actor_id, target_id, action, payload_json, created_at)
@@ -72,11 +124,14 @@ class AdminActionLogger:
             
             await self.db.execute_with_retry(
                 query,
-                params=(actor_telegram_id, target_telegram_id, action, payload_json),
+                params=(actor_pk, target_pk, action, payload_json),
                 commit=True
             )
             
-            logger.info(f"[ADMIN_LOG] Action '{action}' logged successfully")
+            logger.info(
+                f"[ADMIN_LOG] Action '{action}' logged: "
+                f"actor_id={actor_pk}, target_id={target_pk}"
+            )
             return True
             
         except Exception as e:
@@ -163,7 +218,7 @@ class AdminActionLogger:
         Логирование просмотра списков.
         
         Args:
-            admin_telegram_id: ID админа
+            admin_telegram_id: Telegram ID админа
             lookup_type: 'users_list', 'admins_list', 'pending_list', etc
         """
         return await self.log_action(
@@ -183,7 +238,7 @@ class AdminActionLogger:
         Логирование системных действий.
         
         Args:
-            admin_telegram_id: ID админа
+            admin_telegram_id: Telegram ID админа
             system_action: Описание действия
             details: Дополнительные детали
         """
@@ -198,121 +253,153 @@ class AdminActionLogger:
             payload=payload
         )
     
-    async def get_recent_logs(
+    async def get_actions_by_actor(
         self,
-        limit: int = 50,
-        actor_telegram_id: Optional[int] = None,
-        action_filter: Optional[str] = None
+        actor_telegram_id: int,
+        limit: int = 50
     ) -> list:
         """
-        Получить последние логи действий.
+        Получить действия конкретного админа.
         
         Args:
-            limit: Макс количество записей
-            actor_telegram_id: Фильтр по актору (optional)
-            action_filter: Фильтр по типу действия (optional)
-        
-        Returns:
-            Список логов с join к UsersTelegaBot для имен
+            actor_telegram_id: Telegram ID админа
+            limit: Максимальное количество записей
         """
-        logger.info(
-            f"[ADMIN_LOG] Getting recent logs: limit={limit}, "
-            f"actor={actor_telegram_id}, action={action_filter}"
-        )
-        
         try:
-            conditions = []
-            params = []
+            actor_pk = await self._get_user_pk_by_telegram_id(actor_telegram_id)
+            if not actor_pk:
+                return []
             
-            if actor_telegram_id:
-                conditions.append("l.actor_id = %s")
-                params.append(actor_telegram_id)
-            
-            if action_filter:
-                conditions.append("l.action = %s")
-                params.append(action_filter)
-            
-            where_clause = ""
-            if conditions:
-                where_clause = "WHERE " + " AND ".join(conditions)
-            
-            query = f"""
+            query = """
                 SELECT 
-                    l.*,
-                    a.username as actor_username,
-                    a.full_name as actor_name,
-                    t.username as target_username,
-                    t.full_name as target_name
+                    l.id,
+                    l.action,
+                    l.target_id,
+                    t.user_id as target_telegram_id,
+                    t.full_name as target_name,
+                    l.payload_json,
+                    l.created_at
                 FROM admin_action_logs l
-                LEFT JOIN UsersTelegaBot a ON l.actor_id = a.user_id
-                LEFT JOIN UsersTelegaBot t ON l.target_id = t.user_id
-                {where_clause}
+                LEFT JOIN UsersTelegaBot t ON l.target_id = t.id
+                WHERE l.actor_id = %s
                 ORDER BY l.created_at DESC
                 LIMIT %s
             """
             
-            params.append(limit)
-            
             results = await self.db.execute_with_retry(
-                query, params=tuple(params), fetchall=True
-            ) or []
+                query, params=(actor_pk, limit), fetchall=True
+            )
             
-            logger.info(f"[ADMIN_LOG] Found {len(results)} log entries")
-            
-            return [dict(row) for row in results]
+            return [dict(row) for row in results] if results else []
             
         except Exception as e:
-            logger.error(
-                f"[ADMIN_LOG] Error getting logs: {e}\n{traceback.format_exc()}"
-            )
+            logger.error(f"[ADMIN_LOG] Error getting actions: {e}")
             return []
     
-    async def get_user_actions_count(
+    async def get_actions_on_target(
         self,
-        admin_telegram_id: int,
-        action: Optional[str] = None
-    ) -> int:
+        target_telegram_id: int,
+        limit: int = 50
+    ) -> list:
         """
-        Получить количество действий админа.
+        Получить все действия над конкретным пользователем.
         
         Args:
-            admin_telegram_id: Telegram ID админа
-            action: Фильтр по типу действия (optional)
-        
-        Returns:
-            Количество действий
+            target_telegram_id: Telegram ID пользователя
+            limit: Максимальное количество записей
         """
         try:
-            if action:
-                query = """
-                    SELECT COUNT(*) as count
-                    FROM admin_action_logs
-                    WHERE actor_id = %s AND action = %s
-                """
-                params = (admin_telegram_id, action)
-            else:
-                query = """
-                    SELECT COUNT(*) as count
-                    FROM admin_action_logs
-                    WHERE actor_id = %s
-                """
-                params = (admin_telegram_id,)
+            target_pk = await self._get_user_pk_by_telegram_id(target_telegram_id)
+            if not target_pk:
+                return []
             
-            result = await self.db.execute_with_retry(
-                query, params=params, fetchone=True
+            query = """
+                SELECT 
+                    l.id,
+                    l.action,
+                    l.actor_id,
+                    a.user_id as actor_telegram_id,
+                    a.full_name as actor_name,
+                    l.payload_json,
+                    l.created_at
+                FROM admin_action_logs l
+                JOIN UsersTelegaBot a ON l.actor_id = a.id
+                WHERE l.target_id = %s
+                ORDER BY l.created_at DESC
+                LIMIT %s
+            """
+            
+            results = await self.db.execute_with_retry(
+                query, params=(target_pk, limit), fetchall=True
             )
             
-            count = result.get('count', 0) if result else 0
-            
-            logger.debug(
-                f"[ADMIN_LOG] Admin {admin_telegram_id} has {count} "
-                f"actions{f' of type {action}' if action else ''}"
-            )
-            
-            return count
+            return [dict(row) for row in results] if results else []
             
         except Exception as e:
-            logger.error(
-                f"[ADMIN_LOG] Error counting actions: {e}\n{traceback.format_exc()}"
+            logger.error(f"[ADMIN_LOG] Error getting target actions: {e}")
+            return []
+    
+    async def get_recent_actions(
+        self,
+        limit: int = 100,
+        action_type: Optional[str] = None
+    ) -> list:
+        """
+        Получить последние действия.
+        
+        Args:
+            limit: Максимальное количество записей
+            action_type: Фильтр по типу действия (optional)
+        """
+        try:
+            if action_type:
+                query = """
+                    SELECT 
+                        l.id,
+                        l.action,
+                        l.actor_id,
+                        a.user_id as actor_telegram_id,
+                        a.full_name as actor_name,
+                        l.target_id,
+                        t.user_id as target_telegram_id,
+                        t.full_name as target_name,
+                        l.payload_json,
+                        l.created_at
+                    FROM admin_action_logs l
+                    JOIN UsersTelegaBot a ON l.actor_id = a.id
+                    LEFT JOIN UsersTelegaBot t ON l.target_id = t.id
+                    WHERE l.action = %s
+                    ORDER BY l.created_at DESC
+                    LIMIT %s
+                """
+                params = (action_type, limit)
+            else:
+                query = """
+                    SELECT 
+                        l.id,
+                        l.action,
+                        l.actor_id,
+                        a.user_id as actor_telegram_id,
+                        a.full_name as actor_name,
+                        l.target_id,
+                        t.user_id as target_telegram_id,
+                        t.full_name as target_name,
+                        l.payload_json,
+                        l.created_at
+                    FROM admin_action_logs l
+                    JOIN UsersTelegaBot a ON l.actor_id = a.id
+                    LEFT JOIN UsersTelegaBot t ON l.target_id = t.id
+                    ORDER BY l.created_at DESC
+                    LIMIT %s
+                """
+                params = (limit,)
+            
+            results = await self.db.execute_with_retry(
+                query, params=params, fetchall=True
             )
-            return 0
+            
+            return [dict(row) for row in results] if results else []
+            
+        except Exception as e:
+            logger.error(f"[ADMIN_LOG] Error getting recent actions: {e}")
+            return []
