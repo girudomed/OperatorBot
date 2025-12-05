@@ -133,9 +133,8 @@ class LMService:
             return 0.0
         
         outcome = call_score.get('outcome')
-        call_success = call_score.get('call_success')
         
-        if outcome == 'record' or call_success == 'record':
+        if outcome == 'record':
             return 70.0
         
         return 0.0
@@ -331,7 +330,7 @@ class LMService:
         if category == 'Жалоба' or 'жалоба' in normalized_category:
             return (100.0, True)
         if score <= 3:
-            return (70.0, True)
+            return (60.0, True)
         
         return (10.0, False)
 
@@ -378,7 +377,8 @@ class LMService:
             return 0.3
         
         outcome = call_score.get('outcome', '')
-        category = (call_score.get('call_category') or '').lower()
+        raw_category = call_score.get('call_category') or ''
+        category = raw_category.lower()
         
         if outcome == 'lead_no_record':
             return 0.6
@@ -388,7 +388,7 @@ class LMService:
         
         if 'жалоба' in category:
             return 0.7
-        if 'навигация' in category:
+        if raw_category == 'Навигация' or 'навигация' in category:
             return 0.60
         
         return 0.3
