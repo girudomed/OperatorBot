@@ -355,3 +355,123 @@ class MetricsService:
         except Exception as e:
             logger.error(f"Failed to get risk distribution: {e}", exc_info=True)
             return {}
+
+    async def get_operator_uplift(
+        self,
+        operator_name: str,
+        days: int = 7
+    ) -> Dict[str, Any]:
+        """
+        Расчёт Uplift оператора: факт записей vs прогноз модели.
+        
+        Returns:
+            {
+                'expected_records': float,  # прогноз модели
+                'actual_records': int,      # факт
+                'uplift': float,            # разница
+                'difficulty_index': float   # сложность потока
+            }
+        """
+        if not self.lm_repo:
+            return {'expected_records': 0, 'actual_records': 0, 'uplift': 0, 'difficulty_index': 0}
+        
+        from datetime import datetime, timedelta
+        start_date = datetime.now() - timedelta(days=days)
+        
+        try:
+            # Получаем прогнозы конверсии для оператора
+            query = """
+                SELECT 
+                    SUM(lv.value_numeric) as expected_records,
+                    COUNT(CASE WHEN cs.outcome = 'record' THEN 1 END) as actual_records,
+                    AVG(1 - lv.value_numeric) as difficulty_index
+                FROM lm_value lv
+                JOIN call_scores cs ON lv.history_id = cs.history_id
+                WHERE lv.metric_code = 'conversion_prob_forecast'
+                AND lv.created_at >= %s
+                AND (cs.called_info LIKE %s OR cs.caller_info LIKE %s)
+                AND cs.is_target = 1
+            """
+            
+            operator_pattern = f"%{operator_name}%"
+            row = await self.repo.db_manager.execute_with_retry(
+                query,
+                (start_date, operator_pattern, operator_pattern),
+                fetchone=True
+            )
+            
+            expected = float(row.get('expected_records') or 0) if row else 0
+            actual = int(row.get('actual_records') or 0) if row else 0
+            difficulty = float(row.get('difficulty_index') or 0) if row else 0
+            
+            return {
+                'expected_records': round(expected, 1),
+                'actual_records': actual,
+                'uplift': round(actual - expected, 1),
+                'difficulty_index': round(difficulty * 100, 1)
+            }
+        except Exception as e:
+            logger.error(f"Failed to calculate operator uplift: {e}", exc_info=True)
+            return {'expected_records': 0, 'actual_records': 0, 'uplift': 0, 'difficulty_index': 0}
+
+    async def get_hot_missed_leads(
+        self,
+        operator_name: Optional[str] = None,
+        threshold: float = 0.7,
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Получает «горячие» упущенные лиды — звонки с высокой вероятностью записи,
+        которые не привели к записи.
+        
+        Args:
+            operator_name: Фильтр по оператору
+            threshold: Порог вероятности (>=0.7 по умолчанию)
+            limit: Максимальное количество результатов
+            
+        Returns:
+            Список звонков с полями: history_id, caller_number, p_record, refusal_reason
+        """
+        if not self.lm_repo:
+            return []
+        
+        from datetime import datetime, timedelta
+        start_date = datetime.now() - timedelta(days=7)
+        
+        try:
+            base_query = """
+                SELECT 
+                    lv.history_id,
+                    cs.caller_number,
+                    lv.value_numeric as p_record,
+                    cs.refusal_reason,
+                    cs.call_category
+                FROM lm_value lv
+                JOIN call_scores cs ON lv.history_id = cs.history_id
+                WHERE lv.metric_code = 'conversion_prob_forecast'
+                AND lv.value_numeric >= %s
+                AND cs.outcome = 'lead_no_record'
+                AND cs.is_target = 1
+                AND lv.created_at >= %s
+            """
+            
+            params = [threshold, start_date]
+            
+            if operator_name:
+                base_query += " AND (cs.called_info LIKE %s OR cs.caller_info LIKE %s)"
+                params.extend([f"%{operator_name}%", f"%{operator_name}%"])
+            
+            base_query += " ORDER BY lv.value_numeric DESC LIMIT %s"
+            params.append(limit)
+            
+            rows = await self.repo.db_manager.execute_with_retry(
+                base_query,
+                tuple(params),
+                fetchall=True
+            ) or []
+            
+            return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Failed to get hot missed leads: {e}", exc_info=True)
+            return []
+

@@ -221,6 +221,25 @@ async def main():
             id='weekly_quality_report',
             replace_existing=True
         )
+
+        # Инициализация сервиса синхронизации аналитики
+        from app.services.call_analytics_sync import CallAnalyticsSyncService
+        analytics_sync_service = CallAnalyticsSyncService(db_manager)
+
+        async def run_analytics_sync():
+            logger.info("Запуск плановой синхронизации аналитики...")
+            try:
+                await analytics_sync_service.sync_new()
+            except Exception:
+                logger.exception("Ошибка при плановой синхронизации аналитики.")
+
+        # Запуск синхронизации каждые 30 минут
+        scheduler.add_job(
+            run_analytics_sync,
+            CronTrigger(minute='*/30'),
+            id='analytics_sync',
+            replace_existing=True
+        )
         await application.initialize()
         await application.start()
 

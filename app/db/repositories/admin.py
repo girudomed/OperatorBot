@@ -638,6 +638,19 @@ class AdminRepository:
             )
             return []
     
+    async def _get_internal_id(self, telegram_id: int) -> Optional[int]:
+        """Получает внутренний ID пользователя по Telegram ID."""
+        if not telegram_id:
+            return None
+        row = await self.db.execute_with_retry(
+            "SELECT id FROM UsersTelegaBot WHERE user_id = %s",
+            params=(telegram_id,),
+            fetchone=True
+        )
+        if row:
+            return row['id'] if isinstance(row, dict) else row[0]
+        return None
+
     @log_async_exceptions
     async def log_admin_action(
         self,
@@ -649,7 +662,7 @@ class AdminRepository:
         """
         Записывает действие админа в лог.
         
-        ВАЖНО: Использует telegram user_id (не внутренние DB IDs)!
+        ВАЖНО: Принимает telegram IDs, но сохраняет внутренние DB IDs!
         
         Args:
             actor_telegram_id: Telegram ID админа (кто совершил действие)
@@ -663,6 +676,13 @@ class AdminRepository:
         )
         
         try:
+            # Получаем внутренние ID
+            actor_id = await self._get_internal_id(actor_telegram_id)
+            target_id = await self._get_internal_id(target_telegram_id) if target_telegram_id else None
+            
+            if not actor_id:
+                logger.warning(f"[ADMIN_REPO] Actor {actor_telegram_id} not found in DB, logging with NULL actor_id")
+            
             query = """
                 INSERT INTO admin_action_logs 
                 (actor_id, target_id, action, payload_json, created_at)
@@ -672,7 +692,7 @@ class AdminRepository:
             
             await self.db.execute_with_retry(
                 query,
-                params=(actor_telegram_id, target_telegram_id, action, payload_json),
+                params=(actor_id, target_id, action, payload_json),
                 commit=True
             )
             
@@ -703,27 +723,36 @@ class AdminRepository:
         )
         
         try:
+            # JOIN теперь по внутренним ID (l.actor_id = a.id)
             if actor_telegram_id:
+                actor_internal_id = await self._get_internal_id(actor_telegram_id)
+                if not actor_internal_id:
+                    return []
+                    
                 query = """
                     SELECT l.*, 
                            a.full_name as actor_name,
-                           t.full_name as target_name
+                           t.full_name as target_name,
+                           a.user_id as actor_telegram_id,
+                           t.user_id as target_telegram_id
                     FROM admin_action_logs l
-                    LEFT JOIN UsersTelegaBot a ON l.actor_id = a.user_id
-                    LEFT JOIN UsersTelegaBot t ON l.target_id = t.user_id
+                    LEFT JOIN UsersTelegaBot a ON l.actor_id = a.id
+                    LEFT JOIN UsersTelegaBot t ON l.target_id = t.id
                     WHERE l.actor_id = %s
                     ORDER BY l.created_at DESC
                     LIMIT %s
                 """
-                params = (actor_telegram_id, limit)
+                params = (actor_internal_id, limit)
             else:
                 query = """
                     SELECT l.*, 
                            a.full_name as actor_name,
-                           t.full_name as target_name
+                           t.full_name as target_name,
+                           a.user_id as actor_telegram_id,
+                           t.user_id as target_telegram_id
                     FROM admin_action_logs l
-                    LEFT JOIN UsersTelegaBot a ON l.actor_id = a.user_id
-                    LEFT JOIN UsersTelegaBot t ON l.target_id = t.user_id
+                    LEFT JOIN UsersTelegaBot a ON l.actor_id = a.id
+                    LEFT JOIN UsersTelegaBot t ON l.target_id = t.id
                     ORDER BY l.created_at DESC
                     LIMIT %s
                 """

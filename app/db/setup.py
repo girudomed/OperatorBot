@@ -1,21 +1,16 @@
-import logging
 import random
 import string
 import time  # Для замера времени
 import secrets
 import bcrypt
 
+# Используем WatchDog логирование
+from app.logging_config import get_watchdog_logger
+
 from app.db.connection import execute_query
 from app.core.roles import role_name_from_id
 
-# Настройка логирования
-log_handler = logging.FileHandler('logs.log')
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-log_handler.setFormatter(formatter)
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-logger.addHandler(log_handler)
+logger = get_watchdog_logger(__name__)
 
 # Функция для создания таблиц
 async def create_tables():

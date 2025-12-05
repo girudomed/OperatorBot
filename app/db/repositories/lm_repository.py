@@ -452,3 +452,39 @@ class LMRepository:
         )
         
         return stats or {}
+
+    async def get_followup_calls(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Получает звонки, требующие фоллоу-ап.
+        
+        Returns:
+            Список звонков с флагом followup_needed=true
+        """
+        from datetime import datetime, timedelta
+        
+        start_date = datetime.now() - timedelta(days=7)
+        
+        query = """
+            SELECT DISTINCT
+                lv.history_id,
+                lv.created_at,
+                (SELECT value_label FROM lm_value 
+                 WHERE history_id = lv.history_id 
+                 AND metric_code = 'churn_risk_level' 
+                 LIMIT 1) as churn_risk_level
+            FROM lm_value lv
+            WHERE lv.metric_code = 'followup_needed_flag'
+            AND lv.value_label = 'true'
+            AND lv.created_at >= %s
+            ORDER BY lv.created_at DESC
+            LIMIT %s
+        """
+        
+        rows = await self.db_manager.execute_with_retry(
+            query,
+            (start_date, limit),
+            fetchall=True
+        ) or []
+        
+        return [dict(row) for row in rows]
+

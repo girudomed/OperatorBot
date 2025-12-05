@@ -23,7 +23,10 @@ class OperatorRepository:
     # === Методы из bot/repositories/operators.py ===
     
     async def get_extension_by_user_id(self, user_id: int) -> Optional[str]:
-        query = "SELECT extension FROM users WHERE user_id = %s"
+        """
+        Получает extension оператора по Telegram ID из UsersTelegaBot.
+        """
+        query = "SELECT extension FROM UsersTelegaBot WHERE user_id = %s"
         rows = await self.db_manager.execute_with_retry(query, (user_id,), fetchall=True)
         if not rows:
             return None
@@ -138,13 +141,13 @@ class OperatorRepository:
 
         # ИСПРАВЛЕНИЕ: Используем поля outcome и refusal_reason вместо текстовых категорий
         # Метрики из call_scores
-        lead_pattern = '%Лид%'  # Паттерн выносим в переменную
         scores_query = """
             SELECT
                 COUNT(*) AS total_scored_calls,
                 AVG(cs.call_score) AS avg_score,
                 SUM(CASE 
-                    WHEN cs.outcome = 'lead_no_record' OR cs.call_category LIKE %s 
+                    WHEN cs.outcome = 'lead_no_record' 
+                         OR cs.call_category LIKE CONCAT('%', 'Лид', '%') 
                     THEN 1 ELSE 0 
                 END) AS total_leads,
                 SUM(CASE WHEN cs.outcome = 'record' THEN 1 ELSE 0 END) AS booked_leads,
@@ -165,7 +168,7 @@ class OperatorRepository:
         try:
             scores_stats = await self.db_manager.execute_with_retry(
                 scores_query,
-                (lead_pattern, start_str, end_str),
+                (start_str, end_str),
                 fetchone=True,
             ) or {}
         except Exception:

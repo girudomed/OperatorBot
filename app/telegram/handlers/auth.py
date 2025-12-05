@@ -13,7 +13,9 @@ from telegram.ext import (
     CommandHandler,
     ConversationHandler,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
+    DispatcherHandlerStop,
 )
 
 from app.db.manager import DatabaseManager
@@ -338,14 +340,12 @@ def setup_auth_handlers(application, db_manager: DatabaseManager, permissions_ma
             partial(registration_guard_command, permissions=permissions_manager),
         ),
         group=0,
-        block=True,
     )
     application.add_handler(
         CallbackQueryHandler(
             partial(registration_guard_callback, permissions=permissions_manager)
         ),
         group=0,
-        block=True,
     )
 
     # Используем partial, чтобы передать auth_manager в обработчики
@@ -398,13 +398,13 @@ async def registration_guard_command(update: Update, context: CallbackContext, p
     status = await permissions.get_user_status(user.id)
     if status is None:
         await message.reply_text("Вы ещё не зарегистрированы. Используйте /start и /register, чтобы подать заявку.")
-        return True
+        raise DispatcherHandlerStop()
     if status == 'pending':
         await message.reply_text("Ваша заявка ожидает подтверждения администратором. Пожалуйста, дождитесь одобрения.")
-        return True
+        raise DispatcherHandlerStop()
     if status == 'blocked':
         await message.reply_text("Ваш доступ временно ограничен. Обратитесь к администратору.")
-        return True
+        raise DispatcherHandlerStop()
 
     return False
 
@@ -422,13 +422,13 @@ async def registration_guard_callback(update: Update, context: CallbackContext, 
     status = await permissions.get_user_status(user.id)
     if status is None:
         await query.answer("Сначала зарегистрируйтесь через /start → /register.", show_alert=True)
-        return True
+        raise DispatcherHandlerStop()
     if status == 'pending':
         await query.answer("Ваша заявка ещё не одобрена.", show_alert=True)
-        return True
+        raise DispatcherHandlerStop()
     if status == 'blocked':
         await query.answer("Доступ заблокирован. Свяжитесь с администратором.", show_alert=True)
-        return True
+        raise DispatcherHandlerStop()
 
     return False
 
@@ -441,7 +441,12 @@ def _commands_for_role(role: str) -> List[str]:
     return OPERATOR_COMMANDS
 
 
-def _build_keyboard_for_role(role: str) -> ReplyKeyboardMarkup:
+def _build_keyboard_for_role(role: str) -> Optional[ReplyKeyboardMarkup]:
+    # Для админов и суперадминов отключаем Reply клавиатуру, 
+    # так как они должны использовать Inline меню (/admin)
+    if role in ('admin', 'superadmin'):
+        return None
+        
     commands = _commands_for_role(role)
     buttons = [f"/{cmd}" for cmd in commands]
     rows = [buttons[i:i+2] for i in range(0, len(buttons), 2)]

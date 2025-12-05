@@ -11,6 +11,7 @@ from telegram.ext import ContextTypes
 
 from app.db.manager import DatabaseManager
 from app.db.repositories.users import UserRepository
+from app.db.repositories.roles import RolesRepository
 from app.logging_config import get_watchdog_logger
 
 logger = get_watchdog_logger(__name__)
@@ -45,6 +46,7 @@ class PermissionChecker:
     def __init__(self, db_manager: DatabaseManager):
         self.db_manager = db_manager
         self.user_repo = UserRepository(db_manager)
+        self.roles_repo = RolesRepository(db_manager)
     
     async def get_user_role(self, telegram_id: int) -> Optional[int]:
         """Получить role_id пользователя по telegram ID."""
@@ -56,16 +58,16 @@ class PermissionChecker:
     async def can_view_own_stats(self, telegram_id: int) -> bool:
         """Может ли пользователь видеть свою статистику."""
         role_id = await self.get_user_role(telegram_id)
-        # Все роли могут видеть свою статистику
-        return role_id is not None
+        if not role_id:
+            return False
+        return await self.roles_repo.check_permission(role_id, 'can_view_own_stats')
     
     async def can_view_all_stats(self, telegram_id: int) -> bool:
         """Может ли пользователь видеть статистику всех операторов."""
         role_id = await self.get_user_role(telegram_id)
         if not role_id:
             return False
-        # Все роли от Маркетолога и выше
-        return role_id >= ROLE_MARKETER
+        return await self.roles_repo.check_permission(role_id, 'can_view_all_stats')
     
     async def can_view_dashboard(self, telegram_id: int) -> bool:
         """Доступ к dashboard."""
@@ -90,25 +92,24 @@ class PermissionChecker:
         role_id = await self.get_user_role(telegram_id)
         if not role_id:
             return False
-        # Админы и выше
-        return role_id >= ROLE_ADMINISTRATOR
+        # Админы и выше (используем логику из RolesRepository если есть, или оставляем >= ADMIN)
+        # В RolesRepository нет отдельного флага для этого, но обычно это связано с can_manage_users или can_view_all_stats
+        # Оставим пока старую логику или привяжем к can_view_all_stats как наиболее близкому
+        return await self.roles_repo.check_permission(role_id, 'can_view_all_stats')
     
     async def can_manage_users(self, telegram_id: int) -> bool:
         """Управление пользователями."""
         role_id = await self.get_user_role(telegram_id)
         if not role_id:
             return False
-        # Администратор, СТ Админ и выше
-        return role_id in (ROLE_ADMINISTRATOR, ROLE_ST_ADMIN, ROLE_MANAGEMENT, 
-                          ROLE_SUPER_ADMIN, ROLE_DEV)
+        return await self.roles_repo.check_permission(role_id, 'can_manage_users')
     
     async def can_debug(self, telegram_id: int) -> bool:
         """Команды отладки."""
         role_id = await self.get_user_role(telegram_id)
         if not role_id:
             return False
-        # Только Dev
-        return role_id == ROLE_DEV
+        return await self.roles_repo.check_permission(role_id, 'can_debug')
     
     async def can_message_dev(self, telegram_id: int) -> bool:
         """Может ли отправлять сообщения разработчику."""

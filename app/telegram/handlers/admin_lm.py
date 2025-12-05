@@ -249,13 +249,149 @@ class AdminLMHandler:
         elif data == "admin:lm:risk":
             await self.show_risk_metrics(update, context)
         elif data == "admin:lm:quality":
-            await query.answer("⭐ Раздел в разработке")
+            await self.show_quality_metrics(update, context)
         elif data == "admin:lm:summary":
-            await query.answer("📊 Раздел в разработке")
+            await self.show_summary_metrics(update, context)
         elif data == "admin:lm:followup_list":
-            await query.answer("🔍 Раздел в разработке")
+            await self.show_followup_list(update, context)
         else:
             await query.answer("❌ Неизвестная команда")
+    
+    async def show_quality_metrics(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показывает метрики качества."""
+        query = update.callback_query
+        await query.answer()
+        
+        try:
+            metrics = await self.lm_repo.get_aggregated_metrics(
+                metric_group='quality',
+                days=7
+            )
+            
+            checklist = metrics.get('checklist_coverage', {}).get('avg', 0)
+            quality_score = metrics.get('quality_score', {}).get('avg', 0)
+            script_risk = metrics.get('script_deviation_risk', {}).get('avg', 0)
+            
+            text = (
+                "⭐ <b>Метрики качества (7 дней)</b>\n\n"
+                "<b>Покрытие чек-листа:</b>\n"
+                f"└ Среднее: {checklist:.1f}%\n\n"
+                "<b>Скор качества:</b>\n"
+                f"└ Средний: {quality_score:.1f}/100\n\n"
+                "<b>Риск отклонения от скрипта:</b>\n"
+                f"└ Средний: {script_risk:.1f}%\n"
+                f"└ Статус: {'🔴 Высокий' if script_risk > 30 else '🟡 Средний' if script_risk > 15 else '🟢 Низкий'}\n\n"
+                "<i>Метрики рассчитываются на основе транскриптов</i>"
+            )
+        except Exception as e:
+            logger.error(f"Error loading quality metrics: {e}", exc_info=True)
+            text = (
+                "⭐ <b>Метрики качества</b>\n\n"
+                "❌ Ошибка загрузки данных\n\n"
+                "<i>Проверьте, что LM воркер запущен</i>"
+            )
+        
+        keyboard = [
+            [InlineKeyboardButton("◀️ К категориям", callback_data="admin:lm:menu")]
+        ]
+        
+        await safe_edit_message(
+            query,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='HTML'
+        )
+    
+    async def show_summary_metrics(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показывает сводку по всем метрикам."""
+        query = update.callback_query
+        await query.answer()
+        
+        try:
+            # Получаем метрики по всем группам
+            operational = await self.lm_repo.get_aggregated_metrics('operational', 7)
+            conversion = await self.lm_repo.get_aggregated_metrics('conversion', 7)
+            risks = await self.lm_repo.get_risk_summary(7)
+            
+            resp_speed = operational.get('response_speed_score', {}).get('avg', 0)
+            conv_score = conversion.get('conversion_score', {}).get('avg', 0)
+            churn_high = risks.get('churn_risk_high', 0)
+            complaint_count = risks.get('complaint_risk_count', 0)
+            
+            text = (
+                "📊 <b>Сводка LM метрик (7 дней)</b>\n\n"
+                "┌─────────────────────────┐\n"
+                f"│ ⚡ Скорость реакции: {resp_speed:.0f}/100\n"
+                f"│ 💰 Конверсия: {conv_score:.0f}/100\n"
+                f"│ ⚠️ Высокий риск оттока: {churn_high}\n"
+                f"│ 🔴 Риск жалоб: {complaint_count}\n"
+                "└─────────────────────────┘\n\n"
+                "<b>Общая оценка:</b>\n"
+                f"└ {'🟢 Хорошо' if resp_speed > 70 and conv_score > 60 else '🟡 Требует внимания' if resp_speed > 50 else '🔴 Критично'}\n\n"
+                "<i>Данные обновляются автоматически</i>"
+            )
+        except Exception as e:
+            logger.error(f"Error loading summary metrics: {e}", exc_info=True)
+            text = (
+                "📊 <b>Сводка LM метрик</b>\n\n"
+                "❌ Ошибка загрузки данных"
+            )
+        
+        keyboard = [
+            [InlineKeyboardButton("🔄 Обновить", callback_data="admin:lm:summary")],
+            [InlineKeyboardButton("◀️ К категориям", callback_data="admin:lm:menu")]
+        ]
+        
+        await safe_edit_message(
+            query,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='HTML'
+        )
+    
+    async def show_followup_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показывает список звонков, требующих фоллоу-ап."""
+        query = update.callback_query
+        await query.answer()
+        
+        try:
+            # Получаем звонки с флагом followup_needed
+            followups = await self.lm_repo.get_followup_calls(limit=10)
+            
+            if not followups:
+                text = (
+                    "🔍 <b>Список фоллоу-апов</b>\n\n"
+                    "✅ Нет звонков, требующих фоллоу-ап\n\n"
+                    "<i>Все клиенты обслужены</i>"
+                )
+            else:
+                lines = ["🔍 <b>Звонки, требующие фоллоу-ап</b>\n"]
+                for i, call in enumerate(followups, 1):
+                    history_id = call.get('history_id', '?')
+                    risk_level = call.get('churn_risk_level', 'unknown')
+                    emoji = '🔴' if risk_level == 'high' else '🟡' if risk_level == 'medium' else '🟢'
+                    lines.append(f"{i}. {emoji} Звонок #{history_id}")
+                
+                lines.append("\n<i>Рекомендуется связаться с клиентами</i>")
+                text = "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Error loading followup list: {e}", exc_info=True)
+            text = (
+                "🔍 <b>Список фоллоу-апов</b>\n\n"
+                "❌ Ошибка загрузки данных"
+            )
+        
+        keyboard = [
+            [InlineKeyboardButton("🔄 Обновить", callback_data="admin:lm:followup_list")],
+            [InlineKeyboardButton("◀️ К рискам", callback_data="admin:lm:risk")]
+        ]
+        
+        await safe_edit_message(
+            query,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='HTML'
+        )
 
 
 def register_admin_lm_handlers(
