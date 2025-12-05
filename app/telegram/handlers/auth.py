@@ -372,7 +372,6 @@ def setup_auth_handlers(application, db_manager: DatabaseManager, permissions_ma
     )
 
     application.add_handler(registration_conv_handler)
-    application.add_handler(CommandHandler('start', partial(start_command, permissions=permissions_manager)))
     application.add_handler(CommandHandler('help', partial(help_command, permissions=permissions_manager)))
     logger.info("Хендлеры авторизации зарегистрированы.")
 

@@ -134,11 +134,13 @@ class DatabaseManager:
                 self.pool.release(conn)
 
     async def execute_query(
-        self, 
-        query: str, 
-        params: Optional[Union[Tuple, List, Dict]] = None, 
-        fetchone: bool = False, 
+        self,
+        query: str,
+        params: Optional[Union[Tuple, List, Dict]] = None,
+        fetchone: bool = False,
         fetchall: bool = False,
+        *,
+        commit: bool = False,
         query_name: Optional[str] = None,
         log_error: bool = True,
     ) -> Any:
@@ -172,12 +174,18 @@ class DatabaseManager:
                 
                     if fetchone:
                         result = await cursor.fetchone()
+                        if commit and connection:
+                            await connection.commit()
                         return result if isinstance(result, dict) else {}
-                
+
                     if fetchall:
                         result = await cursor.fetchall()
+                        if commit and connection:
+                            await connection.commit()
                         return result if isinstance(result, list) else []
 
+                    if commit and connection:
+                        await connection.commit()
                     return True
                 except Exception as e:
                     if log_error:
@@ -190,6 +198,8 @@ class DatabaseManager:
         params: Optional[Union[Tuple, List, Dict]] = None,
         fetchone: bool = False,
         fetchall: bool = False,
+        *,
+        commit: bool = False,
         retries: int = 3,
         base_delay: float = 0.5,
         query_name: Optional[str] = None,
@@ -205,6 +215,7 @@ class DatabaseManager:
                     params=params,
                     fetchone=fetchone,
                     fetchall=fetchall,
+                    commit=commit,
                     query_name=query_name,
                     log_error=False,
                 )

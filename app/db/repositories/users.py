@@ -64,6 +64,66 @@ class UserRepository:
             logger.error(f"[USER_REPO] Error registering user {user_id}: {e}", exc_info=True)
             raise
 
+    async def register_user_if_not_exists(
+        self,
+        *,
+        user_id: int,
+        username: Optional[str],
+        full_name: str,
+        operator_id: Optional[int] = None,
+        password: Optional[str] = None,
+        role_id: int = 1,
+    ) -> None:
+        """
+        Идемпотентная регистрация пользователя из Telegram.
+
+        Используется новым AuthManager — создаёт запись со статусом pending,
+        либо обновляет базовые данные, если пользователь уже существует.
+        """
+        logger.info(
+            "[USER_REPO] Upserting Telegram user %s (role_id=%s, operator_id=%s)",
+            user_id,
+            role_id,
+            operator_id,
+        )
+        existing = await self.db_manager.execute_with_retry(
+            "SELECT id FROM UsersTelegaBot WHERE user_id = %s",
+            params=(user_id,),
+            fetchone=True,
+        )
+        if existing:
+            await self.db_manager.execute_with_retry(
+                """
+                UPDATE UsersTelegaBot
+                SET username = %s,
+                    full_name = %s,
+                    operator_id = %s,
+                    updated_at = NOW()
+                WHERE user_id = %s
+                """,
+                params=(username, full_name, operator_id, user_id),
+                commit=True,
+            )
+            logger.info("[USER_REPO] Telegram user %s already existed, data refreshed.", user_id)
+            return
+
+        await self.db_manager.execute_with_retry(
+            """
+            INSERT INTO UsersTelegaBot (
+                user_id,
+                username,
+                full_name,
+                operator_id,
+                password,
+                role_id,
+                status
+            ) VALUES (%s, %s, %s, %s, %s, %s, 'pending')
+            """,
+            params=(user_id, username, full_name, operator_id, password, role_id),
+            commit=True,
+        )
+        logger.info("[USER_REPO] Telegram user %s inserted with status pending.", user_id)
+
     async def user_exists(self, user_id: int) -> bool:
         """Проверка существования Telegram пользователя по user_id."""
         query = "SELECT 1 FROM UsersTelegaBot WHERE user_id = %s"

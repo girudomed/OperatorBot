@@ -35,6 +35,7 @@ from app.services.reports import ReportService
 
 # Хендлеры
 from app.telegram.handlers.auth import setup_auth_handlers
+from app.telegram.handlers.start import StartHandler
 from app.telegram.handlers.call_lookup import register_call_lookup_handlers
 from app.telegram.handlers.weekly_quality import register_weekly_quality_handlers
 from app.telegram.handlers.reports import register_report_handlers
@@ -168,6 +169,10 @@ async def main():
         
         # Auth
         setup_auth_handlers(application, db_manager, permissions_manager)
+
+        # /start с новым UX
+        start_handler = StartHandler(db_manager)
+        application.add_handler(start_handler.get_handler())
         
         # Admin Panel
         from app.telegram.handlers.admin_panel import register_admin_panel_handlers
