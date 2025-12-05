@@ -40,7 +40,7 @@ class NotificationsManager:
                     await connection.commit()
                     return True
         except Exception as e:
-            logger.error(f"[КРОТ]: Ошибка выполнения запроса: {e}")
+            logger.error(f"[КРОТ]: Ошибка выполнения запроса: {e}", exc_info=True)
             return None if fetchone or fetchall else False
 
     async def send_notification(self, user_id, message, chat_id, retries=3):
@@ -66,12 +66,12 @@ class NotificationsManager:
                     logger.info(f"[КРОТ]: Уведомление успешно отправлено пользователю с ID {user_id} через Telegram.")
                     break
                 except Exception as e:
-                    logger.error(f"[КРОТ]: Ошибка отправки уведомления через Telegram (Попытка {attempt+1}/{retries}): {e}")
+                    logger.error(f"[КРОТ]: Ошибка отправки уведомления через Telegram (Попытка {attempt+1}/{retries}): {e}", exc_info=True)
                     if attempt + 1 == retries:
                         logger.error(f"[КРОТ]: Не удалось отправить уведомление пользователю с ID {user_id} после {retries} попыток.")
                     await asyncio.sleep(2 ** attempt)  # Экспоненциальное увеличение задержки перед следующей попыткой
         except Exception as e:
-            logger.error(f"[КРОТ]: Общая ошибка при отправке уведомления: {e}")
+            logger.error(f"[КРОТ]: Общая ошибка при отправке уведомления: {e}", exc_info=True)
 
     async def get_notifications(self, user_id):
         """
@@ -132,7 +132,7 @@ class NotificationsManager:
                 await asyncio.gather(*tasks)
             logger.info(f"[КРОТ]: Все отчеты за день успешно отправлены.")
         except Exception as e:
-            logger.error(f"[КРОТ]: Ошибка при отправке отчетов: {e}")
+            logger.error(f"[КРОТ]: Ошибка при отправке отчетов: {e}", exc_info=True)
 
 
 # Backward compatibility

@@ -15,8 +15,17 @@ from telegram.ext import (
     MessageHandler,
     CallbackQueryHandler,
     filters,
-    DispatcherHandlerStop,
 )
+
+try:  # PyTelegramBot v20+
+    from telegram.ext import ApplicationHandlerStop as HandlerStop
+except ImportError:  # Legacy Dispatcher API
+    try:
+        from telegram.ext import DispatcherHandlerStop as HandlerStop  # type: ignore
+    except ImportError:
+        class HandlerStop(Exception):
+            """Fallback для совместимости, не блокирует обработчики PTB."""
+            pass
 
 from app.db.manager import DatabaseManager
 from app.db.repositories.users import UserRepository
@@ -398,13 +407,13 @@ async def registration_guard_command(update: Update, context: CallbackContext, p
     status = await permissions.get_user_status(user.id)
     if status is None:
         await message.reply_text("Вы ещё не зарегистрированы. Используйте /start и /register, чтобы подать заявку.")
-        raise DispatcherHandlerStop()
+        raise HandlerStop()
     if status == 'pending':
         await message.reply_text("Ваша заявка ожидает подтверждения администратором. Пожалуйста, дождитесь одобрения.")
-        raise DispatcherHandlerStop()
+        raise HandlerStop()
     if status == 'blocked':
         await message.reply_text("Ваш доступ временно ограничен. Обратитесь к администратору.")
-        raise DispatcherHandlerStop()
+        raise HandlerStop()
 
     return False
 
@@ -422,13 +431,13 @@ async def registration_guard_callback(update: Update, context: CallbackContext, 
     status = await permissions.get_user_status(user.id)
     if status is None:
         await query.answer("Сначала зарегистрируйтесь через /start → /register.", show_alert=True)
-        raise DispatcherHandlerStop()
+        raise HandlerStop()
     if status == 'pending':
         await query.answer("Ваша заявка ещё не одобрена.", show_alert=True)
-        raise DispatcherHandlerStop()
+        raise HandlerStop()
     if status == 'blocked':
         await query.answer("Доступ заблокирован. Свяжитесь с администратором.", show_alert=True)
-        raise DispatcherHandlerStop()
+        raise HandlerStop()
 
     return False
 

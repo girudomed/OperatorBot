@@ -39,14 +39,26 @@ class AdminUsersHandler:
         if len(parts) > 4:
             try:
                 page = max(0, int(parts[4]))
-            except ValueError:
+            except ValueError as exc:
+                logger.warning(
+                    "Некорректный номер страницы в callback '%s': %s",
+                    data,
+                    exc,
+                    exc_info=True,
+                )
                 page = 0
         return status, page
 
     def _extract_user_id(self, data: str) -> int:
         try:
             return int(data.split(':')[-1])
-        except (ValueError, IndexError):
+        except (ValueError, IndexError) as exc:
+            logger.warning(
+                "Не удалось извлечь user_id из callback '%s': %s",
+                data,
+                exc,
+                exc_info=True,
+            )
             return 0
 
     def _build_list_callback(self, status: str, page: int = 0) -> str:

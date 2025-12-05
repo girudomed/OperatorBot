@@ -5,7 +5,7 @@ ETL Service для синхронизации call_scores → call_analytics.
 для ускорения аналитических запросов.
 """
 
-import traceback
+
 from typing import Optional
 from datetime import date, datetime, timedelta
 
@@ -100,7 +100,7 @@ class CallAnalyticsSyncService:
             return stats
             
         except Exception as e:
-            logger.error(f"[ETL] Error in full sync: {e}\n{traceback.format_exc()}")
+            logger.error(f"[ETL] Error in full sync: {e}", exc_info=True)
             stats['errors'] += 1
             return stats
     
@@ -204,7 +204,7 @@ class CallAnalyticsSyncService:
             return stats
             
         except Exception as e:
-            logger.error(f"[ETL] Error in incremental sync: {e}\n{traceback.format_exc()}")
+            logger.error(f"[ETL] Error in incremental sync: {e}", exc_info=True)
             stats['errors'] += 1
             return stats
     
@@ -281,7 +281,7 @@ class CallAnalyticsSyncService:
             return batch_stats
             
         except Exception as e:
-            logger.error(f"[ETL] Error in batch sync: {e}\n{traceback.format_exc()}")
+            logger.error(f"[ETL] Error in batch sync: {e}", exc_info=True)
             batch_stats['errors'] += 1
             return batch_stats
     
@@ -342,5 +342,5 @@ class CallAnalyticsSyncService:
             return status
             
         except Exception as e:
-            logger.error(f"[ETL] Error getting sync status: {e}\n{traceback.format_exc()}")
+            logger.error(f"[ETL] Error getting sync status: {e}", exc_info=True)
             return {}

@@ -68,9 +68,13 @@ def setup_global_exception_handlers():
     try:
         loop = asyncio.get_event_loop()
         loop.set_exception_handler(handle_async_exception)
-    except RuntimeError:
+    except RuntimeError as exc:
         # Event loop еще не создан, установим позже
-        pass
+        logger.debug(
+            "Не удалось установить обработчик для текущего event loop: %s",
+            exc,
+            exc_info=True,
+        )
     
 logger.info("Глобальные обработчики исключений установлены")
 
@@ -91,7 +95,13 @@ async def _resolve_user_role(handler_instance: Any, update: Optional[Update]) ->
     user = update.effective_user
     try:
         return await permissions.get_effective_role(user.id, user.username)
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "Не удалось определить роль пользователя %s: %s",
+            user.id,
+            exc,
+            exc_info=True,
+        )
         return None
 
 
@@ -150,16 +160,28 @@ async def _notify_user_about_error(update: Optional[Update], category: str) -> N
         if update.callback_query:
             try:
                 await update.callback_query.answer(default_message, show_alert=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "Не удалось отправить alert в callback_query: %s",
+                    exc,
+                    exc_info=True,
+                )
             try:
                 await update.callback_query.message.reply_text(default_message)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "Не удалось отправить reply_text по callback_query: %s",
+                    exc,
+                    exc_info=True,
+                )
         elif update.message:
             await update.message.reply_text(default_message)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(
+            "Не удалось отправить уведомление об ошибке пользователю: %s",
+            exc,
+            exc_info=True,
+        )
 
 
 def log_exceptions(func: F) -> F:

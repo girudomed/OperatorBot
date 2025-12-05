@@ -6,7 +6,7 @@ Admin Action Logger Service.
 """
 
 import json
-import traceback
+
 from typing import Optional, Dict, Any
 from datetime import datetime
 
@@ -44,7 +44,7 @@ class AdminActionLogger:
             )
             return result.get('id') if result else None
         except Exception as e:
-            logger.error(f"[ADMIN_LOG] Error getting user PK: {e}")
+            logger.error(f"[ADMIN_LOG] Error getting user PK: {e}", exc_info=True)
             return None
     
     async def log_action(
@@ -136,7 +136,8 @@ class AdminActionLogger:
             
         except Exception as e:
             logger.error(
-                f"[ADMIN_LOG] Error logging action '{action}': {e}\n{traceback.format_exc()}"
+                f"[ADMIN_LOG] Error logging action '{action}': {e}",
+                exc_info=True
             )
             return False
     
@@ -293,7 +294,7 @@ class AdminActionLogger:
             return [dict(row) for row in results] if results else []
             
         except Exception as e:
-            logger.error(f"[ADMIN_LOG] Error getting actions: {e}")
+            logger.error(f"[ADMIN_LOG] Error getting actions: {e}", exc_info=True)
             return []
     
     async def get_actions_on_target(
@@ -336,7 +337,7 @@ class AdminActionLogger:
             return [dict(row) for row in results] if results else []
             
         except Exception as e:
-            logger.error(f"[ADMIN_LOG] Error getting target actions: {e}")
+            logger.error(f"[ADMIN_LOG] Error getting target actions: {e}", exc_info=True)
             return []
     
     async def get_recent_actions(
@@ -401,5 +402,5 @@ class AdminActionLogger:
             return [dict(row) for row in results] if results else []
             
         except Exception as e:
-            logger.error(f"[ADMIN_LOG] Error getting recent actions: {e}")
+            logger.error(f"[ADMIN_LOG] Error getting recent actions: {e}", exc_info=True)
             return []

@@ -10,6 +10,7 @@ from app.db.manager import DatabaseManager
 from app.db.repositories.users import UserRepository
 from app.services.permissions import PermissionChecker, require_role
 from app.logging_config import get_watchdog_logger
+from app.telegram.utils.logging import describe_user
 
 logger = get_watchdog_logger(__name__)
 
@@ -38,6 +39,10 @@ class TranscriptHandler:
         # Проверяем доступ
         has_access = await self.permission_checker.can_view_transcripts(user_id)
         if not has_access:
+            logger.warning(
+                "Пользователь %s запросил расшифровку без доступа",
+                describe_user(update.effective_user),
+            )
             await update.message.reply_text(
                 "🔒 У вас нет доступа к расшифровкам звонков."
             )
@@ -55,7 +60,14 @@ class TranscriptHandler:
         
         try:
             call_id = int(call_identifier)
-        except ValueError:
+        except ValueError as exc:
+            logger.warning(
+                "Некорректный ID расшифровки '%s' от %s: %s",
+                call_identifier,
+                describe_user(update.effective_user),
+                exc,
+                exc_info=True,
+            )
             await update.message.reply_text(
                 "❌ ID звонка должен быть числом."
             )

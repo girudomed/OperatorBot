@@ -69,7 +69,7 @@ class ReportService:
                     period_type='day' if period == 'daily' else 'week' if period == 'weekly' else 'month'
                 )
             except Exception as e:
-                logger.warning(f"Не удалось получить dashboard метрики: {e}")
+                logger.warning(f"Не удалось получить dashboard метрики: {e}", exc_info=True)
                 dashboard_metrics = None
 
             # 6. НОВОЕ: Генерируем рекомендации через новый сервис
@@ -125,7 +125,7 @@ class ReportService:
                     call_samples_analyzed=len(data.get('call_scores', []))
                 )
             except Exception as e:
-                logger.warning(f"Не удалось сохранить рекомендации в новую таблицу: {e}")
+                logger.warning(f"Не удалось сохранить рекомендации в новую таблицу: {e}", exc_info=True)
 
             return report_text
 
@@ -177,7 +177,7 @@ class ReportService:
             return recommendations
             
         except Exception as e:
-            logger.error(f"Ошибка генерации рекомендаций через новый сервис: {e}")
+            logger.error(f"Ошибка генерации рекомендаций через новый сервис: {e}", exc_info=True)
             # Fallback на старую логику
             return await self._generate_recommendations_fallback(name, metrics)
 
@@ -199,7 +199,7 @@ class ReportService:
             )
             return await self.openai.generate_recommendations(prompt)
         except Exception as e:
-            logger.error(f"Ошибка fallback рекомендаций: {e}")
+            logger.error(f"Ошибка fallback рекомендаций: {e}", exc_info=True)
             return "Рекомендации временно недоступны."
 
     def _format_report_new(

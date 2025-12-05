@@ -94,7 +94,8 @@ def acquire_lock():
     try:
         fcntl.lockf(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return fp
-    except IOError:
+    except IOError as exc:
+        logger.error("Не удалось получить блокировку запуска: %s", exc, exc_info=True)
         print("Бот уже запущен!")
         sys.exit(1)
 
@@ -124,9 +125,14 @@ async def main():
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, stop_event.set)
-        except (NotImplementedError, RuntimeError):
+        except (NotImplementedError, RuntimeError) as signal_exc:
             # Например, on Windows или если цикл уже завершается
-            pass
+            logger.debug(
+                "Не удалось зарегистрировать обработчик сигнала %s: %s",
+                sig,
+                signal_exc,
+                exc_info=True,
+            )
 
     try:
         # 2. Инициализация сервисов
@@ -288,7 +294,7 @@ async def set_bot_commands(application):
         await application.bot.set_my_commands(commands)
         logger.info("✅ Команды бота установлены: /start, /help, /admin")
     except Exception as e:
-        logger.error(f"❌ Ошибка при установке команд бота: {e}")
+        logger.error("❌ Ошибка при установке команд бота: %s", e, exc_info=True)
 
 
 if __name__ == "__main__":
@@ -296,4 +302,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        pass
+        logger.info("Остановка бота по сигналу KeyboardInterrupt")

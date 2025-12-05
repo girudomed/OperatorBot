@@ -108,6 +108,12 @@ class _CallLookupHandlers:
         try:
             phone, period = self._parse_command_args(args)
         except ValueError as parse_error:
+            logger.warning(
+                "Некорректные аргументы /call_lookup от %s: %s",
+                describe_user(user),
+                parse_error,
+                exc_info=True,
+            )
             await message.reply_text(str(parse_error))
             return
 
@@ -129,6 +135,7 @@ class _CallLookupHandlers:
                 "Ошибка валидации /call_lookup (%s): %s",
                 describe_user(user),
                 exc,
+                exc_info=True,
             )
             await message.reply_text(f"Ошибка: {exc}")
             return

@@ -279,6 +279,7 @@ class CallLookupService:
                     "Не удалось загрузить LM-метрики для history_id=%s: %s",
                     history_id,
                     exc,
+                    exc_info=True
                 )
 
         return result

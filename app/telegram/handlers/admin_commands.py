@@ -63,7 +63,13 @@ class AdminCommandsHandler:
 
         try:
             target_user_id = int(context.args[0])
-        except ValueError:
+        except ValueError as exc:
+            logger.warning(
+                "Некорректный user_id в /approve от %s: %s",
+                describe_user(user),
+                exc,
+                exc_info=True,
+            )
             await message.reply_text("❌ user_id должен быть числом")
             return
 
@@ -102,7 +108,13 @@ class AdminCommandsHandler:
 
         try:
             target_user_id = int(context.args[0])
-        except ValueError:
+        except ValueError as exc:
+            logger.warning(
+                "Некорректный user_id в /make_admin от %s: %s",
+                describe_user(user),
+                exc,
+                exc_info=True,
+            )
             await message.reply_text("❌ user_id должен быть числом")
             return
 
@@ -141,7 +153,13 @@ class AdminCommandsHandler:
 
         try:
             target_user_id = int(context.args[0])
-        except ValueError:
+        except ValueError as exc:
+            logger.warning(
+                "Некорректный user_id в /make_superadmin от %s: %s",
+                describe_user(user),
+                exc,
+                exc_info=True,
+            )
             await message.reply_text("❌ user_id должен быть числом")
             return
 
@@ -226,6 +244,7 @@ class AdminCommandsHandler:
                     "Не удалось отправить dev-уведомление chat_id=%s: %s",
                     chat_id,
                     exc,
+                    exc_info=True,
                 )
 
         await message.reply_text(
@@ -353,7 +372,13 @@ class AdminCommandsHandler:
         username = user.get("username")
         try:
             telegram_id = int(telegram_id) if telegram_id is not None else None
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
+            logger.debug(
+                "Не удалось привести telegram_id пользователя %s к int: %s",
+                user,
+                exc,
+                exc_info=True,
+            )
             telegram_id = None
         if telegram_id is None:
             return False
@@ -624,13 +649,24 @@ class AdminCommandsHandler:
         if query.message:
             try:
                 await query.message.delete()
-            except TelegramError:
+            except TelegramError as exc:
+                logger.warning(
+                    "Не удалось удалить сообщение меню: %s",
+                    exc,
+                    exc_info=True,
+                )
                 await safe_edit_message(query, text="Меню закрыто.")
 
     def _extract_user_id(self, data: str) -> int:
         try:
             return int(data.split(":")[-1])
-        except (ValueError, IndexError):
+        except (ValueError, IndexError) as exc:
+            logger.warning(
+                "Не удалось извлечь user_id из callback '%s': %s",
+                data,
+                exc,
+                exc_info=True,
+            )
             return 0
 
 
