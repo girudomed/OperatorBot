@@ -62,20 +62,13 @@ class LMService:
         """
         talk_duration = float(call_history.get('talk_duration', 0))
         
-        if talk_duration == 0:
+        if talk_duration <= 0:
             return 0.0
         
-        # Оптимальная длительность
-        if 60 <= talk_duration <= 180:
-            return 100.0
-        elif 30 <= talk_duration < 60:
-            return 70.0
-        elif 180 < talk_duration <= 300:
-            return 80.0
-        elif talk_duration < 30:
-            return 40.0
-        else:  # > 300
-            return 60.0
+        if talk_duration >= 60:
+            return talk_duration / 3
+        
+        return talk_duration * 2
 
     def _calculate_queue_impact(
         self,
@@ -87,13 +80,11 @@ class LMService:
         Чем дольше звонок, тем больше влияние.
         """
         talk_duration = float(call_history.get('talk_duration', 0))
+        if talk_duration <= 0:
+            return 0.0
         
-        if talk_duration == 0:
-            return 100.0  # No impact (missed)
-        
-        # Нормализация: 0-600 сек → 0-100
-        impact = min(100.0, (talk_duration / 600) * 100)
-        return round(100.0 - impact, 1)  # Инвертируем: меньше время = лучше
+        impact = (talk_duration / 300) * 100
+        return round(impact, 1)
 
     # ============================================================================
     # PRIVATE CALCULATION METHODS - CONVERSION
@@ -115,13 +106,14 @@ class LMService:
             return 0.0
         
         outcome = call_score.get('outcome', '')
+        category = call_score.get('call_category')
         
         if outcome == 'record':
             return 100.0
         elif outcome == 'lead_no_record':
             return 50.0
-        elif outcome == 'info_only':
-            return 10.0
+        elif outcome == 'info_only' or category == 'Информационный':
+            return 20.0
         else:
             return 0.0
 
@@ -140,24 +132,13 @@ class LMService:
         if not call_score:
             return 0.0
         
-        talk_duration = float(call_history.get('talk_duration', 0))
-        category = (call_score.get('call_category') or '').lower()
+        outcome = call_score.get('outcome')
+        call_success = call_score.get('call_success')
         
-        # Базовый потенциал от длительности
-        if talk_duration > 120:
-            base_potential = 70.0
-        elif talk_duration > 60:
-            base_potential = 50.0
-        else:
-            base_potential = 30.0
+        if outcome == 'record' or call_success == 'record':
+            return 70.0
         
-        # Бонус за категорию
-        if 'запись' in category and 'успеш' in category:
-            return min(100.0, base_potential + 30.0)
-        elif 'лид' in category:
-            return min(100.0, base_potential + 20.0)
-        
-        return base_potential
+        return 0.0
 
     def _calculate_lost_opportunity(
         self,
@@ -173,6 +154,10 @@ class LMService:
         
         outcome = call_score.get('outcome', '')
         category = (call_score.get('call_category') or '').lower()
+        is_target = call_score.get('is_target', 0)
+        
+        if is_target == 1 and outcome != 'record':
+            return 80.0
         
         if outcome == 'lead_no_record':
             return 80.0  # Упущенный лид
@@ -248,7 +233,7 @@ class LMService:
         # Низкая оценка = высокий риск
         if score < 5:
             return 80.0
-        elif score >= 9:
+        elif score > 7:
             return 10.0
         
         return base_risk
@@ -272,9 +257,13 @@ class LMService:
         if not call_score:
             return ('medium', 50.0)
         
-        category = (call_score.get('call_category') or '').lower()
+        raw_category = call_score.get('call_category') or ''
+        category = raw_category.lower()
         outcome = call_score.get('outcome', '')
         refusal = call_score.get('refusal_reason')
+        
+        if raw_category == 'Отмена записи':
+            return ('high', 70.0)
         
         # Высокий риск
         if 'жалоба' in category:
@@ -328,22 +317,23 @@ class LMService:
     def _calculate_complaint_risk(
         self,
         call_score: Optional[CallRecord]
-    ) -> bool:
+    ) -> Tuple[float, bool]:
         """
-        Определяет флаг риска жалобы.
+        Определяет флаг риска жалобы и скор.
         """
         if not call_score:
-            return False
+            return (10.0, False)
         
-        category = (call_score.get('call_category') or '').lower()
-        score = float(call_score.get('call_score', 5) or 5)
+        category = call_score.get('call_category')
+        normalized_category = (category or '').lower()
+        score = float(call_score.get('call_score', 0) or 0)
         
-        if 'жалоба' in category:
-            return True
-        if score < 3:
-            return True
+        if category == 'Жалоба' or 'жалоба' in normalized_category:
+            return (100.0, True)
+        if score <= 3:
+            return (70.0, True)
         
-        return False
+        return (10.0, False)
 
     # ============================================================================
     # PRIVATE CALCULATION METHODS - FORECAST
@@ -398,6 +388,8 @@ class LMService:
         
         if 'жалоба' in category:
             return 0.7
+        if 'навигация' in category:
+            return 0.60
         
         return 0.3
 
@@ -415,7 +407,7 @@ class LMService:
         score = float(call_score.get('call_score', 5) or 5)
         
         if 'жалоба' in category:
-            return 0.9
+            return 1.0
         
         if score < 3:
             return 0.4
@@ -573,7 +565,7 @@ class LMService:
         """
         churn_level, churn_score = self._calculate_churn_risk(call_score)
         followup_needed = self._calculate_followup_needed(call_score)
-        complaint_risk = self._calculate_complaint_risk(call_score)
+        complaint_score, complaint_flag = self._calculate_complaint_risk(call_score)
         
         return [
             {
@@ -586,8 +578,8 @@ class LMService:
             {
                 'metric_code': 'complaint_risk_flag',
                 'metric_group': 'risk',
-                'value_label': 'true' if complaint_risk else 'false',
-                'value_numeric': 1.0 if complaint_risk else 0.0,
+                'value_label': 'true' if complaint_flag else 'false',
+                'value_numeric': complaint_score,
                 'calc_method': 'rule'
             },
             {
