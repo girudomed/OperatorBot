@@ -45,6 +45,7 @@ from app.workers.task_worker import start_workers, stop_workers
 
 # Инициализация логирования
 setup_watchdog()
+setup_global_exception_handlers()
 logger = get_watchdog_logger(__name__)
 
 # Блокировка повторного запуска
@@ -261,6 +262,9 @@ async def main():
         scheduler.start()
         logger.info("Планировщик запущен.")
 
+        await application.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Webhook удален (если был), переключаемся на Polling.")
+        
         await application.updater.start_polling()
         logger.info("Бот запущен и готов к работе (Polling).")
         await stop_event.wait()
