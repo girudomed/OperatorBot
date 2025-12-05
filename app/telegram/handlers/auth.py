@@ -31,6 +31,7 @@ from app.db.manager import DatabaseManager
 from app.db.repositories.users import UserRepository
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.logging_config import get_watchdog_logger
+from app.telegram.utils.logging import describe_user
 
 logger = get_watchdog_logger(__name__)
 
@@ -242,6 +243,7 @@ async def start_command(update: Update, context: CallbackContext, permissions: P
     user = update.effective_user
     if not message or not user:
         return
+    logger.info("start_command вызван %s", describe_user(user))
     
     role = 'operator'
     status = None
@@ -304,6 +306,7 @@ async def help_command(update: Update, context: CallbackContext, permissions: Pe
     user = update.effective_user
     if not message or not user:
         return
+    logger.info("help_command вызван %s", describe_user(user))
     
     role = 'operator'
     status = None
@@ -406,15 +409,36 @@ async def registration_guard_command(update: Update, context: CallbackContext, p
 
     status = await permissions.get_user_status(user.id)
     if status is None:
+        logger.info(
+            "registration_guard_command: блокируем %s (%s) — не зарегистрирован",
+            command_base,
+            describe_user(user),
+        )
         await message.reply_text("Вы ещё не зарегистрированы. Используйте /start и /register, чтобы подать заявку.")
         raise HandlerStop()
     if status == 'pending':
+        logger.info(
+            "registration_guard_command: блокируем %s (%s) — pending",
+            command_base,
+            describe_user(user),
+        )
         await message.reply_text("Ваша заявка ожидает подтверждения администратором. Пожалуйста, дождитесь одобрения.")
         raise HandlerStop()
     if status == 'blocked':
+        logger.info(
+            "registration_guard_command: блокируем %s (%s) — blocked",
+            command_base,
+            describe_user(user),
+        )
         await message.reply_text("Ваш доступ временно ограничен. Обратитесь к администратору.")
         raise HandlerStop()
 
+    logger.debug(
+        "registration_guard_command: пропускаем %s (%s, status=%s)",
+        command_base,
+        describe_user(user),
+        status,
+    )
     return False
 
 
@@ -430,15 +454,36 @@ async def registration_guard_callback(update: Update, context: CallbackContext, 
 
     status = await permissions.get_user_status(user.id)
     if status is None:
+        logger.info(
+            "registration_guard_callback: блокируем callback %s (%s) — не зарегистрирован",
+            query.data,
+            describe_user(user),
+        )
         await query.answer("Сначала зарегистрируйтесь через /start → /register.", show_alert=True)
         raise HandlerStop()
     if status == 'pending':
+        logger.info(
+            "registration_guard_callback: блокируем callback %s (%s) — pending",
+            query.data,
+            describe_user(user),
+        )
         await query.answer("Ваша заявка ещё не одобрена.", show_alert=True)
         raise HandlerStop()
     if status == 'blocked':
+        logger.info(
+            "registration_guard_callback: блокируем callback %s (%s) — blocked",
+            query.data,
+            describe_user(user),
+        )
         await query.answer("Доступ заблокирован. Свяжитесь с администратором.", show_alert=True)
         raise HandlerStop()
 
+    logger.debug(
+        "registration_guard_callback: пропускаем callback %s (%s, status=%s)",
+        query.data,
+        describe_user(user),
+        status,
+    )
     return False
 
 
