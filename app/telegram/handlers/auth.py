@@ -343,19 +343,19 @@ def setup_auth_handlers(application, db_manager: DatabaseManager, permissions_ma
     """Функция для добавления всех обработчиков аутентификации в приложение."""
     auth_manager = AuthManager(db_manager)
 
-    application.add_handler(
-        MessageHandler(
-            filters.COMMAND,
-            partial(registration_guard_command, permissions=permissions_manager),
-        ),
-        group=0,
+    command_guard = MessageHandler(
+        filters.COMMAND,
+        partial(registration_guard_command, permissions=permissions_manager),
     )
-    application.add_handler(
-        CallbackQueryHandler(
-            partial(registration_guard_callback, permissions=permissions_manager)
-        ),
-        group=0,
+    callback_guard = CallbackQueryHandler(
+        partial(registration_guard_callback, permissions=permissions_manager)
     )
+    # В новых версиях PTB обработчики блокируют цепочку по умолчанию.
+    # Нам нужно, чтобы команды продолжили обрабатываться после guard.
+    command_guard.block = False
+    callback_guard.block = False
+    application.add_handler(command_guard, group=0)
+    application.add_handler(callback_guard, group=0)
 
     # Используем partial, чтобы передать auth_manager в обработчики
     registration_conv_handler = ConversationHandler(
