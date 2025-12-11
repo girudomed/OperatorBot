@@ -95,12 +95,15 @@ class PermissionsManager:
 
         try:
             query = """
-                SELECT role_id, status 
-                FROM UsersTelegaBot 
-                WHERE user_id = %s
+                SELECT role_id, status
+                FROM UsersTelegaBot
+                WHERE user_id = %s OR telegram_id = %s
+                ORDER BY 
+                    CASE WHEN user_id = %s THEN 0 ELSE 1 END
+                LIMIT 1
             """
             row = await self.db_manager.execute_with_retry(
-                query, params=(user_id,), fetchone=True
+                query, params=(user_id, user_id, user_id), fetchone=True
             )
             
             if not row:
@@ -134,9 +137,16 @@ class PermissionsManager:
             return status
 
         try:
-            query = "SELECT status FROM UsersTelegaBot WHERE user_id = %s"
+            query = """
+                SELECT status 
+                FROM UsersTelegaBot 
+                WHERE user_id = %s OR telegram_id = %s
+                ORDER BY 
+                    CASE WHEN user_id = %s THEN 0 ELSE 1 END
+                LIMIT 1
+            """
             row = await self.db_manager.execute_with_retry(
-                query, params=(user_id,), fetchone=True
+                query, params=(user_id, user_id, user_id), fetchone=True
             )
             status = row.get('status') if row else None
             self._set_cache_entry(user_id, None, status)

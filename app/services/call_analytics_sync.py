@@ -123,6 +123,11 @@ class CallAnalyticsSyncService:
         """
         if not since_date:
             since_date = date.today() - timedelta(days=1)
+
+        if isinstance(since_date, datetime):
+            since_point = since_date
+        else:
+            since_point = datetime.combine(since_date, datetime.min.time())
         
         logger.info(f"[ETL] Starting INCREMENTAL sync since {since_date}")
         
@@ -175,7 +180,8 @@ class CallAnalyticsSyncService:
                     cs.ml_p_complaint,
                     NOW()
                 FROM call_scores cs
-                WHERE cs.call_date >= %s
+                INNER JOIN call_history ch ON ch.history_id = cs.history_id
+                WHERE ch.created_at >= %s
                   AND NOT EXISTS (
                       SELECT 1 FROM call_analytics ca 
                       WHERE ca.call_scores_id = cs.id
@@ -185,7 +191,7 @@ class CallAnalyticsSyncService:
             
             result = await self.db.execute_with_retry(
                 query,
-                params=(since_date, batch_size),
+                params=(since_point, batch_size),
                 commit=True
             )
             
