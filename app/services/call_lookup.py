@@ -153,33 +153,67 @@ class CallLookupService:
         start_dt, end_dt = self._resolve_period(period, None, None)
         normalized_like = f"%{normalized_phone}%"
 
-        called_expr = _normalize_phone_sql("COALESCE(ch.called_info, '')")
-        caller_expr = _normalize_phone_sql("COALESCE(ch.caller_info, '')")
-        call_time_expr = "COALESCE(ch.context_start_time_dt, FROM_UNIXTIME(ch.context_start_time))"
-
-        record_url_exists = await has_column(
+        history_join_supported = await has_column(
             self.db_manager,
             "call_history",
-            "record_url",
+            "history_id",
             self.db_name,
         )
-        record_url_select = (
-            "ch.record_url" if record_url_exists else "NULL"
+
+        call_time_expr = "cs.call_date"
+        caller_info_select = "cs.caller_info"
+        caller_number_select = "cs.caller_number"
+        called_info_select = "cs.called_info"
+        talk_duration_select = "cs.talk_duration"
+        record_url_select = "NULL"
+        recording_id_select = "NULL"
+        join_clause = ""
+        caller_expr = _normalize_phone_sql(
+            "COALESCE(cs.caller_number, cs.caller_info, '')"
         )
+        called_expr = _normalize_phone_sql(
+            "COALESCE(cs.called_number, cs.called_info, '')"
+        )
+
+        if history_join_supported:
+            join_clause = "LEFT JOIN call_history ch ON ch.history_id = cs.history_id"
+            call_time_expr = (
+                "COALESCE(ch.context_start_time_dt, FROM_UNIXTIME(ch.context_start_time), cs.call_date)"
+            )
+            caller_info_select = "COALESCE(ch.caller_info, cs.caller_info)"
+            caller_number_select = "COALESCE(ch.caller_number, cs.caller_number)"
+            called_info_select = "COALESCE(ch.called_info, cs.called_info)"
+            talk_duration_select = "COALESCE(ch.talk_duration, cs.talk_duration)"
+            recording_id_select = "ch.recording_id"
+            caller_expr = _normalize_phone_sql(
+                "COALESCE(ch.caller_number, ch.caller_info, cs.caller_number, cs.caller_info, '')"
+            )
+            called_expr = _normalize_phone_sql(
+                "COALESCE(ch.called_number, ch.called_info, cs.called_number, cs.called_info, '')"
+            )
+            record_url_exists = await has_column(
+                self.db_manager,
+                "call_history",
+                "record_url",
+                self.db_name,
+            )
+            if record_url_exists:
+                record_url_select = "ch.record_url"
+
         query = f"""
             SELECT
-                ch.history_id AS history_id,
+                cs.history_id AS history_id,
                 {call_time_expr} AS call_time,
-                ch.caller_info,
-                ch.caller_number,
-                ch.called_info,
-                ch.talk_duration,
+                {caller_info_select} AS caller_info,
+                {caller_number_select} AS caller_number,
+                {called_info_select} AS called_info,
+                {talk_duration_select} AS talk_duration,
                 {record_url_select} AS record_url,
-                ch.recording_id,
+                {recording_id_select} AS recording_id,
                 cs.call_score AS score,
                 cs.transcript
-            FROM call_history ch
-            LEFT JOIN call_scores cs ON cs.history_id = ch.history_id
+            FROM call_scores cs
+            {join_clause}
             WHERE (
                 {called_expr} LIKE %s
                 OR {caller_expr} LIKE %s
@@ -252,31 +286,55 @@ class CallLookupService:
 
     async def fetch_call_details(self, history_id: int) -> Optional[Dict[str, Any]]:
         logger.info("Запрошены детали звонка history_id=%s", history_id)
-        call_time_expr = "COALESCE(ch.context_start_time_dt, FROM_UNIXTIME(ch.context_start_time))"
-        record_url_exists = await has_column(
+        history_join_supported = await has_column(
             self.db_manager,
             "call_history",
-            "record_url",
+            "history_id",
             self.db_name,
         )
-        record_url_select = (
-            "ch.record_url" if record_url_exists else "NULL"
-        )
+        call_time_expr = "cs.call_date"
+        caller_info_select = "cs.caller_info"
+        caller_number_select = "cs.caller_number"
+        called_info_select = "cs.called_info"
+        talk_duration_select = "cs.talk_duration"
+        record_url_select = "NULL"
+        recording_id_select = "NULL"
+        join_clause = ""
+
+        if history_join_supported:
+            call_time_expr = (
+                "COALESCE(ch.context_start_time_dt, FROM_UNIXTIME(ch.context_start_time), cs.call_date)"
+            )
+            caller_info_select = "COALESCE(ch.caller_info, cs.caller_info)"
+            caller_number_select = "COALESCE(ch.caller_number, cs.caller_number)"
+            called_info_select = "COALESCE(ch.called_info, cs.called_info)"
+            talk_duration_select = "COALESCE(ch.talk_duration, cs.talk_duration)"
+            recording_id_select = "ch.recording_id"
+            join_clause = "LEFT JOIN call_history ch ON ch.history_id = cs.history_id"
+            record_url_exists = await has_column(
+                self.db_manager,
+                "call_history",
+                "record_url",
+                self.db_name,
+            )
+            if record_url_exists:
+                record_url_select = "ch.record_url"
+
         query = f"""
             SELECT
-                ch.history_id AS history_id,
+                cs.history_id AS history_id,
                 {call_time_expr} AS call_time,
-                ch.caller_info,
-                ch.caller_number,
-                ch.called_info,
-                ch.talk_duration,
+                {caller_info_select} AS caller_info,
+                {caller_number_select} AS caller_number,
+                {called_info_select} AS called_info,
+                {talk_duration_select} AS talk_duration,
                 {record_url_select} AS record_url,
-                ch.recording_id,
+                {recording_id_select} AS recording_id,
                 cs.call_score AS score,
                 cs.transcript
-            FROM call_history ch
-            LEFT JOIN call_scores cs ON cs.history_id = ch.history_id
-            WHERE ch.history_id = %s
+            FROM call_scores cs
+            {join_clause}
+            WHERE cs.history_id = %s
             LIMIT 1
         """
         result = await self.db_manager.execute_with_retry(

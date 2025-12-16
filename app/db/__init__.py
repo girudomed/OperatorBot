@@ -5,7 +5,7 @@
 from .manager import DatabaseManager
 from .models import (
     UserRecord, OperatorRecord, CallRecord, CallHistoryRecord,
-    RoleRecord, ReportRecord, CallMetrics
+    ReportRecord, CallMetrics
 )
 
 __all__ = [
@@ -14,7 +14,6 @@ __all__ = [
     "OperatorRecord",
     "CallRecord",
     "CallHistoryRecord",
-    "RoleRecord",
     "ReportRecord",
     "CallMetrics",
 ]

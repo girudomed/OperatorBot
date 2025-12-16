@@ -4,6 +4,7 @@
 
 import asyncio
 import inspect
+import re
 import time
 import aiomysql
 from contextlib import asynccontextmanager
@@ -55,6 +56,17 @@ class DatabaseManager:
             return f"{module}.{frame.function}"
         except Exception:
             return "unknown_query"
+
+    @staticmethod
+    def _sanitize_sql(query: Optional[str]) -> Optional[str]:
+        """
+        Горячий фикс: в старых запросах могли остаться обращения к cs.score.
+        В MySQL такого столбца нет (есть call_score), поэтому мягко переписываем SQL.
+        """
+        if not isinstance(query, str) or "score" not in query:
+            return query
+        pattern = re.compile(r"(?i)\b(cs|call_scores)\.score\b")
+        return pattern.sub(lambda match: f"{match.group(1)}.call_score", query)
 
     def _log_db_error(
         self,
@@ -156,6 +168,8 @@ class DatabaseManager:
         Returns:
             Результат запроса (dict, list или True)
         """
+        query = self._sanitize_sql(query)
+
         if not self.pool:
             await self.create_pool()
             

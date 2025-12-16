@@ -16,7 +16,13 @@ from datetime import datetime
 
 from app.db.manager import DatabaseManager
 from app.db.models import UserRecord, AdminActionLog
-from app.core.roles import role_name_from_id, ROLE_NAME_TO_ID, ROLE_ID_TO_NAME, ADMIN_ROLE_IDS
+from app.core.roles import (
+    role_name_from_id,
+    ROLE_NAME_TO_ID,
+    ROLE_ID_TO_NAME,
+    ADMIN_ROLE_IDS,
+    role_display_name_from_name,
+)
 from app.logging_config import get_watchdog_logger
 from app.utils.error_handlers import log_async_exceptions
 
@@ -46,9 +52,9 @@ class AdminRepository:
             u.blocked_at,
             u.created_at,
             u.updated_at,
-            r.role_name AS role_name
+            rr.role_name AS role_slug
         FROM UsersTelegaBot u
-        LEFT JOIN RolesTelegaBot r ON r.id = u.role_id
+        LEFT JOIN roles_reference rr ON rr.role_id = u.role_id
     """
 
     def __init__(self, db_manager: DatabaseManager):
@@ -69,7 +75,7 @@ class AdminRepository:
             return []
         for row in rows:
             row['role'] = self._build_role_payload(row)
-            row.pop("role_name", None)
+            row.pop("role_slug", None)
         return rows
 
     def _attach_role_name(self, row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -77,13 +83,13 @@ class AdminRepository:
         if row is None:
             return None
         row['role'] = self._build_role_payload(row)
-        row.pop("role_name", None)
+        row.pop("role_slug", None)
         return row
 
     def _build_role_payload(self, row: Dict[str, Any]) -> Dict[str, Any]:
         role_id = row.get("role_id")
-        slug = role_name_from_id(role_id)
-        display_name = row.get("role_name") or slug
+        slug = row.get("role_slug") or role_name_from_id(role_id)
+        display_name = role_display_name_from_name(slug) if slug else "Role"
         return {
             "id": role_id,
             "slug": slug,
@@ -104,10 +110,9 @@ class AdminRepository:
                 query = """
                     SELECT
                         rr.role_id,
-                        COALESCE(rt.role_name, rr.role_name) AS role_name,
+                        rr.role_name,
                         rr.can_manage_users
                     FROM roles_reference rr
-                    LEFT JOIN RolesTelegaBot rt ON rt.id = rr.role_id
                     ORDER BY rr.role_id
                 """
                 rows = await self.db.execute_with_retry(query, fetchall=True) or []
@@ -117,8 +122,8 @@ class AdminRepository:
                 admin_ids: Set[int] = set()
                 for row in rows:
                     role_id = int(row.get("role_id"))
-                    display_name = row.get("role_name") or f"Role {role_id}"
-                    slug = self._normalize_role_slug(display_name)
+                    slug = self._normalize_role_slug(row.get("role_name"))
+                    display_name = role_display_name_from_name(slug) if slug else f"Role {role_id}"
                     slug_to_id[slug] = role_id
                     id_to_slug[role_id] = slug
                     display[slug] = display_name

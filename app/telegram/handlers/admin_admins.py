@@ -14,7 +14,7 @@ from app.telegram.middlewares.permissions import PermissionsManager
 from app.services.notifications import NotificationService
 from app.logging_config import get_watchdog_logger
 from app.utils.error_handlers import log_async_exceptions
-from app.core.roles import role_name_from_id
+from app.core.roles import role_name_from_id, resolve_role_slug_display
 from app.telegram.utils.logging import describe_user
 from app.telegram.utils.messages import safe_edit_message
 
@@ -367,12 +367,15 @@ class AdminAdminsHandler:
             await safe_edit_message(query, text="❌ Пользователь не найден")
             return
 
-        role_name = user.get("role") or role_name_from_id(user.get("role_id"))
+        role_slug, role_display = resolve_role_slug_display(
+            user.get("role"),
+            user.get("role_id"),
+        )
         message = (
             f"👤 <b>{user.get('full_name', 'Без имени')}</b>\n"
             f"Username: @{user.get('username', 'нет')}\n"
             f"Telegram ID: {user.get('telegram_id')}\n"
-            f"Роль: <b>{role_name}</b>\n"
+            f"Роль: <b>{role_display}</b>\n"
             f"Статус: <b>{user.get('status')}</b>\n"
         )
 
@@ -403,10 +406,13 @@ class AdminAdminsHandler:
         target: Dict[str, Optional[str]],
         page: int,
     ) -> List[List[InlineKeyboardButton]]:
-        role_name = target.get("role") or role_name_from_id(target.get("role_id"))
+        role_slug, _ = resolve_role_slug_display(
+            target.get("role"),
+            target.get("role_id"),
+        )
         keyboard: List[List[InlineKeyboardButton]] = []
 
-        if role_name == "admin":
+        if role_slug == "admin":
             if await self.permissions.can_promote(
                 actor.id, "superadmin", actor.username
             ):
@@ -429,7 +435,7 @@ class AdminAdminsHandler:
                         )
                     ]
                 )
-        elif role_name == "superadmin":
+        elif role_slug == "superadmin":
             if await self.permissions.can_demote(
                 actor.id, target.get("telegram_id"), actor.username
             ):
@@ -442,7 +448,7 @@ class AdminAdminsHandler:
                     ]
                 )
 
-        elif role_name == "operator":
+        elif role_slug == "operator":
             if await self.permissions.can_promote(
                 actor.id, "admin", actor.username
             ):
@@ -458,11 +464,14 @@ class AdminAdminsHandler:
         return keyboard
 
     def _format_admin_line(self, admin: Dict[str, Optional[str]]) -> str:
-        role_name = admin.get("role") or role_name_from_id(admin.get("role_id"))
-        role_emoji = "⭐" if role_name == "superadmin" else "👤"
+        role_slug, role_display = resolve_role_slug_display(
+            admin.get("role"),
+            admin.get("role_id"),
+        )
+        role_emoji = "⭐" if role_slug in {"superadmin", "founder", "developer"} else "👤"
         return (
             f"{role_emoji} <b>{admin.get('full_name', 'Без имени')}</b> "
-            f"(@{admin.get('username', 'нет')}) — {role_name}\n"
+            f"(@{admin.get('username', 'нет')}) — {role_display}\n"
         )
 
     async def _notify_promotion(

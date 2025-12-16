@@ -8,7 +8,7 @@ ETL Service для синхронизации call_scores → call_analytics.
 """
 
 
-from typing import Optional
+from typing import Optional, Set
 from datetime import date, datetime, timedelta
 
 from app.db.manager import DatabaseManager
@@ -28,6 +28,8 @@ class CallAnalyticsSyncService:
     
     def __init__(self, db_manager: DatabaseManager):
         self.db = db_manager
+        self._schema_checked: bool = False
+        self._schema_valid: bool = False
     
     async def sync_all(self, batch_size: int = 1000) -> dict:
         """
@@ -143,6 +145,14 @@ class CallAnalyticsSyncService:
             'errors': 0,
             'start_time': datetime.now()
         }
+
+        schema_ok = await self._ensure_history_schema()
+        if not schema_ok:
+            stats['errors'] += 1
+            logger.error(
+                "[ETL] call_history schema validation failed. Incremental sync skipped."
+            )
+            return stats
         
         try:
             # Синхронизировать только новые или обновленные
@@ -357,3 +367,54 @@ class CallAnalyticsSyncService:
         except Exception as e:
             logger.error(f"[ETL] Error getting sync status: {e}", exc_info=True)
             return {}
+
+    async def _ensure_history_schema(self) -> bool:
+        """
+        Проверяет, что call_history содержит необходимые столбцы.
+        Логирует реальную БД, к которой подключились, чтобы исключить
+        ошибки конфигурации.
+        """
+        if self._schema_checked:
+            return self._schema_valid
+
+        db_info = await self.db.execute_with_retry(
+            "SELECT DATABASE() as db",
+            fetchone=True,
+        )
+        current_db = (db_info or {}).get('db')
+        logger.info("[ETL] Schema check for call_history in DB=%s", current_db or "UNKNOWN")
+
+        required_columns = ('history_id', 'created_at', 'updated_at')
+        placeholders = ", ".join(["%s"] * len(required_columns))
+        columns_query = f"""
+            SELECT COLUMN_NAME
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'call_history'
+              AND COLUMN_NAME IN ({placeholders})
+        """
+        rows = await self.db.execute_with_retry(
+            columns_query,
+            params=required_columns,
+            fetchall=True,
+        )
+
+        raw_found: Set[str] = {row.get('COLUMN_NAME', '') for row in rows} if rows else set()
+        found_columns: Set[str] = {col.lower() for col in raw_found if col}
+        missing = {col for col in required_columns if col not in found_columns}
+
+        if missing:
+            logger.error(
+                "[ETL] call_history schema mismatch. Missing columns: %s",
+                ", ".join(sorted(missing)),
+            )
+            self._schema_valid = False
+        else:
+            logger.info(
+                "[ETL] call_history schema verified. Columns: %s",
+                ", ".join(sorted(raw_found)),
+            )
+            self._schema_valid = True
+
+        self._schema_checked = True
+        return self._schema_valid

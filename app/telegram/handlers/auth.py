@@ -83,11 +83,10 @@ class AuthManager:
         try:
             start_time = time.time()
 
-            role_id_result = await self.user_repo.get_role_id_by_name(role)
-            if role_id_result is None:
-                logger.error(f"Роль '{role}' не найдена.")
+            role_id = await self.user_repo.get_role_id_by_name(role)
+            if role_id is None:
+                logger.error("Роль '%s' не найдена в roles_reference", role)
                 return {"status": "error", "message": f"Роль '{role}' не найдена."}
-            role_id = role_id_result.get('id')
 
             logger.debug(
                 "Регистрация в БД: user_id=%s, username=%s, full_name=%s, role_id=%s, operator_id=%s",
@@ -102,7 +101,6 @@ class AuthManager:
                 username=username,
                 full_name=full_name,
                 operator_id=operator_id,
-                password=None,
                 role_id=role_id
             )
 

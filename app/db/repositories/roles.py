@@ -10,6 +10,7 @@ import traceback
 from typing import Optional, Dict, List, Any
 
 from app.config import DB_CONFIG
+from app.core.roles import role_display_name_from_name
 from app.db.manager import DatabaseManager
 from app.logging_config import get_watchdog_logger
 
@@ -60,13 +61,11 @@ class RolesRepository:
                 SELECT 
                     rr.role_id,
                     rr.role_name AS slug,
-                    COALESCE(rt.role_name, rr.role_name) AS display_name,
                     rr.can_view_own_stats,
                     rr.can_view_all_stats,
                     rr.can_manage_users,
                     rr.can_debug
                 FROM roles_reference rr
-                LEFT JOIN RolesTelegaBot rt ON rt.id = rr.role_id
                 WHERE rr.role_id = %s
             """
 
@@ -79,6 +78,8 @@ class RolesRepository:
             if result:
                 # Конвертировать tinyint в bool
                 role = dict(result)
+                slug = role.get("slug")
+                role["display_name"] = role_display_name_from_name(slug) if slug else "Неизвестная роль"
                 role['can_view_own_stats'] = bool(role.get('can_view_own_stats'))
                 role['can_view_all_stats'] = bool(role.get('can_view_all_stats'))
                 role['can_manage_users'] = bool(role.get('can_manage_users'))
@@ -115,13 +116,11 @@ class RolesRepository:
                 SELECT 
                     rr.role_id,
                     rr.role_name AS slug,
-                    COALESCE(rt.role_name, rr.role_name) AS display_name,
                     rr.can_view_own_stats,
                     rr.can_view_all_stats,
                     rr.can_manage_users,
                     rr.can_debug
                 FROM roles_reference rr
-                LEFT JOIN RolesTelegaBot rt ON rt.id = rr.role_id
             """
             
             results = await self.db.execute_with_retry(
@@ -133,6 +132,8 @@ class RolesRepository:
             roles = []
             for result in results:
                 role = dict(result)
+                slug = role.get("slug")
+                role["display_name"] = role_display_name_from_name(slug) if slug else "Неизвестная роль"
                 role['can_view_own_stats'] = bool(role.get('can_view_own_stats'))
                 role['can_view_all_stats'] = bool(role.get('can_view_all_stats'))
                 role['can_manage_users'] = bool(role.get('can_manage_users'))
@@ -191,7 +192,7 @@ class RolesRepository:
         
         logger.debug(
             f"[ROLES] Permission check result: {permission}={has_permission} "
-            f"for role {role.get('role_name')}"
+            f"for role {role.get('slug')}"
         )
         
         return has_permission

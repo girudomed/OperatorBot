@@ -9,7 +9,7 @@
 from typing import Optional, Dict
 
 from app.db.manager import DatabaseManager
-from app.db.models import UserRecord, RoleRecord
+from app.db.models import UserRecord
 from app.logging_config import get_watchdog_logger
 
 logger = get_watchdog_logger(__name__)
@@ -73,7 +73,6 @@ class UserRepository:
         username: Optional[str],
         full_name: str,
         operator_id: Optional[int] = None,
-        password: Optional[str] = None,
         role_id: int = 1,
     ) -> None:
         """
@@ -116,12 +115,11 @@ class UserRepository:
                 username,
                 full_name,
                 operator_id,
-                password,
                 role_id,
                 status
-            ) VALUES (%s, %s, %s, %s, %s, %s, 'pending')
+            ) VALUES (%s, %s, %s, %s, %s, 'pending')
             """,
-            params=(user_id, username, full_name, operator_id, password, role_id),
+            params=(user_id, username, full_name, operator_id, role_id),
             commit=True,
         )
         logger.info("[USER_REPO] Telegram user %s inserted with status pending.", user_id)
@@ -234,37 +232,47 @@ class UserRepository:
             raise
 
     async def get_role_id_by_name(self, role_name: str) -> Optional[int]:
-        """Получение role_id по названию роли из RolesTelegaBot."""
-        logger.debug(f"[USER_REPO] Getting role_id for role: {role_name}")
-        
+        """Получение role_id по slug из roles_reference."""
+        logger.debug(f"[USER_REPO] Getting role_id for role slug: %s", role_name)
+
+        normalized = (role_name or "").strip().lower().replace(" ", "_")
+        if not normalized:
+            return None
+
         try:
-            query = "SELECT id FROM RolesTelegaBot WHERE role_name = %s"
-            result = await self.db_manager.execute_query(query, (role_name,), fetchone=True)
-            
+            query = """
+                SELECT role_id
+                FROM roles_reference
+                WHERE LOWER(role_name) = LOWER(%s)
+                LIMIT 1
+            """
+            result = await self.db_manager.execute_with_retry(query, params=(normalized,), fetchone=True)
             if not result:
-                logger.warning(f"[USER_REPO] Role {role_name} not found")
+                logger.warning("[USER_REPO] Role %s not found in roles_reference", normalized)
                 return None
-            
-            return result.get('id')
-        except Exception as e:
-            logger.error(f"[USER_REPO] Error getting role_id for {role_name}: {e}", exc_info=True)
+            return int(result.get("role_id"))
+        except Exception as exc:
+            logger.error("[USER_REPO] Error getting role_id for %s: %s", normalized, exc, exc_info=True)
             return None
 
     async def get_role_name_by_id(self, role_id: int) -> Optional[str]:
-        """Получение названия роли по role_id из RolesTelegaBot."""
-        logger.debug(f"[USER_REPO] Getting role name for id: {role_id}")
-        
+        """Получение slug роли по role_id из roles_reference."""
+        logger.debug(f"[USER_REPO] Getting role slug for id: {role_id}")
+
         try:
-            query = "SELECT role_name FROM RolesTelegaBot WHERE id = %s"
-            result = await self.db_manager.execute_query(query, (role_id,), fetchone=True)
-            
+            query = """
+                SELECT role_name
+                FROM roles_reference
+                WHERE role_id = %s
+                LIMIT 1
+            """
+            result = await self.db_manager.execute_with_retry(query, params=(role_id,), fetchone=True)
             if not result:
-                logger.warning(f"[USER_REPO] Role with ID {role_id} not found")
+                logger.warning("[USER_REPO] Role with ID %s not found in roles_reference", role_id)
                 return None
-            
-            return result.get('role_name')
-        except Exception as e:
-            logger.error(f"[USER_REPO] Error getting role name for id {role_id}: {e}", exc_info=True)
+            return result.get("role_name")
+        except Exception as exc:
+            logger.error("[USER_REPO] Error getting role slug for id %s: %s", role_id, exc, exc_info=True)
             return None
 
     async def _get_user_pk_by_telegram_id(self, telegram_id: int) -> Optional[int]:

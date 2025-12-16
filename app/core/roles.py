@@ -13,7 +13,7 @@
     7 - marketing_director
 """
 
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple, Union, Any
 from dataclasses import dataclass
 
 
@@ -143,3 +143,33 @@ def is_superadmin_or_higher(role_id: int | None) -> bool:
     if role_id is None:
         return False
     return int(role_id) == 3
+
+
+def resolve_role_slug_display(
+    role_payload: Optional[Union[str, Dict[str, Any]]],
+    role_id: Optional[int] = None,
+) -> Tuple[str, str]:
+    """
+    Возвращает (slug, display_name) роли независимо от формата role_payload.
+    """
+    slug: Optional[str] = None
+    display: Optional[str] = None
+
+    if isinstance(role_payload, dict):
+        slug = role_payload.get("slug") or role_payload.get("name")
+        display = role_payload.get("name") or role_payload.get("slug")
+    elif isinstance(role_payload, str):
+        slug = role_payload
+        display = role_payload
+
+    if not slug and role_id is not None:
+        slug = role_name_from_id(role_id)
+
+    if not slug:
+        slug = role_name_from_id(None)
+
+    normalized_slug = slug.replace(" ", "_").lower()
+    if not display:
+        display = role_display_name_from_name(normalized_slug)
+
+    return normalized_slug, display

@@ -56,23 +56,21 @@ class AdminLookupHandler:
             keyboard = [
                 [
                     InlineKeyboardButton(
-                        "🔍 Вставить команду",
-                        switch_inline_query_current_chat="/call_lookup ",
+                        "Daily",
+                        switch_inline_query_current_chat="/call_lookup daily ",
                     )
                 ],
                 [
                     InlineKeyboardButton(
-                        "Daily",
-                        switch_inline_query_current_chat="/call_lookup  daily",
-                    ),
-                    InlineKeyboardButton(
                         "Weekly",
-                        switch_inline_query_current_chat="/call_lookup  weekly",
-                    ),
+                        switch_inline_query_current_chat="/call_lookup weekly ",
+                    )
+                ],
+                [
                     InlineKeyboardButton(
                         "Monthly",
-                        switch_inline_query_current_chat="/call_lookup  monthly",
-                    ),
+                        switch_inline_query_current_chat="/call_lookup monthly ",
+                    )
                 ],
                 [InlineKeyboardButton("◀️ Назад", callback_data="admin:back")],
             ]

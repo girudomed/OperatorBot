@@ -4,13 +4,13 @@
 Telegram хендлер поиска звонков.
 """
 
-import base64
-import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CallbackContext,
@@ -28,7 +28,7 @@ from app.telegram.utils.logging import describe_user
 
 CALL_LOOKUP_COMMAND = "call_lookup"
 CALL_LOOKUP_PERMISSION = "call_lookup"
-CALL_LOOKUP_CALLBACK_PREFIX = "calllookup"
+CALL_LOOKUP_CALLBACK_PREFIX = "cl"
 PERIOD_CHOICES = {
     "daily",
     "weekly",
@@ -61,6 +61,12 @@ def register_call_lookup_handlers(
         )
     )
     application.add_handler(
+        MessageHandler(
+            filters.Regex(r"^🔍 Поиск звонка$"),
+            handler.handle_menu_button,
+        )
+    )
+    application.add_handler(
         CallbackQueryHandler(
             handler.handle_callback,
             pattern=rf"^{CALL_LOOKUP_CALLBACK_PREFIX}:",
@@ -84,6 +90,47 @@ class _CallLookupHandlers:
     ):
         self.service = service
         self.permissions_manager = permissions_manager
+        self._error_reply = (
+            "Не удалось выполнить поиск, ошибка конфигурации БД."
+        )
+
+    async def _safe_reply_text(
+        self,
+        message: Optional[Message],
+        text: str,
+        *,
+        parse_mode: Optional[str] = None,
+        reply_markup: Optional[InlineKeyboardMarkup] = None,
+    ) -> None:
+        if not message:
+            return
+        try:
+            await message.reply_text(
+                text,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup,
+            )
+        except BadRequest as exc:
+            logger.warning("Не удалось отправить сообщение: %s", exc, exc_info=True)
+
+    async def _safe_send_message(
+        self,
+        context: CallbackContext,
+        chat_id: int,
+        text: str,
+        *,
+        parse_mode: Optional[str] = None,
+        reply_markup: Optional[InlineKeyboardMarkup] = None,
+    ) -> None:
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup,
+            )
+        except BadRequest as exc:
+            logger.warning("Не удалось отправить сообщение: %s", exc, exc_info=True)
 
     async def handle_command(self, update: Update, context: CallbackContext) -> None:
         message = update.effective_message
@@ -96,9 +143,10 @@ class _CallLookupHandlers:
                 "Отказ в /call_lookup для %s",
                 describe_user(user),
             )
-            await message.reply_text(
+            await self._safe_reply_text(
+                message,
                 "Команда доступна только старшим администраторам. "
-                "Обратитесь к администратору для получения доступа."
+                "Обратитесь к администратору для получения доступа.",
             )
             return
 
@@ -116,7 +164,7 @@ class _CallLookupHandlers:
                 parse_error,
                 exc_info=True,
             )
-            await message.reply_text(str(parse_error))
+            await self._safe_reply_text(message, str(parse_error))
             return
 
         logger.info(
@@ -162,7 +210,7 @@ class _CallLookupHandlers:
             ),
         )
 
-        await message.reply_text(text, reply_markup=markup)
+        await self._safe_reply_text(message, text, reply_markup=markup)
         logger.info(
             "Пользователь %s получил %s звонков по запросу /call_lookup",
             describe_user(user),
@@ -188,20 +236,37 @@ class _CallLookupHandlers:
         context.args = tokens[command_index + 1 :]
         await self.handle_command(update, context)
 
+    async def handle_menu_button(self, update: Update, context: CallbackContext) -> None:
+        """Реакция на кнопку главного меню «Поиск звонка»."""
+        message = update.effective_message
+        user = update.effective_user
+        if not message or not user:
+            return
+
+        if not await self._is_allowed(user.id, user.username):
+            await self._safe_reply_text(
+                message,
+                "Команда доступна только старшим администраторам. "
+                "Обратитесь к администратору для получения доступа.",
+            )
+            return
+
+        await self._send_usage_hint(message)
+
     async def handle_callback(self, update: Update, context: CallbackContext) -> None:
         query = update.callback_query
         user = update.effective_user
         if not query or not user:
             return
 
-        await query.answer()
-
-        parts = query.data.split(":", 2)
-        if len(parts) < 3:
+        parts = (query.data or "").split(":")
+        if len(parts) < 2 or parts[0] != CALL_LOOKUP_CALLBACK_PREFIX:
             return
 
+        await query.answer()
+
         action = parts[1]
-        payload = self._decode_payload(parts[2])
+        chat_id = query.message.chat_id if query.message else user.id
 
         if not await self._is_allowed(user.id, user.username):
             await safe_edit_message(query, text="Доступ запрещён.")
@@ -217,13 +282,20 @@ class _CallLookupHandlers:
             describe_user(user),
         )
 
-        if action == "page":
-            request = _LookupRequest(
-                phone=payload["phone"],
-                period=payload["period"],
-                offset=max(0, int(payload.get("offset", 0))),
-                limit=int(payload.get("limit", 5)),
-            )
+        if action == "p":
+            if len(parts) < 6:
+                await query.answer("Некорректные данные", show_alert=True)
+                return
+            try:
+                request = _LookupRequest(
+                    phone=parts[5],
+                    period=parts[2],
+                    offset=max(0, int(parts[4])),
+                    limit=max(1, min(int(parts[3]), self.service.MAX_LIMIT)),
+                )
+            except ValueError:
+                await query.answer("Некорректные параметры", show_alert=True)
+                return
             logger.info(
                 "Call lookup пагинация (%s) пользователем %s",
                 request,
@@ -242,10 +314,7 @@ class _CallLookupHandlers:
                     "Ошибка пагинации call_lookup для %s",
                     describe_user(user),
                 )
-                await safe_edit_message(
-                    query,
-                    text="Не удалось выполнить поиск, ошибка конфигурации БД.",
-                )
+                await safe_edit_message(query, text=self._error_reply)
                 return
             text, markup = self._build_result_message(
                 response=response,
@@ -259,8 +328,15 @@ class _CallLookupHandlers:
                 text=text,
                 markup=markup,
             )
-        elif action == "transcript":
-            history_id = int(payload["history_id"])
+        elif action == "t":
+            if len(parts) < 3:
+                await query.answer("Некорректные данные", show_alert=True)
+                return
+            try:
+                history_id = int(parts[2])
+            except ValueError:
+                await query.answer("Некорректный ID", show_alert=True)
+                return
             try:
                 details = await self.service.fetch_call_details(history_id)
             except Exception:
@@ -269,26 +345,28 @@ class _CallLookupHandlers:
                     history_id,
                     describe_user(user),
                 )
-                await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text="Не удалось выполнить поиск, ошибка конфигурации БД.",
-                )
+                await self._safe_send_message(context, chat_id, self._error_reply)
                 return
             details_payload = details or {}
             transcript = details_payload.get("transcript")
             text = self._format_transcript_details(details_payload, transcript)
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text=text,
-                parse_mode="HTML",
+            await self._safe_send_message(
+                context, chat_id, text, parse_mode="HTML"
             )
             logger.info(
                 "Пользователь %s запросил расшифровку звонка %s",
                 describe_user(user),
                 history_id,
             )
-        elif action == "record":
-            history_id = int(payload["history_id"])
+        elif action == "r":
+            if len(parts) < 3:
+                await query.answer("Некорректные данные", show_alert=True)
+                return
+            try:
+                history_id = int(parts[2])
+            except ValueError:
+                await query.answer("Некорректный ID", show_alert=True)
+                return
             try:
                 details = await self.service.fetch_call_details(history_id)
             except Exception:
@@ -297,17 +375,15 @@ class _CallLookupHandlers:
                     history_id,
                     describe_user(user),
                 )
-                await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text="Не удалось выполнить поиск, ошибка конфигурации БД.",
-                )
+                await self._safe_send_message(context, chat_id, self._error_reply)
                 return
             details_payload = details or {}
             record_url = details_payload.get("record_url")
             if record_url:
-                await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text=self._format_record_message(history_id, details_payload),
+                await self._safe_send_message(
+                    context,
+                    chat_id,
+                    self._format_record_message(history_id, details_payload),
                     parse_mode="HTML",
                 )
                 logger.info(
@@ -316,9 +392,10 @@ class _CallLookupHandlers:
                     history_id,
                 )
             else:
-                await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text="Запись недоступна для этого звонка.",
+                await self._safe_send_message(
+                    context,
+                    chat_id,
+                    "Запись недоступна для этого звонка.",
                 )
 
     async def _is_allowed(self, user_id: int, username: Optional[str] = None) -> bool:
@@ -368,17 +445,20 @@ class _CallLookupHandlers:
 
         keyboard: List[List[InlineKeyboardButton]] = []
         for item in items:
-            payload = self._encode_payload({"history_id": item.get("history_id")})
+            history_id = item.get("history_id")
+            if not history_id:
+                continue
             row = [
                 InlineKeyboardButton(
                     "Расшифровка",
-                    callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:transcript:{payload}",
+                    callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:t:{history_id}",
                 )
             ]
             if item.get("record_url"):
                 row.append(
                     InlineKeyboardButton(
-                        "Запись",callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:record:{payload}",
+                        "Запись",
+                        callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:r:{history_id}",
                     )
                 )
             keyboard.append(row)
@@ -452,26 +532,25 @@ class _CallLookupHandlers:
         keyboard = [
             [
                 InlineKeyboardButton(
-                    "🔍 Вставить команду",
-                    switch_inline_query_current_chat="/call_lookup ",
+                    "Daily",
+                    switch_inline_query_current_chat="/call_lookup daily ",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "Daily",
-                    switch_inline_query_current_chat="/call_lookup daily ",
-                ),
-                InlineKeyboardButton(
                     "Weekly",
                     switch_inline_query_current_chat="/call_lookup weekly ",
-                ),
+                )
+            ],
+            [
                 InlineKeyboardButton(
                     "Monthly",
                     switch_inline_query_current_chat="/call_lookup monthly ",
-                ),
+                )
             ],
         ]
-        await message.reply_text(
+        await self._safe_reply_text(
+            message,
             text,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML",
@@ -487,10 +566,27 @@ class _CallLookupHandlers:
         markup: Optional[InlineKeyboardMarkup],
     ) -> None:
         if message:
-            await message.edit_text(text, reply_markup=markup)
+            try:
+                await message.edit_text(text, reply_markup=markup)
+            except BadRequest as exc:
+                logger.warning(
+                    "Не удалось обновить сообщение поиска звонков: %s",
+                    exc,
+                    exc_info=True,
+                )
+                if chat_id is not None:
+                    await self._safe_send_message(
+                        context,
+                        chat_id,
+                        text,
+                        reply_markup=markup,
+                    )
         elif chat_id is not None:
-            await context.bot.send_message(
-                chat_id=chat_id, text=text, reply_markup=markup
+            await self._safe_send_message(
+                context,
+                chat_id,
+                text,
+                reply_markup=markup,
             )
 
     def _encode_page_callback(
@@ -501,25 +597,8 @@ class _CallLookupHandlers:
         offset: int,
         limit: int,
     ) -> str:
-        payload = {
-            "phone": phone,
-            "period": period,
-            "offset": offset,
-            "limit": limit,
-        }
-        return f"{CALL_LOOKUP_CALLBACK_PREFIX}:page:{self._encode_payload(payload)}"
-
-    @staticmethod
-    def _encode_payload(data: Dict[str, Any]) -> str:
-        raw = json.dumps(data, separators=(",", ":")).encode("utf-8")
-        token = base64.urlsafe_b64encode(raw).decode("utf-8")
-        return token.rstrip("=")
-
-    @staticmethod
-    def _decode_payload(token: str) -> Dict[str, Any]:
-        padding = "=" * (-len(token) % 4)
-        data = base64.urlsafe_b64decode(token + padding)
-        return json.loads(data.decode("utf-8"))
+        safe_phone = re.sub(r"\D+", "", phone or "")
+        return f"{CALL_LOOKUP_CALLBACK_PREFIX}:p:{period}:{limit}:{offset}:{safe_phone}"
 
     @staticmethod
     def _format_datetime(value: Any) -> str:

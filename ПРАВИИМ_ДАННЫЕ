@@ -1,233 +1,142 @@
-Сведу к чек-листу: где именно в проекте править и что менять по смыслу, без примеров кода.
+
+
+
+Колонка created_at в call_history у тебя есть — это видно по структуре. Значит ошибка:
+
+Unknown column 'created_at' in 'field list'
+
+возникает не потому что колонки нет в call_history, а потому что в реальном SQL, который выполняет ETL, created_at берётся не из call_history (или вообще запрос идёт не в ту таблицу/схему), либо берётся без алиаса и попадает “в поле” другого источника.
+
+Ключевая улика: MySQL пишет in 'field list' — это обычно SELECT-часть, а не WHERE. Если бы не было created_at в условии, чаще было бы in 'where clause'.
+
+Ниже — как чинить точно и по делу.
 
 ⸻
 
-1. UsersTelegaBot: выкидываем telegram_id, first_name, last_name
+1) Проверь и выровняй реальный SQL ETL
 
-Ориентир — фактическая таблица.
+Где править
 
-1.1. Модели и репозитории пользователей бота
+app/services/call_analytics_sync.py, метод sync_new() (у тебя в логе именно он).
 
-Файлы, где почти точно есть привязка к UsersTelegaBot:
-	•	app/db/models.py (или аналог с моделями)
-	•	app/db/repositories/users.py / app/db/repositories/roles.py
-	•	app/services/permissions.py
-	•	app/services/admin_logger.py
-	•	app/telegram/handlers/auth.py
-	•	app/telegram/handlers/admin_users.py
-	•	app/telegram/handlers/admin_panel.py
+Что искать в файле
+	•	Любой SELECT ... created_at ...
+	•	Любой MAX(created_at) / ORDER BY created_at
+	•	Любые подзапросы, где created_at выбирается из не той таблицы
+	•	Частая ошибка: SELECT id, created_at ... FROM call_history — а у тебя нет id, у тебя PK = history_id
 
-Что в них править:
-	1.	Везде, где модель/репозиторий считает, что в таблице есть поле:
-	•	telegram_id
-заменить на работу с:
-	•	user_id (это реальный Telegram ID в БД).
-	2.	Везде, где используются:
-	•	first_name, last_name
-заменить на:
-	•	full_name (ФИО целиком)
-либо собрать/разобрать ФИО в коде, не требуя отдельных колонок.
-	3.	Проверить все DTO/сериализаторы/слои маппинга:
-	•	входные данные из Telegram (user.id, user.username, user.first_name/last_name) должны сохраняться в поля:
-	•	user_id (ID из Telegram),
-	•	username,
-	•	full_name,
-	•	при необходимости — operator_name, extension, chat_id.
+Правильный минимальный инкрементальный запрос (под твою call_history)
 
-1.2. Тип operator_id в коде
+Используй явный алиас и выбирай реальные поля:
 
-Где искать:
-	•	app/db/models.py (описание UsersTelegaBot)
-	•	app/db/repositories/users.py / operators.py
-	•	все места, где operator_id используется для связки с Mango-пользователями
+SELECT
+  ch.history_id,
+  ch.created_at,
+  ch.updated_at,
+  ch.entry_id,
+  ch.recording_id,
+  ch.caller_number,
+  ch.called_number,
+  ch.talk_duration,
+  ch.await_sec,
+  ch.context_start_time_dt,
+  ch.answered_extension,
+  ch.answered_user_id,
+  ch.transcript
+FROM call_history ch
+WHERE ch.created_at > %s
+ORDER BY ch.created_at ASC
+LIMIT %s;
 
-Что править по смыслу:
-	1.	Убрать любые предположения, что operator_id — число:
-	•	типы данных int в сигнатурах/докстрингах,
-	•	приведение int(operator_id),
-	•	сравнения/выражения вида operator_id > 0.
-	2.	Трактовать operator_id как строку/идентификатор, просто хранящий внешний ID.
+Важно:
+	•	Везде ch.created_at, не просто created_at
+	•	Не использовать id (его нет)
+	•	Ключ записи — history_id
 
-⸻
+Если тебе нужен “timestamp звонка” вместо времени вставки, можно менять на:
+	•	ch.context_start_time_dt (у тебя есть)
+	•	или ch.context_ts (у тебя есть)
 
-2. roles_reference: id → role_id
-
-Ориентир — фактическая таблица: PK = role_id.
-
-Где точно смотреть:
-	•	app/core/roles.py
-	•	app/services/permissions.py
-	•	app/db/repositories/roles.py
-	•	всё, что связано с ролями/доступом:
-	•	app/telegram/middlewares/permissions.py
-	•	app/telegram/handlers/admin_users.py
-	•	возможно, app/telegram/handlers/start.py
-
-Что править:
-	1.	В SQL-запросах и моделях:
-	•	вместо roles_reference.id использовать roles_reference.role_id.
-	2.	В моделях/DTO:
-	•	поле, представляющее PK роли, должно называться/ссылаться на role_id, а не id.
-	3.	В логике прав доступа:
-	•	если роль вытаскивается через SELECT id, role_name ... — поменять на SELECT role_id, role_name ....
-	•	все сравнения вида if role.id == 2 привести к использованию role_id.
-
-Если хочешь реально использовать флаги:
-	•	can_view_own_stats, can_view_all_stats, can_manage_users, can_debug
-— убедиться, что вместо “магических чисел ролей” код опирается на эти флаги.
+Но сейчас именно created_at есть и индекс на нём есть (idx_ch_created) — это ок для инкремента.
 
 ⸻
 
-3. admin_action_logs: проверка привязки к UsersTelegaBot
+2) Почему при наличии created_at всё равно падает: 2 самые вероятные причины
 
-Где смотреть:
-	•	app/services/admin_logger.py
-	•	app/db/repositories/admin.py
-	•	обработчики:
-	•	app/telegram/handlers/admin_users.py
-	•	app/telegram/handlers/admin_admins.py
-	•	app/telegram/handlers/admin_panel.py
+Причина A (самая частая): created_at выбирается из другой таблицы (например call_scores)
 
-Что править:
-	1.	Убедиться, что в actor_id и target_id записывается именно:
-	•	UsersTelegaBot.id (PK),
-а не user_id (Telegram ID) и не Mango-ID.
-	2.	Все места, где из лога достаётся пользователь:
-	•	при выборке пользователя по actor_id/target_id использовать связь:
-	•	actor_id → UsersTelegaBot.id,
-	•	target_id → UsersTelegaBot.id.
+У тебя call_scores не содержит created_at. Если ETL делает JOIN и ты где-то написал:
+	•	SELECT cs.created_at ... → упадёт
+	•	SELECT created_at ... без префикса → может “прилипнуть” к cs/derived table и упасть
 
-Если где-то сейчас делается JOIN/SELECT по UsersTelegaBot.user_id = admin_action_logs.actor_id — это нужно заменить на связывание через UsersTelegaBot.id.
+✅ Фикс: в SELECT/ORDER BY всегда ch.created_at, а не created_at и не cs.created_at.
 
 ⸻
 
-4. call_analytics: не использовать несуществующие поля
+Причина B: ETL подключается не к той БД/схеме (или другая call_history без created_at)
 
-Тут конфликт между миграцией и реальной БД. Сейчас таблица не содержит:
-	•	response_speed_score
-	•	talk_time_efficiency
-	•	conversion_score
-	•	churn_risk_score
-	•	churn_risk_level
-	•	call_type
+Ты пишешь “БД одна”, но на практике часто:
+	•	бот ходит в другой DB_NAME
+	•	или другой хост/юзер с другим default schema
+	•	или есть таблица call_history в другом schema без created_at
 
-И содержит:
-	•	ml_p_record, ml_score_pred, ml_p_complaint, ml_updated_at
-	•	call_scores_id (а не call_score_id)
+✅ Фикс (в коде, без гаданий): при старте приложения 1 раз логируй, куда реально подключился:
 
-Где смотреть:
-	•	app/db/repositories/call_analytics_repo.py
-	•	app/services/analytics.py / app/services/metrics_service.py
-	•	app/telegram/handlers/dashboard.py
-	•	возможно, app/telegram/handlers/admin_stats.py
+SELECT DATABASE() as db;
+SHOW COLUMNS FROM call_history LIKE 'created_at';
 
-Что нужно сделать в коде:
-	1.	Найти все запросы/модели, которые читают из call_analytics поля:
-	•	response_speed_score,
-	•	talk_time_efficiency,
-	•	conversion_score,
-	•	churn_risk_score,
-	•	churn_risk_level,
-	•	call_type.
-	2.	Для каждого такого использования принять решение:
-	•	либо убрать использование call_analytics и считать эти метрики:
-	•	либо на лету,
-	•	либо из lm_value / call_scores;
-	•	либо временно отключить функциональность, которая их требует (например, не рисовать определённые метрики в дашбордах).
-	3.	Проверить имя поля для связи с call_scores:
-	•	если код ожидает колонку call_score_id — нужно в коде:
-	•	использовать фактическое имя call_scores_id при построении запросов и маппинге результатов.
-	•	убедиться, что никакие ORM-модели не объявляют поле call_score_id для call_analytics — должно быть ровно call_scores_id.
+Или через information_schema:
 
-До тех пор, пока не добавишь новые колонки в таблицу, никакой код не должен полагаться на их существование.
+SELECT COUNT(*) as cnt
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'call_history'
+  AND COLUMN_NAME = 'created_at';
+
+Если cnt=0 — значит бот реально работает с другой таблицей/схемой.
 
 ⸻
 
-5. operator_dashboards: не опираться на композитный PK
+3) Добавь “контракт схемы” прямо в код ETL, чтобы такое не повторялось
 
-Сейчас в БД:
-	•	есть поле id (PK),
-	•	есть уникальный индекс uk_operator_period(operator_name, period_type, period_start).
+В call_analytics_sync.py перед первым инкрементом (или один раз на старте сервиса):
+	1.	Проверить наличие обязательных колонок:
 
-Где смотреть:
-	•	app/db/repositories/analytics.py / reports.py
-	•	app/services/dashboard_cache.py
-	•	app/telegram/handlers/dashboard.py
-	•	возможно, app/services/reports.py
+	•	history_id
+	•	created_at
+	•	updated_at
 
-Что править:
-	1.	Если где-то модель operator_dashboards объявлена с PK = (operator_name, period_type, period_start):
-	•	изменить представление модели так, чтобы PK считался id,
-	•	а (operator_name, period_type, period_start) использовались как уникальный бизнес-ключ, но не как PK.
-	2.	Запросы выборки по периоду:
-	•	оставить в виде:
-	•	WHERE operator_name = ? AND period_type = ? AND period_start = ?
-	•	не полагаться на то, что это “PRIMARY KEY”, это просто UNIQUE.
+	2.	Если чего-то нет — логировать 1 раз и не падать (остановить ETL, но бот живёт).
+
+Это уберёт “рандомные” падения при несовпадении схем.
 
 ⸻
 
-6. operator_recommendations: то же самое
+4) Критерий приёмки (конкретный)
 
-В БД:
-	•	id — PK,
-	•	UNIQUE (operator_name, report_date).
+После правки:
+	1.	В логах нет:
 
-Где смотреть:
-	•	app/db/repositories/recommendations.py
-	•	app/services/recommendations.py
-	•	app/telegram/handlers/weekly_quality.py / раздел, который отдаёт рекомендации
+	•	Unknown column 'created_at' in 'field list'
 
-Что править:
-	1.	Если модель/репозиторий считает, что PK — (operator_name, report_date):
-	•	сменить концепцию на:
-	•	PK = id,
-	•	(operator_name, report_date) — уникальный бизнес-ключ для SELECT/UPSERT.
-	2.	В логике вставки/обновления:
-	•	использовать operator_name + report_date для поиска записи,
-	•	а id — для обновления/удаления.
+	2.	ETL пишет:
+
+	•	старт инкремента
+	•	количество выбранных строк > 0 (когда есть новые)
+
+	3.	sync_new не трогает id (потому что его нет), использует history_id
 
 ⸻
 
-7. reports: привести миграции к фактической таблице
+Быстрый чек-лист: что именно править в твоём случае
+	1.	В call_analytics_sync.py:
 
-Это больше про миграции, но затрагивает код:
+	•	заменить любые SELECT id, ... → SELECT history_id, ...
+	•	заменить любые created_at без префикса → ch.created_at
+	•	исключить cs.created_at (в call_scores его нет)
 
-Где смотреть в коде:
-	•	app/db/repositories/reports.py
-	•	app/services/reports.py
-	•	app/telegram/handlers/reports.py
-	•	app/telegram/handlers/weekly_quality.py
-
-Что по коду:
-	1.	Проверить, что все поля, с которыми работает сервис отчётов, действительно есть в БД:
-	•	total_calls, accepted_calls, booked_services,
-	•	conversion_rate, avg_call_rating,
-	•	total_cancellations, cancellation_rate,
-	•	тайминги разговоров/спама/навигаторов,
-	•	complaint_calls, complaint_rating,
-	•	missed_calls, missed_rate, total_leads,
-	•	и т.д. — всё должно совпадать по имени/типу.
-	2.	Если в коде фигурируют поля, которых в БД нет — вычистить эти обращения, либо добавить поля в схему (но ты просил сейчас именно “что в коде”, поэтому ориентир — убрать/исправить такие обращения).
-
-Отдельно: в миграциях добавить создание этой таблицы по фактической структуре — это не про runtime-код, но важно для CI/CD и развёртываний.
+	2.	Добавить лог SELECT DATABASE() при старте пула (один раз).
 
 ⸻
 
-8. Общая ревизия миграций против кода
-
-Хотя ты просишь про код, миграции тоже код, и именно они сейчас “врут”.
-
-Что сделать в миграциях (в логике, не в SQL-тексте):
-	1.	Переписать миграцию 000 так, чтобы:
-	•	определение UsersTelegaBot совпадало с фактической таблицей (user_id, full_name, operator_name, chat_id, last_active_at, operator_id как VARCHAR и т.д.),
-	•	определение roles_reference использовало role_id, и содержало флаги can_view_*, can_manage_users, can_debug,
-	•	определение call_analytics, operator_dashboards, operator_recommendations, admin_action_logs соответствовало тому, что у тебя реально в БД.
-	2.	Добавить миграцию, создающую reports по фактической схеме.
-
-Это нужно, чтобы:
-	•	локальная разработка,
-	•	тесты в CI,
-	•	новый сервер
-
-разворачивались с такой же схемой, с которой работает текущий код.
-
+Если вставишь сюда реальный SQL, который ETL выполняет (кусок из call_analytics_sync.py, 30–80 строк вокруг запроса) — я дам патч “замени строки X–Y на …” без вариантов.

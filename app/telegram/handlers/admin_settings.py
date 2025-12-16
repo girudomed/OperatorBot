@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import html
+from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
@@ -20,7 +21,7 @@ from app.config import OPENAI_API_KEY, TELEGRAM_TOKEN, DB_CONFIG, SENTRY_DSN
 from app.db.repositories.admin import AdminRepository
 from app.logging_config import get_watchdog_logger
 from app.telegram.middlewares.permissions import PermissionsManager
-from app.telegram.utils.messages import safe_edit_message
+from app.telegram.utils.messages import safe_edit_message, MAX_MESSAGE_CHUNK
 from app.telegram.utils.logging import describe_user
 from app.utils.error_handlers import log_async_exceptions
 from app.workers.task_worker import start_workers, stop_workers
@@ -155,17 +156,30 @@ class AdminSettingsHandler:
             f"Последние {MAX_LOG_LINES} строк:\n\n"
             f"<code>{escaped}</code>"
         )
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("🔄 Обновить", callback_data="admin:settings:logs"),
+                    InlineKeyboardButton("◀️ Назад", callback_data="admin:settings"),
+                ]
+            ]
+        )
+        if len(message) > MAX_MESSAGE_CHUNK:
+            await self._send_logs_file(query, log_text, log_path)
+            await safe_edit_message(
+                query,
+                text=(
+                    "📄 Логи слишком объёмные для отображения в одном сообщении.\n"
+                    "Файл с логами отправлен отдельно."
+                ),
+                reply_markup=keyboard,
+                parse_mode="HTML",
+            )
+            return
         await safe_edit_message(
             query,
             text=message,
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton("🔄 Обновить", callback_data="admin:settings:logs"),
-                        InlineKeyboardButton("◀️ Назад", callback_data="admin:settings"),
-                    ]
-                ]
-            ),
+            reply_markup=keyboard,
             parse_mode="HTML",
         )
 
@@ -195,6 +209,22 @@ class AdminSettingsHandler:
             reply_markup=InlineKeyboardMarkup(
                 [[InlineKeyboardButton("◀️ Назад", callback_data="admin:settings")]]
             ),
+        )
+
+    async def _send_logs_file(self, query, log_text: str, log_path: Optional[Path]) -> None:
+        message = getattr(query, "message", None)
+        if not message:
+            logger.warning("Нет message для отправки логов файлом")
+            return
+        buffer = BytesIO()
+        buffer.write(log_text.encode("utf-8"))
+        buffer.seek(0)
+        filename = (log_path.name if isinstance(log_path, Path) else "logs.txt") or "logs.txt"
+        caption = f"📄 Логи ({filename})"
+        await message.reply_document(
+            document=buffer,
+            filename=filename,
+            caption=caption,
         )
 
 

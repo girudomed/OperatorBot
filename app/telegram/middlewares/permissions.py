@@ -3,7 +3,7 @@
 """
 Менеджер прав доступа для админ-панели.
 
-Использует таблицы UsersTelegaBot, roles_reference и RolesTelegaBot.
+Использует таблицы UsersTelegaBot и roles_reference.
 Таблица users - это Mango справочник (НЕ использовать для ролей!).
 Поддерживает Supreme Admin и Dev Admin из конфигурации.
 """
@@ -15,6 +15,7 @@ from typing import Optional, Dict, Set, Tuple, Any, Literal, List
 from app.db.manager import DatabaseManager
 from app.logging_config import get_watchdog_logger
 from app.config import SUPREME_ADMIN_ID, SUPREME_ADMIN_USERNAME, DEV_ADMIN_ID, DEV_ADMIN_USERNAME
+from app.core.roles import role_display_name_from_name
 logger = get_watchdog_logger(__name__)
 
 
@@ -224,10 +225,8 @@ class PermissionsManager:
                         rr.can_view_own_stats,
                         rr.can_view_all_stats,
                         rr.can_manage_users,
-                        rr.can_debug,
-                        rt.role_name AS display_name
+                        rr.can_debug
                     FROM roles_reference rr
-                    LEFT JOIN RolesTelegaBot rt ON rt.id = rr.role_id
                     ORDER BY rr.role_id
                 """
                 rows_raw = await self.db_manager.execute_with_retry(
@@ -259,7 +258,7 @@ class PermissionsManager:
                 for row in rows:
                     role_id = int(row.get("role_id"))
                     slug = self._normalize_slug(row.get("slug")) or f"role_{role_id}"
-                    display_name = row.get("display_name") or row.get("slug") or slug
+                    display_name = role_display_name_from_name(slug) if slug else slug
                     app_perm = DEFAULT_APP_PERMISSIONS.get(slug, {"call_lookup"})
                     matrix[role_id] = {
                         "slug": slug,
@@ -271,10 +270,7 @@ class PermissionsManager:
                         "app_permissions": set(app_perm),
                     }
                 self._set_role_matrix(matrix)
-                logger.info(
-                    "[PERMISSIONS] Загружено %s ролей из roles_reference/RolesTelegaBot",
-                    len(matrix),
-                )
+                logger.info("[PERMISSIONS] Загружено %s ролей из roles_reference", len(matrix))
             except Exception as exc:
                 logger.exception(
                     "Не удалось загрузить роли из БД, используем значения по умолчанию: %s",

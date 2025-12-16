@@ -18,6 +18,7 @@ from telegram.ext import (
 from app.core.roles import (
     ROLE_ID_TO_NAME,
     ROLE_NAME_TO_ID,
+    resolve_role_slug_display,
     role_display_name_from_name,
     role_name_from_id,
 )
@@ -267,17 +268,15 @@ class AdminCommandsHandler:
 
         message_text = "👑 <b>Список администраторов:</b>\n\n"
         for admin in admins:
-            role_payload = admin.get("role")
-            if isinstance(role_payload, dict):
-                role_name = role_payload.get("name") or role_payload.get("slug")
-            else:
-                role_name = role_name_from_id(admin.get("role_id"))
-            role_name = role_name or "—"
-            role_emoji = "⭐" if role_name.lower() in ("superadmin", "developer", "founder") else "👤"
+            role_slug, role_display = resolve_role_slug_display(
+                admin.get("role"),
+                admin.get("role_id"),
+            )
+            role_emoji = "⭐" if role_slug in {"superadmin", "developer", "founder"} else "👤"
             username = admin.get("username") or "нет"
             message_text += (
                 f"{role_emoji} <b>{admin.get('full_name', 'Без имени')}</b>\n"
-                f"   @{username} | Роль: {role_name}\n\n"
+                f"   @{username} | Роль: {role_display}\n\n"
             )
 
         await message.reply_text(message_text, parse_mode="HTML")
@@ -474,7 +473,10 @@ class AdminCommandsHandler:
         return label[:64]
 
     def _format_user_card_text(self, user: dict) -> str:
-        role_name = user.get("role") or role_name_from_id(user.get("role_id"))
+        _, role_display = resolve_role_slug_display(
+            user.get("role"),
+            user.get("role_id"),
+        )
         username = f"@{user.get('username')}" if user.get("username") else "—"
         extension = user.get("extension") or "—"
         created_at = user.get("created_at")
@@ -488,7 +490,7 @@ class AdminCommandsHandler:
             f"ID: #{user.get('id')}\n"
             f"Username: {username}\n"
             f"Extension: {extension}\n"
-            f"Роль: <b>{role_name}</b>\n"
+            f"Роль: <b>{role_display}</b>\n"
             f"Статус: <b>{status}</b>\n"
             f"Регистрация: {created_str}"
         )

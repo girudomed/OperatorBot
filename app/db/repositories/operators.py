@@ -26,13 +26,38 @@ class OperatorRepository:
     
     async def get_extension_by_user_id(self, user_id: int) -> Optional[str]:
         """
-        Получает extension оператора по Telegram ID из UsersTelegaBot.
+        Получает extension оператора по user_id.
+        
+        Сначала ищем в таблице users (основной справочник операторов),
+        затем, для обратной совместимости, проверяем UsersTelegaBot.
         """
-        query = "SELECT extension FROM UsersTelegaBot WHERE user_id = %s"
-        rows = await self.db_manager.execute_with_retry(query, (user_id,), fetchall=True)
-        if not rows:
-            return None
-        return rows[0].get('extension')
+        user_query = """
+            SELECT extension
+            FROM users
+            WHERE user_id = %s
+            LIMIT 1
+        """
+        row = await self.db_manager.execute_with_retry(
+            user_query,
+            (user_id,),
+            fetchone=True,
+        )
+        extension = row.get("extension") if row else None
+        if extension:
+            return extension
+
+        legacy_query = """
+            SELECT extension
+            FROM UsersTelegaBot
+            WHERE user_id = %s
+            LIMIT 1
+        """
+        legacy_row = await self.db_manager.execute_with_retry(
+            legacy_query,
+            (user_id,),
+            fetchone=True,
+        )
+        return legacy_row.get("extension") if legacy_row else None
 
     async def get_name_by_extension(self, extension: str) -> str:
         query = "SELECT full_name FROM users WHERE extension = %s"

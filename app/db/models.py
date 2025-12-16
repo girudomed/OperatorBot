@@ -12,7 +12,6 @@ class UserRecord(TypedDict, total=False):
     username: str
     full_name: str
     operator_id: Optional[int]
-    password: str
     role_id: Optional[int]
     extension: Optional[str]
     # Admin panel fields
@@ -71,13 +70,6 @@ class CallHistoryRecord(TypedDict, total=False):
     caller_number: Optional[str]
     called_number: Optional[str]
     recording_id: Optional[str]
-
-
-class RoleRecord(TypedDict, total=False):
-    """Запись роли из таблицы RolesTelegaBot."""
-    id: int
-    role_name: str
-    role_password: str
 
 
 class ReportRecord(TypedDict, total=False):
