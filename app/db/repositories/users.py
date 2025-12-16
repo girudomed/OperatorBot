@@ -1,3 +1,5 @@
+# Файл: app/db/repositories/users.py
+
 """
 Репозиторий для работы с Telegram пользователями и ролями.
 ВАЖНО: Использует таблицу UsersTelegaBot, а НЕ users!

@@ -1,3 +1,5 @@
+# Файл: app/telegram/handlers/weekly_quality.py
+
 """
 Telegram хендлер еженедельных отчетов качества.
 """

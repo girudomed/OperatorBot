@@ -1,3 +1,5 @@
+# Файл: app/db/repositories/roles.py
+
 """
 Repository для работы с ролями через таблицу roles_reference.
 

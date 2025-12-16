@@ -1,3 +1,5 @@
+# Файл: app/db/repositories/lm_repository_methods.txt
+
 """
 Методы для агрегации LM метрик (добавить в конец lm_repository.py)
 """

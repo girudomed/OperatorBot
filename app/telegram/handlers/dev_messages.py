@@ -1,3 +1,5 @@
+# Файл: app/telegram/handlers/dev_messages.py
+
 """
 Telegram handler для системы сообщений разработчику.
 Позволяет пользователям отправлять сообщения Dev/SuperAdmin.

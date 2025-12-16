@@ -1,3 +1,5 @@
+<!-- Файл: docs/NEW_админка.md -->
+
 # NEW_админка.md
 
 ## 1. Цели для Telegram-админки Operabot

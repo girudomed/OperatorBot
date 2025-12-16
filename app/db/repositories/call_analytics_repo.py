@@ -1,3 +1,5 @@
+# Файл: app/db/repositories/call_analytics_repo.py
+
 """
 Repository для работы с аналитической таблицей call_analytics.
 

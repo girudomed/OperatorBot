@@ -1,3 +1,5 @@
+# Файл: app/telegram/handlers/help.py
+
 """
 Обновленный /help handler с блочной структурой по ролям.
 

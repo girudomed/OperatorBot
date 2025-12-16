@@ -1,3 +1,5 @@
+# Файл: app/telegram/utils/constants.py
+
 # bot/utils/constants.py
 from config import task_queue_config
 

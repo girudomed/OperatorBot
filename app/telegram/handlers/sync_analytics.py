@@ -1,3 +1,5 @@
+# Файл: app/telegram/handlers/sync_analytics.py
+
 """
 Admin command для синхронизации call_scores → call_analytics.
 

@@ -1,3 +1,5 @@
+# Файл: app/db/repositories/lm_repository.py
+
 """
 Репозиторий для работы с LM метриками.
 """

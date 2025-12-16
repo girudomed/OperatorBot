@@ -1,3 +1,5 @@
+# Файл: app/services/notifications.py
+
 import logging
 import time
 import asyncio

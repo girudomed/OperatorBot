@@ -1,3 +1,5 @@
+# Файл: app/services/call_analytics_sync.py
+
 """
 ETL Service для синхронизации call_scores → call_analytics.
 

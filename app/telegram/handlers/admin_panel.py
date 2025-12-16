@@ -1,3 +1,5 @@
+# Файл: app/telegram/handlers/admin_panel.py
+
 """
 Главный обработчик админ-панели.
 

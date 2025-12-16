@@ -1,3 +1,5 @@
+# Файл: app/telegram/handlers/start.py
+
 """
 Обновленный /start handler с динамическим контентом по ролям.
 

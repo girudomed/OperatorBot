@@ -1,3 +1,5 @@
+# Файл: app/services/lm_service.py
+
 """
 Сервис расчета LM метрик.
 

@@ -1,3 +1,5 @@
+# Файл: app/services/dashboard_cache.py
+
 """
 Dashboard Cache Service для работы с operator_dashboards.
 

@@ -1,4 +1,4 @@
-# bot/services/errors.py
+# Файл: app/telegram/errors.py
 import asyncio
 import json
 import logging

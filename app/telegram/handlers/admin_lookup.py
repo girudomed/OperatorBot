@@ -1,3 +1,5 @@
+# Файл: app/telegram/handlers/admin_lookup.py
+
 """
 Раздел админ-панели для работы с расшифровками.
 """

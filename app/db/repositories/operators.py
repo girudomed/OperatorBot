@@ -1,3 +1,5 @@
+# Файл: app/db/repositories/operators.py
+
 """
 Репозиторий для работы с операторами.
 """

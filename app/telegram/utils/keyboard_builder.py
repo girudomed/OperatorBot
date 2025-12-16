@@ -1,3 +1,5 @@
+# Файл: app/telegram/utils/keyboard_builder.py
+
 """
 Keyboard Builder для создания клавиатур по ролям.
 

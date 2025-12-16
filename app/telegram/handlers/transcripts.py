@@ -1,3 +1,5 @@
+# Файл: app/telegram/handlers/transcripts.py
+
 """
 Telegram handler для получения расшифровок звонков.
 Операторы видят только свои звонки, админы - все.

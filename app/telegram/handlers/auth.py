@@ -1,3 +1,5 @@
+# Файл: app/telegram/handlers/auth.py
+
 """
 Telegram хендлеры авторизации и регистрации.
 """
@@ -357,8 +359,11 @@ def setup_auth_handlers(application, db_manager: DatabaseManager, permissions_ma
     # Нам нужно, чтобы команды продолжили обрабатываться после guard.
     command_guard.block = False
     callback_guard.block = False
-    application.add_handler(command_guard, group=0)
-    application.add_handler(callback_guard, group=0)
+    # Guard должен обрабатываться до всех остальных хендлеров,
+    # поэтому выносим его в отдельную группу, иначе PTB прекращает
+    # обработку оставшихся хендлеров внутри той же группы.
+    application.add_handler(command_guard, group=-1)
+    application.add_handler(callback_guard, group=-1)
 
     # Используем partial, чтобы передать auth_manager в обработчики
     registration_conv_handler = ConversationHandler(

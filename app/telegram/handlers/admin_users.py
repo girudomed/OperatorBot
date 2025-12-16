@@ -1,3 +1,5 @@
+# Файл: app/telegram/handlers/admin_users.py
+
 """
 Хендлеры для управления пользователями (approve/decline/block).
 """

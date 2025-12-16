@@ -1,3 +1,5 @@
+# Файл: app/db/repositories/reports.py
+
 """
 Репозиторий для работы с отчетами.
 

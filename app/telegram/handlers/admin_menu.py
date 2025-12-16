@@ -1,3 +1,5 @@
+# Файл: app/telegram/handlers/admin_menu.py
+
 """
 Единая админ-панель с модульной структурой.
 

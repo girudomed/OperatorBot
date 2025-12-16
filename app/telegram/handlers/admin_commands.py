@@ -1,3 +1,5 @@
+# Файл: app/telegram/handlers/admin_commands.py
+
 """
 Быстрые команды для админских действий.
 """

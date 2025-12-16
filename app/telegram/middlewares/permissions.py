@@ -1,3 +1,5 @@
+# Файл: app/telegram/middlewares/permissions.py
+
 """
 Менеджер прав доступа для админ-панели.
 

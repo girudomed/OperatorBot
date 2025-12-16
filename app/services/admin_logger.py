@@ -1,3 +1,5 @@
+# Файл: app/services/admin_logger.py
+
 """
 Admin Action Logger Service.
 

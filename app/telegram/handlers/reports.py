@@ -1,3 +1,5 @@
+# Файл: app/telegram/handlers/reports.py
+
 """
 Telegram хендлер генерации отчетов.
 """

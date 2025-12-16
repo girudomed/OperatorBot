@@ -1,3 +1,5 @@
+# Файл: app/services/openai_service.py
+
 """
 Сервис для взаимодействия с OpenAI API.
 """

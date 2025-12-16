@@ -1,3 +1,5 @@
+# Файл: app/telegram/handlers/admin_stats.py
+
 """
 Хендлер статистики для админ-панели.
 """

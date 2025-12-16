@@ -1,3 +1,5 @@
+# Файл: app/telegram/handlers/dashboard.py
+
 """
 Telegram handlers для Live Dashboard операторов.
 Отображает метрики в реальном времени с возможностью переключения периодов.

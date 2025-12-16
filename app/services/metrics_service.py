@@ -1,3 +1,5 @@
+# Файл: app/services/metrics_service.py
+
 """
 Сервис расчета метрик.
 """

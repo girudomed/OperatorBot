@@ -1,3 +1,5 @@
+# Файл: app/telegram/handlers/admin_admins.py
+
 """
 Хендлеры управления администраторами.
 """

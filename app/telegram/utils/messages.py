@@ -1,3 +1,5 @@
+# Файл: app/telegram/utils/messages.py
+
 """
 Утилиты для безопасной работы с callback-сообщениями.
 """
