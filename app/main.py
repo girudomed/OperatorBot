@@ -251,7 +251,7 @@ async def main():
         logger.info("Регистрация хендлеров...")
 
         context_handler = TypeHandler(Update, user_context_injector)
-        context_handler.block = False
+        context_handler.block = False  # Не блокируем последующие MessageHandler-ы с reply-кнопок
         application.add_handler(context_handler, group=-2)
         
         # Auth

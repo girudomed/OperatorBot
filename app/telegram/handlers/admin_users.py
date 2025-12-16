@@ -5,7 +5,13 @@
 """
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CallbackQueryHandler, ContextTypes, Application
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 from app.db.repositories.admin import AdminRepository
 from app.telegram.middlewares.permissions import PermissionsManager
@@ -33,6 +39,70 @@ class AdminUsersHandler:
         self.notifications = notifications
         self.default_filter = "pending"
         self.page_size = 10
+    
+    @log_async_exceptions
+    async def open_from_keyboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Entry-point для reply-кнопки «👥 Пользователи и роли».
+        Показывает краткую сводку и отдаёт inline-меню управления.
+        """
+        message = update.effective_message
+        user = update.effective_user
+        if not message or not user:
+            return
+        
+        has_access = await self.permissions.can_access_admin_panel(user.id, user.username)
+        if not has_access:
+            await message.reply_text(
+                "❌ У вас нет доступа к управлению пользователями.\n"
+                "Обратитесь к администратору."
+            )
+            logger.warning(
+                "Denied user management via keyboard for %s",
+                describe_user(user),
+            )
+            return
+        
+        try:
+            counters = await self.admin_repo.get_users_counters()
+        except Exception as exc:
+            logger.error(
+                "Не удалось получить сводку пользователей: %s",
+                exc,
+                exc_info=True,
+            )
+            await message.reply_text("❌ Ошибка при загрузке списка пользователей.")
+            return
+        
+        pending = counters.get("pending_users", 0)
+        approved = counters.get("approved_users", 0)
+        blocked = counters.get("blocked_users", 0)
+        total = counters.get("total_users", 0)
+        
+        summary = (
+            "👥 <b>Пользователи и роли</b>\n\n"
+            f"Всего: <b>{total}</b>\n"
+            f"⏳ Pending: <b>{pending}</b>\n"
+            f"✅ Approved: <b>{approved}</b>\n"
+            f"🚫 Blocked: <b>{blocked}</b>\n\n"
+            "Выберите раздел:"
+        )
+        keyboard = [
+            [InlineKeyboardButton(f"⏳ Ожидают ({pending})", callback_data=self._build_list_callback("pending"))],
+            [InlineKeyboardButton(f"✅ Одобренные ({approved})", callback_data=self._build_list_callback("approved"))],
+            [InlineKeyboardButton(f"🚫 Заблокированные ({blocked})", callback_data=self._build_list_callback("blocked"))],
+            [InlineKeyboardButton("◀️ К админ-панели", callback_data="admin:back")],
+        ]
+        
+        await message.reply_text(
+            summary,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        logger.info(
+            "User %s opened user management via keyboard",
+            describe_user(user),
+        )
 
     def _parse_status_page(self, data: str) -> tuple[str, int]:
         parts = data.split(':')
@@ -485,6 +555,14 @@ def register_admin_users_handlers(
     )
     application.add_handler(
         CallbackQueryHandler(handler.handle_unblock, pattern=r"^admin:users:unblock:")
+    )
+
+    # Reply-кнопка «👥 Пользователи и роли»
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(r"^👥 Пользователи и роли$"),
+            handler.open_from_keyboard,
+        )
     )
     
     logger.info("Admin users handlers registered")
