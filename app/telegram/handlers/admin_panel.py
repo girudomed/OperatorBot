@@ -18,6 +18,12 @@ from telegram.ext import (
     Application,
 )
 
+try:  # filters/MessageHandler появились не во всех версиях PTB
+    from telegram.ext import MessageHandler, filters
+except ImportError:  # pragma: no cover - fallback для старых версий
+    MessageHandler = None
+    filters = None
+
 from app.db.repositories.admin import AdminRepository
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.logging_config import get_watchdog_logger
@@ -713,13 +719,14 @@ def register_admin_panel_handlers(
     """Регистрирует хендлеры админ-панели."""
     handler = AdminPanelHandler(admin_repo, permissions)
     
-    # Команда /admin
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(r"^👑 Админ-панель$"),
-            handler.admin_command,
+    # Команда /admin и reply-кнопка (если библиотека поддерживает MessageHandler)
+    if MessageHandler and filters:
+        application.add_handler(
+            MessageHandler(
+                filters.Regex(r"^👑 Админ-панель$"),
+                handler.admin_command,
+            )
         )
-    )
     application.add_handler(CommandHandler("admin", handler.admin_command))
     
     # Callback handlers

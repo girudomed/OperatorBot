@@ -336,7 +336,12 @@ async def main():
         
         # Остановка воркеров и приложения
         if 'application' in locals():
-            await application.updater.stop()
+            updater = getattr(application, "updater", None)
+            if updater:
+                try:
+                    await updater.stop()
+                except RuntimeError as exc:
+                    logger.warning("Updater stop skipped: %s", exc)
             if 'workers_started' in locals() and workers_started:
                 await stop_workers(application)
             await application.stop()
