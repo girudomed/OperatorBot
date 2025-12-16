@@ -91,3 +91,24 @@ class TestMetricsService:
         assert result["missed_calls"] == 20
         assert result["lead_conversion"] == pytest.approx(25.0)
         assert result["cancellations"] == 5
+
+    @pytest.mark.asyncio
+    async def test_calculate_quality_summary_zero_leads(self, service, mock_repo):
+        """Конверсия должна корректно обнуляться при отсутствии лидов."""
+        mock_repo.get_quality_summary.return_value = {
+            "total_calls": 50,
+            "missed_calls": 5,
+            "avg_score": 4.8,
+            "total_leads": 0,
+            "booked_leads": 0,
+            "cancellations": 1,
+        }
+
+        result = await service.calculate_quality_summary(
+            period="daily",
+            start_date=datetime(2025, 2, 1),
+            end_date=datetime(2025, 2, 1),
+        )
+
+        assert result["lead_conversion"] == 0.0
+        assert result["missed_rate"] == pytest.approx(10.0)
