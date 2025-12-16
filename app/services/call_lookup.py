@@ -215,8 +215,8 @@ class CallLookupService:
             FROM call_scores cs
             {join_clause}
             WHERE (
-                {called_expr} LIKE %s
-                OR {caller_expr} LIKE %s
+                {called_expr} COLLATE utf8mb4_general_ci LIKE CAST(%s AS CHAR CHARACTER SET utf8mb4)
+                OR {caller_expr} COLLATE utf8mb4_general_ci LIKE CAST(%s AS CHAR CHARACTER SET utf8mb4)
             )
             AND {call_time_expr} BETWEEN %s AND %s
             ORDER BY {call_time_expr} DESC
