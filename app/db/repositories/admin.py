@@ -166,7 +166,7 @@ class AdminRepository:
         try:
             query = """
                 {base}
-                WHERE u.status = 'pending'
+                WHERE LOWER(u.status) = 'pending'
                 ORDER BY u.id DESC
             """
             rows = await self.db.execute_with_retry(
@@ -274,7 +274,7 @@ class AdminRepository:
             query = """
                 UPDATE UsersTelegaBot
                 SET status = 'approved', approved_by = %s
-                WHERE id = %s AND status = 'pending'
+                WHERE id = %s AND LOWER(status) = 'pending'
             """
             await self.db.execute_with_retry(
                 query, params=(approver_db_id, user_id), commit=True
@@ -434,7 +434,7 @@ class AdminRepository:
                 logger.warning(f"[ADMIN_REPO] Unknown role '{new_role}' for action {action}")
                 return False
             
-            status_clause = "AND status = 'approved'" if only_approved else ""
+            status_clause = "AND LOWER(status) = 'approved'" if only_approved else ""
             query = f"""
                 UPDATE UsersTelegaBot
                 SET role_id = %s
@@ -530,7 +530,7 @@ class AdminRepository:
             placeholders = ', '.join(['%s'] * len(admin_role_ids))
             query = f"""
                 {self.USER_FIELDS_BASE}
-                WHERE u.role_id IN ({placeholders}) AND u.status != 'blocked'
+                WHERE u.role_id IN ({placeholders}) AND LOWER(u.status) != 'blocked'
                 ORDER BY u.role_id DESC, u.full_name
             """
             rows = await self.db.execute_with_retry(
@@ -561,7 +561,7 @@ class AdminRepository:
                 return []
             query = """
                 {base}
-                WHERE u.status = 'approved' AND (u.role_id IS NULL OR u.role_id = %s)
+                WHERE LOWER(u.status) = 'approved' AND (u.role_id IS NULL OR u.role_id = %s)
                 ORDER BY u.id DESC
                 LIMIT %s OFFSET %s
             """
@@ -591,12 +591,13 @@ class AdminRepository:
         
         try:
             if status_filter:
+                normalized = status_filter.strip().lower()
                 query = """
                     {base}
-                    WHERE u.status = %s
+                    WHERE LOWER(u.status) = %s
                     ORDER BY u.id DESC
                 """.format(base=self.USER_FIELDS_BASE)
-                params = (status_filter,)
+                params = (normalized,)
             else:
                 query = """
                     {base}
@@ -628,18 +629,25 @@ class AdminRepository:
         try:
             admin_role_ids = await self._get_admin_role_ids()
             operator_role_id = await self._get_operator_role_id()
-            if not admin_role_ids or operator_role_id is None:
-                logger.warning("[ADMIN_REPO] Не удалось определить роли для подсчёта пользователей")
-                return {}
+            if not admin_role_ids:
+                logger.warning(
+                    "[ADMIN_REPO] Не удалось определить admin роли, используем значения по умолчанию"
+                )
+                admin_role_ids = set(ADMIN_ROLE_IDS)
+            if operator_role_id is None:
+                logger.warning(
+                    "[ADMIN_REPO] Не удалось определить role_id оператора, используем значение по умолчанию"
+                )
+                operator_role_id = ROLE_NAME_TO_ID.get("operator", 1)
             admin_placeholders = ', '.join(['%s'] * len(admin_role_ids))
             query = f"""
                 SELECT 
                     COUNT(*) as total_users,
-                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_users,
-                    SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved_users,
-                    SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) as blocked_users,
-                    SUM(CASE WHEN status = 'approved' AND role_id IN ({admin_placeholders}) THEN 1 ELSE 0 END) as admins_count,
-                    SUM(CASE WHEN status = 'approved' AND role_id = %s THEN 1 ELSE 0 END) as operators_count
+                    SUM(CASE WHEN LOWER(status) = 'pending' THEN 1 ELSE 0 END) as pending_users,
+                    SUM(CASE WHEN LOWER(status) = 'approved' THEN 1 ELSE 0 END) as approved_users,
+                    SUM(CASE WHEN LOWER(status) = 'blocked' THEN 1 ELSE 0 END) as blocked_users,
+                    SUM(CASE WHEN LOWER(status) = 'approved' AND role_id IN ({admin_placeholders}) THEN 1 ELSE 0 END) as admins_count,
+                    SUM(CASE WHEN LOWER(status) = 'approved' AND role_id = %s THEN 1 ELSE 0 END) as operators_count
                 FROM UsersTelegaBot
             """
             params = tuple(admin_role_ids) + (operator_role_id,)
@@ -651,9 +659,9 @@ class AdminRepository:
                 SELECT 
                     role_id,
                     COUNT(*) AS total_count,
-                    SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved_count,
-                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
-                    SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked_count
+                    SUM(CASE WHEN LOWER(status) = 'approved' THEN 1 ELSE 0 END) AS approved_count,
+                    SUM(CASE WHEN LOWER(status) = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+                    SUM(CASE WHEN LOWER(status) = 'blocked' THEN 1 ELSE 0 END) AS blocked_count
                 FROM UsersTelegaBot
                 GROUP BY role_id
             """
@@ -661,18 +669,8 @@ class AdminRepository:
                 role_breakdown_query,
                 fetchall=True,
             ) or []
-            
-            role_breakdown: Dict[str, Dict[str, int]] = {
-                slug: {
-                    'display': self._role_display.get(slug, slug.title()),
-                    'total': 0,
-                    'approved': 0,
-                    'pending': 0,
-                    'blocked': 0,
-                }
-                for slug in self._role_slug_to_id.keys()
-            }
-            
+            role_breakdown: Dict[str, Dict[str, int]] = {}
+
             for role_row in role_rows:
                 slug = self._role_id_to_slug.get(int(role_row.get('role_id', 0)))
                 if not slug:
@@ -758,7 +756,7 @@ class AdminRepository:
 
             query = """
                 {base}
-                WHERE u.status = 'approved' AND u.role_id = %s
+                WHERE LOWER(u.status) = 'approved' AND u.role_id = %s
                 ORDER BY u.id DESC
                 LIMIT %s
             """

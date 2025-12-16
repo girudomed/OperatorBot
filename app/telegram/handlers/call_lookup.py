@@ -7,6 +7,7 @@ Telegram хендлер поиска звонков.
 import re
 from dataclasses import dataclass
 from datetime import datetime
+import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
@@ -76,6 +77,7 @@ def register_call_lookup_handlers(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             handler.handle_phone_input,
+            block=False,
         )
     )
 
@@ -100,6 +102,58 @@ class _CallLookupHandlers:
             "Не удалось выполнить поиск, ошибка конфигурации БД."
         )
         self._pending_key = "call_lookup_pending"
+        self._last_request_key = "call_lookup_last_request"
+
+    @staticmethod
+    def _generate_error_code() -> str:
+        return f"ERR-{uuid.uuid4().hex[:8].upper()}"
+
+    def _format_error_text(self, code: str, base: Optional[str] = None) -> str:
+        text = base or self._error_reply
+        return f"{text}\nКод ошибки: {code}"
+
+    def _limit_callback_data(self, data: str, fallback: str) -> str:
+        try:
+            if len(data.encode("utf-8")) <= 64:
+                return data
+        except Exception:
+            pass
+        logger.warning(
+            "callback_data too long (%s bytes), fallback=%s",
+            len(data.encode("utf-8")) if isinstance(data, str) else "?",
+            fallback,
+        )
+        return fallback
+
+    def _remember_request(
+        self, context: CallbackContext, request: _LookupRequest
+    ) -> None:
+        context.user_data[self._last_request_key] = {
+            "phone": request.phone,
+            "period": request.period,
+            "limit": request.limit,
+        }
+
+    def _restore_request(
+        self,
+        context: CallbackContext,
+        *,
+        offset: int = 0,
+    ) -> Optional[_LookupRequest]:
+        payload = context.user_data.get(self._last_request_key)
+        if not isinstance(payload, dict):
+            return None
+        phone = payload.get("phone")
+        period = payload.get("period")
+        limit = payload.get("limit") or self.service.DEFAULT_LIMIT
+        if not phone or not period:
+            return None
+        return _LookupRequest(
+            phone=str(phone),
+            period=str(period),
+            offset=max(0, int(offset)),
+            limit=int(limit),
+        )
 
     async def _safe_reply_text(
         self,
@@ -196,30 +250,35 @@ class _CallLookupHandlers:
                 exc,
                 exc_info=True,
             )
-            await message.reply_text(f"Ошибка: {exc}")
+            await self._safe_reply_text(message, f"Ошибка: {exc}")
             return
         except Exception:
+            code = self._generate_error_code()
             logger.exception(
-                "Не удалось выполнить /call_lookup для %s",
+                "Не удалось выполнить /call_lookup для %s (code=%s)",
                 describe_user(user),
+                code,
             )
-            await message.reply_text(
-                "Не удалось выполнить поиск, ошибка конфигурации БД."
+            await self._safe_reply_text(
+                message,
+                self._format_error_text(code),
             )
             return
 
+        request = _LookupRequest(
+            phone=response["normalized_phone"],
+            period=period,
+            offset=0,
+            limit=response["limit"],
+        )
         text, markup = self._build_result_message(
             response=response,
             period=period,
-            request=_LookupRequest(
-                phone=response["normalized_phone"],
-                period=period,
-                offset=0,
-                limit=response["limit"],
-            ),
+            request=request,
         )
 
         await self._safe_reply_text(message, text, reply_markup=markup)
+        self._remember_request(context, request)
         logger.info(
             "Пользователь %s получил %s звонков по запросу /call_lookup",
             describe_user(user),
@@ -315,19 +374,19 @@ class _CallLookupHandlers:
                 describe_user(user),
             )
         elif action == "p":
-            if len(parts) < 6:
+            if len(parts) < 3:
                 await query.answer("Некорректные данные", show_alert=True)
                 return
             try:
-                request = _LookupRequest(
-                    phone=parts[5],
-                    period=parts[2],
-                    offset=max(0, int(parts[4])),
-                    limit=max(1, min(int(parts[3]), self.service.MAX_LIMIT)),
-                )
+                offset_value = max(0, int(parts[2]))
             except ValueError:
-                await query.answer("Некорректные параметры", show_alert=True)
+                await query.answer("Некорректный offset", show_alert=True)
                 return
+            restored = self._restore_request(context, offset=offset_value)
+            if not restored:
+                await query.answer("Запрос устарел, выполните поиск заново", show_alert=True)
+                return
+            request = restored
             logger.info(
                 "Call lookup пагинация (%s) пользователем %s",
                 request,
@@ -342,11 +401,16 @@ class _CallLookupHandlers:
                     requesting_user_id=user.id,
                 )
             except Exception:
+                code = self._generate_error_code()
                 logger.exception(
-                    "Ошибка пагинации call_lookup для %s",
+                    "Ошибка пагинации call_lookup для %s (code=%s)",
                     describe_user(user),
+                    code,
                 )
-                await safe_edit_message(query, text=self._error_reply)
+                await safe_edit_message(
+                    query,
+                    text=self._format_error_text(code),
+                )
                 return
             text, markup = self._build_result_message(
                 response=response,
@@ -360,6 +424,7 @@ class _CallLookupHandlers:
                 text=text,
                 markup=markup,
             )
+            self._remember_request(context, request)
         elif action == "t":
             if len(parts) < 3:
                 await query.answer("Некорректные данные", show_alert=True)
@@ -372,12 +437,18 @@ class _CallLookupHandlers:
             try:
                 details = await self.service.fetch_call_details(history_id)
             except Exception:
+                code = self._generate_error_code()
                 logger.exception(
-                    "Ошибка загрузки расшифровки звонка %s от %s",
+                    "Ошибка загрузки расшифровки звонка %s от %s (code=%s)",
                     history_id,
                     describe_user(user),
+                    code,
                 )
-                await self._safe_send_message(context, chat_id, self._error_reply)
+                await self._safe_send_message(
+                    context,
+                    chat_id,
+                    self._format_error_text(code),
+                )
                 return
             details_payload = details or {}
             transcript = details_payload.get("transcript")
@@ -402,12 +473,18 @@ class _CallLookupHandlers:
             try:
                 details = await self.service.fetch_call_details(history_id)
             except Exception:
+                code = self._generate_error_code()
                 logger.exception(
-                    "Ошибка загрузки записи звонка %s от %s",
+                    "Ошибка загрузки записи звонка %s от %s (code=%s)",
                     history_id,
                     describe_user(user),
+                    code,
                 )
-                await self._safe_send_message(context, chat_id, self._error_reply)
+                await self._safe_send_message(
+                    context,
+                    chat_id,
+                    self._format_error_text(code),
+                )
                 return
             details_payload = details or {}
             record_url = details_payload.get("record_url")
@@ -435,7 +512,6 @@ class _CallLookupHandlers:
                 context,
                 chat_id,
                 "Режим поиска звонков закрыт.",
-                reply_markup=ReplyKeyboardRemove(),
             )
     async def handle_phone_input(
         self,
@@ -459,6 +535,9 @@ class _CallLookupHandlers:
             )
             return
 
+        if not re.search(r"\d", phone_text):
+            return
+
         period = pending.get("period", "monthly")
         try:
             response = await self.service.lookup_calls(
@@ -472,11 +551,16 @@ class _CallLookupHandlers:
             await self._safe_reply_text(message, str(exc))
             return
         except Exception:
+            code = self._generate_error_code()
             logger.exception(
-                "Call lookup (interactive) упал у %s",
+                "Call lookup (interactive) упал у %s (code=%s)",
                 describe_user(user),
+                code,
             )
-            await self._safe_reply_text(message, self._error_reply)
+            await self._safe_reply_text(
+                message,
+                self._format_error_text(code),
+            )
             context.user_data.pop(self._pending_key, None)
             return
 
@@ -497,6 +581,7 @@ class _CallLookupHandlers:
             text,
             reply_markup=markup,
         )
+        self._remember_request(context, request)
         context.user_data.pop(self._pending_key, None)
         await self._safe_reply_text(message, "Режим поиска звонков завершён.")
 
@@ -553,14 +638,20 @@ class _CallLookupHandlers:
             row = [
                 InlineKeyboardButton(
                     "Расшифровка",
-                    callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:t:{history_id}",
+                    callback_data=self._limit_callback_data(
+                        f"{CALL_LOOKUP_CALLBACK_PREFIX}:t:{history_id}",
+                        f"{CALL_LOOKUP_CALLBACK_PREFIX}:t:{history_id}",
+                    ),
                 )
             ]
             if item.get("record_url"):
                 row.append(
                     InlineKeyboardButton(
                         "Запись",
-                        callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:r:{history_id}",
+                        callback_data=self._limit_callback_data(
+                            f"{CALL_LOOKUP_CALLBACK_PREFIX}:r:{history_id}",
+                            f"{CALL_LOOKUP_CALLBACK_PREFIX}:r:{history_id}",
+                        ),
                     )
                 )
             keyboard.append(row)
@@ -571,11 +662,9 @@ class _CallLookupHandlers:
             pagination_row.append(
                 InlineKeyboardButton(
                     "⬅️ Назад",
-                    callback_data=self._encode_page_callback(
-                        phone=normalized_phone,
-                        period=period,
-                        offset=prev_offset,
-                        limit=request.limit,
+                    callback_data=self._limit_callback_data(
+                        self._encode_page_callback(offset=prev_offset),
+                        f"{CALL_LOOKUP_CALLBACK_PREFIX}:p:{prev_offset}",
                     ),
                 )
             )
@@ -583,11 +672,11 @@ class _CallLookupHandlers:
             pagination_row.append(
                 InlineKeyboardButton(
                     "➡️ Далее",
-                    callback_data=self._encode_page_callback(
-                        phone=normalized_phone,
-                        period=period,
-                        offset=request.offset + request.limit,
-                        limit=request.limit,
+                    callback_data=self._limit_callback_data(
+                        self._encode_page_callback(
+                            offset=request.offset + request.limit,
+                        ),
+                        f"{CALL_LOOKUP_CALLBACK_PREFIX}:p:{request.offset + request.limit}",
                     ),
                 )
             )
@@ -698,13 +787,10 @@ class _CallLookupHandlers:
     def _encode_page_callback(
         self,
         *,
-        phone: str,
-        period: str,
         offset: int,
-        limit: int,
     ) -> str:
-        safe_phone = re.sub(r"\D+", "", phone or "")
-        return f"{CALL_LOOKUP_CALLBACK_PREFIX}:p:{period}:{limit}:{offset}:{safe_phone}"
+        safe_offset = max(0, int(offset))
+        return f"{CALL_LOOKUP_CALLBACK_PREFIX}:p:{safe_offset}"
 
     @staticmethod
     def _format_datetime(value: Any) -> str:

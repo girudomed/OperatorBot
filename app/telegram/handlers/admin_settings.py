@@ -140,22 +140,6 @@ class AdminSettingsHandler:
                 log_text = "\n".join(tail)
                 break
 
-        if not log_text:
-            await safe_edit_message(
-                query,
-                text="📄 Логи недоступны (файлы не найдены).",
-                reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("◀️ Назад", callback_data="admin:settings")]]
-                ),
-            )
-            return
-
-        escaped = html.escape(log_text)
-        message = (
-            f"📄 <b>Логи</b> ({log_path})\n"
-            f"Последние {MAX_LOG_LINES} строк:\n\n"
-            f"<code>{escaped}</code>"
-        )
         keyboard = InlineKeyboardMarkup(
             [
                 [
@@ -164,21 +148,19 @@ class AdminSettingsHandler:
                 ]
             ]
         )
-        if len(message) > MAX_MESSAGE_CHUNK:
-            await self._send_logs_file(query, log_text, log_path)
+        if not log_text:
             await safe_edit_message(
                 query,
-                text=(
-                    "📄 Логи слишком объёмные для отображения в одном сообщении.\n"
-                    "Файл с логами отправлен отдельно."
-                ),
+                text="📄 Логи недоступны (файлы не найдены).",
                 reply_markup=keyboard,
                 parse_mode="HTML",
             )
             return
+
+        await self._send_logs_file(query, log_text, log_path)
         await safe_edit_message(
             query,
-            text=message,
+            text="📄 Файл с логами отправлен отдельным сообщением.",
             reply_markup=keyboard,
             parse_mode="HTML",
         )

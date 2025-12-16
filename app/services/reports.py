@@ -46,6 +46,10 @@ class ReportService:
             # 2. Get Operator Info
             extension = await self.repo.get_extension_by_user_id(user_id)
             if not extension:
+                logger.warning(
+                    "report: не найден extension для пользователя %s",
+                    user_id,
+                )
                 return "Ошибка: Не удалось найти extension оператора."
             
             name = await self.repo.get_name_by_extension(extension)
@@ -53,6 +57,13 @@ class ReportService:
             # 3. Get Call Data (старая логика для обратной совместимости)
             data = await self.repo.get_call_data(extension, start_date, end_date)
             if not data['call_history'] and not data['call_scores']:
+                logger.warning(
+                    "report: нет данных по звонкам для %s (extension=%s, period=%s-%s)",
+                    user_id,
+                    extension,
+                    start_date,
+                    end_date,
+                )
                 return f"Нет данных для оператора {name} за указанный период."
 
             # 4. Calculate Metrics (старая логика)
@@ -222,6 +233,7 @@ class ReportService:
         if dashboard_metrics:
             total_calls = dashboard_metrics.get('accepted_calls', 0)
             records = dashboard_metrics.get('records_count', 0)
+            leads = dashboard_metrics.get('leads_no_record', 0)
             conversion = dashboard_metrics.get('conversion_rate', 0)
             avg_score = dashboard_metrics.get('avg_score_all', 0)
             avg_score_leads = dashboard_metrics.get('avg_score_leads', 0)
@@ -231,6 +243,7 @@ class ReportService:
         else:
             total_calls = metrics.get('accepted_calls', 0)
             records = metrics.get('booked_services', 0)
+            leads = metrics.get('total_leads', 0)
             conversion = metrics.get('conversion_rate_leads', 0)
             avg_score = metrics.get('avg_call_rating', 0)
             avg_score_leads = avg_score
@@ -248,7 +261,8 @@ class ReportService:
             "",
             "<b>1️⃣ Общая статистика:</b>",
             f"   • Всего звонков: {total_calls}",
-            f"   • Записей: {records}",
+            f"   • Лиды / Записи: {records}",
+            f"   • Лиды без записи: {leads}",
             f"   • Конверсия: <b>{conversion}%</b>",
             "",
             "<b>2️⃣ Качество:</b>",

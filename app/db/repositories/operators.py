@@ -64,6 +64,25 @@ class OperatorRepository:
         rows = await self.db_manager.execute_with_retry(query, (extension,), fetchall=True)
         if rows and rows[0].get('full_name'):
             return rows[0]['full_name']
+
+        legacy_query = """
+            SELECT
+                COALESCE(operator_name, full_name) AS name
+            FROM UsersTelegaBot
+            WHERE extension = %s
+            LIMIT 1
+        """
+        legacy = await self.db_manager.execute_with_retry(
+            legacy_query,
+            (extension,),
+            fetchone=True,
+        )
+        if legacy and legacy.get("name"):
+            return legacy["name"]
+        logger.warning(
+            "[OPERATORS] Не удалось найти имя оператора по extension=%s",
+            extension,
+        )
         return 'Неизвестно'
 
     async def get_call_data(
@@ -170,14 +189,9 @@ class OperatorRepository:
             SELECT
                 COUNT(*) AS total_scored_calls,
                 AVG(cs.call_score) AS avg_score,
-                SUM(
-                    CASE 
-                        WHEN cs.outcome = 'lead_no_record' 
-                             OR cs.call_category LIKE CONCAT('%%', %s, '%%') 
-                        THEN 1 ELSE 0 
-                    END
-                ) AS total_leads,
+                SUM(CASE WHEN cs.outcome = 'lead_no_record' THEN 1 ELSE 0 END) AS leads_no_record,
                 SUM(CASE WHEN cs.outcome = 'record' THEN 1 ELSE 0 END) AS booked_leads,
+                SUM(CASE WHEN cs.outcome IN ('record', 'lead_no_record') THEN 1 ELSE 0 END) AS total_leads,
                 SUM(
                     CASE 
                         WHEN cs.outcome = 'cancel' OR cs.refusal_reason IS NOT NULL 
@@ -186,6 +200,7 @@ class OperatorRepository:
                 ) AS cancellations
             FROM call_scores cs
             WHERE cs.call_date BETWEEN %s AND %s
+              AND cs.is_target = 1
         """
         logger.info(
             f"weekly_quality_report: подсчёт скорингов (scores) за период {start_str} — {end_str}",
@@ -195,7 +210,7 @@ class OperatorRepository:
         try:
             scores_stats = await self.db_manager.execute_with_retry(
                 scores_query,
-                ("Лид", start_str, end_str),
+                (start_str, end_str),
                 fetchone=True,
             ) or {}
         except Exception:
@@ -210,6 +225,7 @@ class OperatorRepository:
             "missed_calls": history_stats.get("missed_calls") or 0,
             "avg_score": scores_stats.get("avg_score") or 0.0,
             "total_leads": scores_stats.get("total_leads") or 0,
+            "leads_no_record": scores_stats.get("leads_no_record") or 0,
             "booked_leads": scores_stats.get("booked_leads") or 0,
             "cancellations": scores_stats.get("cancellations") or 0,
         }

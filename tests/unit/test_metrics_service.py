@@ -75,6 +75,7 @@ class TestMetricsService:
             "missed_calls": 20,
             "avg_score": 4.2,
             "total_leads": 40,
+            "leads_no_record": 30,
             "booked_leads": 10,
             "cancellations": 5,
         }
@@ -100,6 +101,7 @@ class TestMetricsService:
             "missed_calls": 5,
             "avg_score": 4.8,
             "total_leads": 0,
+            "leads_no_record": 0,
             "booked_leads": 0,
             "cancellations": 1,
         }

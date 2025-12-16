@@ -44,10 +44,19 @@ class MetricsService:
 
         stats = await self.repo.get_quality_summary(start_dt, end_dt)
         
-        total_calls = stats.get("total_calls", 0)
-        missed_calls = stats.get("missed_calls", 0)
-        total_leads = stats.get("total_leads", 0)
-        booked_leads = stats.get("booked_leads", 0)
+        total_calls = stats.get("total_calls", 0) or 0
+        missed_calls = stats.get("missed_calls", 0) or 0
+        total_leads = stats.get("total_leads", 0) or 0
+        booked_leads = stats.get("booked_leads", 0) or 0
+        leads_no_record = stats.get("leads_no_record", 0) or 0
+        
+        if total_leads < booked_leads:
+            logger.error(
+                "[METRICS] total_leads < booked_leads detected (total_leads=%s, booked_leads=%s)",
+                total_leads,
+                booked_leads,
+            )
+            total_leads = booked_leads
         
         missed_rate = (missed_calls / total_calls * 100) if total_calls else 0.0
         conversion_rate = (booked_leads / total_leads * 100) if total_leads else 0.0
@@ -61,6 +70,7 @@ class MetricsService:
             "missed_rate": round(missed_rate, 2),
             "avg_score": round(float(stats.get("avg_score", 0.0)), 2),
             "total_leads": int(total_leads),
+            "leads_no_record": int(leads_no_record),
             "booked_leads": int(booked_leads),
             "lead_conversion": round(conversion_rate, 2),
             "cancellations": int(stats.get("cancellations", 0)),

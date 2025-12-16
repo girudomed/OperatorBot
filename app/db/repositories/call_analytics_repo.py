@@ -233,7 +233,7 @@ class CallAnalyticsRepository:
             period_start, period_end = self._normalize_period(date_from, date_to)
             query = """
                 SELECT 
-                    COUNT(*) as total_calls,
+                    COUNT(*) as accepted_calls,
                     SUM(CASE WHEN is_target = 1 AND outcome = 'record' THEN 1 ELSE 0 END) as records,
                     SUM(CASE WHEN is_target = 1 AND outcome = 'lead_no_record' THEN 1 ELSE 0 END) as leads_no_record,
                     SUM(CASE WHEN is_target = 1 AND outcome IN ('record', 'lead_no_record') THEN 1 ELSE 0 END) as wish_to_record,
@@ -269,6 +269,26 @@ class CallAnalyticsRepository:
             # Вычислить производные метрики
             wish_to_record = metrics.get('wish_to_record', 0) or 0
             records = metrics.get('records', 0) or 0
+
+            if wish_to_record < records:
+                logger.error(
+                    "[CALL_ANALYTICS] Data inconsistency: wish_to_record < records "
+                    "(wish_to_record=%s, records=%s)",
+                    wish_to_record,
+                    records,
+                )
+                wish_to_record = records
+
+            if wish_to_record < records:
+                logger.error(
+                    "[CALL_ANALYTICS] Data inconsistency: wish_to_record < records",
+                    extra={
+                        "operator": operator_name,
+                        "wish_to_record": wish_to_record,
+                        "records": records,
+                    },
+                )
+                wish_to_record = records
             
             metrics['conversion_rate'] = (
                 (records / wish_to_record * 100) if wish_to_record > 0 else 0.0
@@ -285,7 +305,7 @@ class CallAnalyticsRepository:
             
             logger.info(
                 f"[CALL_ANALYTICS] Metrics calculated: "
-                f"calls={metrics.get('total_calls')}, "
+                f"calls={metrics.get('accepted_calls')}, "
                 f"conversion={metrics.get('conversion_rate'):.2f}%"
             )
             

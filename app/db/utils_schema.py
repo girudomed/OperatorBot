@@ -11,10 +11,64 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
+from app.logging_config import get_watchdog_logger
+
 from app.config import DB_CONFIG
 from app.db.manager import DatabaseManager
 
 _COLUMN_EXISTS_CACHE: Dict[str, bool] = {}
+logger = get_watchdog_logger(__name__)
+
+REQUIRED_SCHEMA: Dict[str, tuple[str, ...]] = {
+    "UsersTelegaBot": (
+        "id",
+        "user_id",
+        "status",
+        "role_id",
+        "full_name",
+        "username",
+        "extension",
+        "approved_by",
+        "blocked_at",
+        "operator_name",
+    ),
+    "roles_reference": (
+        "role_id",
+        "role_name",
+        "can_manage_users",
+    ),
+    "call_history": (
+        "history_id",
+        "context_start_time_dt",
+        "context_start_time",
+        "caller_number",
+        "called_number",
+        "caller_info",
+        "called_info",
+        "talk_duration",
+        "await_sec",
+        "recording_id",
+        "transcript",
+    ),
+    "call_scores": (
+        "history_id",
+        "call_score",
+        "caller_number",
+        "called_number",
+        "caller_info",
+        "called_info",
+        "call_category",
+        "call_date",
+        "transcript",
+        "outcome",
+        "is_target",
+    ),
+    "users": (
+        "user_id",
+        "extension",
+        "full_name",
+    ),
+}
 
 
 def _col_cache_key(db_name: str, table: str, column: str) -> str:
@@ -58,3 +112,36 @@ async def has_column(
 def clear_schema_cache() -> None:
     """Полностью очищает кэш проверок наличия колонок."""
     _COLUMN_EXISTS_CACHE.clear()
+
+
+async def validate_schema(
+    db_manager: DatabaseManager,
+    *,
+    schema: Optional[Dict[str, tuple[str, ...]]] = None,
+    db_name: Optional[str] = None,
+) -> None:
+    """Проверяет, что необходимые таблицы и колонки существуют в БД."""
+    schema_map = schema or REQUIRED_SCHEMA
+    database_name = db_name or DB_CONFIG.get("db")
+    if not database_name:
+        raise RuntimeError("DATABASE name is not configured")
+
+    missing: list[str] = []
+    for table, columns in schema_map.items():
+        for column in columns:
+            exists = await has_column(db_manager, table, column, database_name)
+            if not exists:
+                missing.append(f"{table}.{column}")
+
+    if missing:
+        msg = (
+            "Несовместимая схема базы данных. Отсутствуют столбцы: "
+            + ", ".join(sorted(missing))
+        )
+        logger.error("[SCHEMA] %s", msg)
+        raise RuntimeError(msg)
+
+    logger.info(
+        "[SCHEMA] Проверка схемы выполнена успешно (таблицы: %s)",
+        ", ".join(sorted(schema_map.keys())),
+    )

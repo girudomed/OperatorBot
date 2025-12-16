@@ -109,29 +109,35 @@ class AdminPanelHandler:
         keyboard = [
             [
                 InlineKeyboardButton(
-                    "📊 LIVE Dashboard", callback_data=self._callback("dashboard")
-                ),
-                InlineKeyboardButton(
-                    "👥 Операторы",
-                    callback_data=self._callback("users", "list", "pending"),
-                ),
+                    "📊 Dashboard", callback_data=self._callback("dashboard")
+                )
             ],
             [
                 InlineKeyboardButton(
-                    "👑 Администраторы",
+                    "👥 Операторы",
+                    callback_data=self._callback("users", "list", "pending"),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "👑 Админы",
                     callback_data=self._callback("admins", "list"),
-                ),
+                )
+            ],
+            [
                 InlineKeyboardButton(
                     "📈 Статистика", callback_data=self._callback("stats")
-                ),
+                )
             ],
             [
                 InlineKeyboardButton(
                     "📂 Расшифровки", callback_data=self._callback("lookup")
-                ),
+                )
+            ],
+            [
                 InlineKeyboardButton(
                     "⚙️ Настройки", callback_data=self._callback("settings")
-                ),
+                )
             ],
         ]
         if allow_commands:
@@ -356,6 +362,12 @@ class AdminPanelHandler:
                     callback_data=self._callback("command", "set_role"),
                 )
             ],
+            [
+                InlineKeyboardButton(
+                    "⚠️ Оповестить о техработах",
+                    callback_data=self._callback("command", "maintenance_alert"),
+                )
+            ],
             [InlineKeyboardButton("◀️ Назад", callback_data=self._callback("back"))],
         ]
         await safe_edit_message(
@@ -411,6 +423,9 @@ class AdminPanelHandler:
                 return
             user_part, role_part = payload.split("|", 1)
             await self._assign_role_from_panel(query, int(user_part), role_part)
+            return
+        if action == "maintenance_alert":
+            await self._send_maintenance_alert(query, context)
             return
         await query.answer("Команда в разработке", show_alert=True)
 
@@ -555,12 +570,16 @@ class AdminPanelHandler:
             await query.answer("Пользователь не найден", show_alert=True)
             return
         roles = await self.permissions.list_roles()
+        seen: set[str] = set()
         actor = query.from_user
         username = actor.username if actor else None
         buttons: List[List[InlineKeyboardButton]] = []
         for role in roles:
             slug = role["slug"]
             display = role["display_name"]
+            if slug in seen:
+                continue
+            seen.add(slug)
             can_assign = (
                 await self.permissions.can_promote(actor.id, slug, username)
                 if actor
@@ -625,6 +644,35 @@ class AdminPanelHandler:
             await query.answer("Не удалось обновить роль", show_alert=True)
         await self._show_set_role_detail(query, user_id)
 
+    async def _send_maintenance_alert(
+        self, query, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        recipients = await self.admin_repo.get_users_with_chat_ids()
+        bot = context.application.bot
+        message = (
+            "⚠️ <b>Внимание!</b>\n"
+            "Ведутся технические работы. Возможны временные перебои в работе бота."
+        )
+        sent = 0
+        for row in recipients:
+            raw_id = row.get("user_id")
+            if not raw_id:
+                continue
+            try:
+                chat_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            try:
+                await bot.send_message(chat_id=chat_id, text=message, parse_mode="HTML")
+                sent += 1
+            except Exception as exc:
+                logger.warning(
+                    "Не удалось отправить оповещение пользователю %s: %s",
+                    chat_id,
+                    exc,
+                )
+        await query.answer(f"Сообщение отправлено ({sent})", show_alert=True)
+
     def _parse_callback(self, data: str) -> Tuple[str, Optional[str], Optional[str]]:
         if not data.startswith(f"{ADMIN_PREFIX}:"):
             return data, None, None
@@ -666,6 +714,12 @@ def register_admin_panel_handlers(
     handler = AdminPanelHandler(admin_repo, permissions)
     
     # Команда /admin
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(r"^👑 Админ-панель$"),
+            handler.admin_command,
+        )
+    )
     application.add_handler(CommandHandler("admin", handler.admin_command))
     
     # Callback handlers

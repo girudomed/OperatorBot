@@ -29,6 +29,7 @@ from app.utils.error_handlers import (
 )
 
 from app.db.manager import DatabaseManager
+from app.db.utils_schema import validate_schema
 from app.telegram.middlewares.permissions import PermissionsManager
 
 # Сервисы
@@ -43,6 +44,7 @@ from app.telegram.handlers.call_lookup import register_call_lookup_handlers
 from app.telegram.handlers.weekly_quality import register_weekly_quality_handlers
 from app.telegram.handlers.reports import register_report_handlers
 from app.telegram.handlers.system_menu import register_system_handlers
+from app.telegram.handlers.manual import register_manual_handlers
 
 # Воркеры
 from app.workers.task_worker import start_workers, stop_workers
@@ -169,6 +171,7 @@ async def main():
     db_manager = DatabaseManager()
     await db_manager.create_pool()
     logger.info("Пул соединений с БД создан.")
+    await validate_schema(db_manager)
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -259,9 +262,10 @@ async def main():
         
         # Reports (/report)
         register_report_handlers(application, report_service, permissions_manager, db_manager)
-        
+
         # Системное меню и кнопка помощи
         register_system_handlers(application, db_manager, permissions_manager)
+        register_manual_handlers(application)
 
         await set_bot_commands(application)
 

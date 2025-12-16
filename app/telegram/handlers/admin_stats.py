@@ -70,7 +70,8 @@ class AdminStatsHandler:
             f"❌ Пропущено: {quality_summary.get('missed_calls', 0)} "
             f"({quality_summary.get('missed_rate', 0):.1f}%)\n"
             f"⭐ Средний скор: {quality_summary.get('avg_score', 0):.1f}\n"
-            f"🎯 Лидов: {quality_summary.get('total_leads', 0)}\n"
+            f"🎯 Лиды / Записи: {quality_summary.get('booked_leads', 0)}\n"
+            f"🟡 Лиды без записи: {quality_summary.get('leads_no_record', 0)}\n"
             f"✅ Конверсия: {quality_summary.get('lead_conversion', 0):.1f}%\n"
             f"♻️ Отмен: {quality_summary.get('cancellations', 0)}"
         )

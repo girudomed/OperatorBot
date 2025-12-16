@@ -59,12 +59,16 @@ class KeyboardBuilder:
         if perms.get('can_manage_users'):
             keyboard.append([KeyboardButton("👥 Пользователи и роли")])
         
+        if is_supreme or is_dev or perms.get('can_manage_users'):
+            keyboard.append([KeyboardButton("👑 Админ-панель")])
+        
         # Системные функции только для Dev/SuperAdmin
         if is_supreme or is_dev or perms.get('can_debug'):
             keyboard.append([KeyboardButton("⚙️ Система")])
         
         # Всегда добавляем помощь
         keyboard.append([KeyboardButton("ℹ️ Помощь")])
+        keyboard.append([KeyboardButton("📘 Мануал")])
         
         return ReplyKeyboardMarkup(
             keyboard,

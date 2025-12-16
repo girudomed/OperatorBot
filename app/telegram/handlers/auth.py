@@ -7,7 +7,12 @@ Telegram хендлеры авторизации и регистрации.
 import time
 from functools import partial
 
-from telegram import Update, ReplyKeyboardMarkup
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from typing import List, Optional
 
 from telegram.ext import (
@@ -34,6 +39,7 @@ from app.db.repositories.users import UserRepository
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.logging_config import get_watchdog_logger
 from app.telegram.utils.logging import describe_user
+from app.config import SUPREME_ADMIN_ID, DEV_ADMIN_ID
 
 logger = get_watchdog_logger(__name__)
 
@@ -345,6 +351,20 @@ async def help_command(update: Update, context: CallbackContext, permissions: Pe
         parse_mode='HTML'
     )
 
+    bug_markup = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "Сообщить об ошибке", callback_data="help_bug"
+                )
+            ]
+        ]
+    )
+    await message.reply_text(
+        "Если вы столкнулись с проблемой, нажмите кнопку и опишите её сообщением.",
+        reply_markup=bug_markup,
+    )
+
 
 def setup_auth_handlers(application, db_manager: DatabaseManager, permissions_manager: PermissionsManager):
     """Функция для добавления всех обработчиков аутентификации в приложение."""
@@ -380,6 +400,19 @@ def setup_auth_handlers(application, db_manager: DatabaseManager, permissions_ma
 
     application.add_handler(registration_conv_handler)
     application.add_handler(CommandHandler('help', partial(help_command, permissions=permissions_manager)))
+    application.add_handler(
+        CallbackQueryHandler(
+            partial(help_bug_callback, permissions=permissions_manager),
+            pattern=r"^help_bug$",
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            partial(help_bug_message, permissions=permissions_manager),
+            block=False,
+        )
+    )
     logger.info("Хендлеры авторизации зарегистрированы.")
 
 
@@ -520,3 +553,75 @@ def _format_commands_for_role(role: str) -> str:
         description = COMMAND_DESCRIPTIONS.get(cmd, "Команда")
         lines.append(f"/{cmd} — {description}")
     return "\n".join(lines)
+
+
+async def help_bug_callback(
+    update: Update, context: CallbackContext, permissions: PermissionsManager
+) -> None:
+    query = update.callback_query
+    user = update.effective_user
+    if not query or not user:
+        return
+    await query.answer()
+
+    status = await permissions.get_user_status(user.id)
+    if status != "approved" and not (
+        permissions.is_supreme_admin(user.id, user.username)
+        or permissions.is_dev_admin(user.id, user.username)
+    ):
+        await query.answer("Доступно только утверждённым пользователям.", show_alert=True)
+        return
+
+    context.user_data[BUG_REPORT_KEY] = True
+    await query.message.reply_text(
+        "Опишите проблему одним сообщением. Напишите «Отмена», чтобы отменить отправку.",
+    )
+
+
+async def help_bug_message(
+    update: Update, context: CallbackContext, permissions: PermissionsManager
+) -> None:
+    if not context.user_data.get(BUG_REPORT_KEY):
+        return
+    message = update.effective_message
+    user = update.effective_user
+    if not message or not user:
+        return
+    text = (message.text or "").strip()
+    if not text:
+        return
+
+    if text.lower() in {"отмена", "cancel", "stop"}:
+        context.user_data.pop(BUG_REPORT_KEY, None)
+        await message.reply_text("Отправка сообщения отменена.")
+        return
+
+    recipients = set()
+    for raw in (SUPREME_ADMIN_ID, DEV_ADMIN_ID):
+        if not raw:
+            continue
+        try:
+            recipients.add(int(raw))
+        except (TypeError, ValueError):
+            continue
+
+    info = describe_user(user)
+    payload = (
+        "🐞 <b>Сообщение об ошибке</b>\n"
+        f"От: {info}\n\n"
+        f"{text}"
+    )
+    sent = 0
+    for chat_id in recipients:
+        try:
+            await context.bot.send_message(chat_id=chat_id, text=payload, parse_mode="HTML")
+            sent += 1
+        except Exception as exc:
+            logger.warning("Не удалось отправить баг-репорт %s: %s", chat_id, exc)
+
+    context.user_data.pop(BUG_REPORT_KEY, None)
+    if sent:
+        await message.reply_text("Спасибо! Сообщение отправлено разработчикам.")
+    else:
+        await message.reply_text("Не удалось доставить сообщение разработчикам.")
+BUG_REPORT_KEY = "help_bug_pending"

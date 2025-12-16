@@ -304,8 +304,16 @@ class PermissionsManager:
             return None
         return role, status
 
+    @staticmethod
+    def _normalize_status_value(status: Optional[str]) -> Optional[str]:
+        if status is None:
+            return None
+        normalized = status.strip().lower()
+        return normalized or None
+
     def _set_cache_entry(self, user_id: int, role: Optional[Role], status: Optional[Status]) -> None:
-        self._user_cache[user_id] = (role, status, time.monotonic())
+        normalized = self._normalize_status_value(status)
+        self._user_cache[user_id] = (role, normalized, time.monotonic())
 
     async def _role_slug_from_id(self, role_id: Optional[int]) -> Role:
         await self._ensure_roles_loaded()
@@ -346,12 +354,12 @@ class PermissionsManager:
                 logger.debug(f"User {user_id} not found in DB")
                 return None
             
-            status = row.get('status')
+            status = self._normalize_status_value(row.get('status'))
             role = await self._role_slug_from_id(row.get('role_id'))
             self._set_cache_entry(user_id, role, status)
 
             if status != 'approved':
-                logger.debug(f"User {user_id} status is {row.get('status')}, not approved")
+                logger.debug(f"User {user_id} status is {status}, not approved")
                 return None
             
             return role
@@ -384,7 +392,7 @@ class PermissionsManager:
             row = await self.db_manager.execute_with_retry(
                 query, params=(user_id, user_id, user_id), fetchone=True
             )
-            status = row.get('status') if row else None
+            status = self._normalize_status_value(row.get('status') if row else None)
             self._set_cache_entry(user_id, None, status)
             return status
         except Exception as e:
