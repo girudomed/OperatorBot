@@ -33,10 +33,11 @@ class ReportService:
 
     @log_async_exceptions
     async def generate_report(
-        self, 
-        user_id: int, 
-        period: str = 'daily', 
-        date_range: Optional[str] = None
+        self,
+        user_id: int,
+        period: str = 'daily',
+        date_range: Optional[str] = None,
+        extension: Optional[str] = None,
     ) -> str:
         try:
             # 1. Resolve Dates
@@ -44,23 +45,23 @@ class ReportService:
             logger.info(f"Генерация отчета для {user_id} за {start_date} - {end_date}")
 
             # 2. Get Operator Info
-            extension = await self.repo.get_extension_by_user_id(user_id)
-            if not extension:
+            resolved_extension = extension or await self.repo.get_extension_by_user_id(user_id)
+            if not resolved_extension:
                 logger.warning(
                     "report: не найден extension для пользователя %s",
                     user_id,
                 )
                 return "Ошибка: Не удалось найти extension оператора."
             
-            name = await self.repo.get_name_by_extension(extension)
+            name = await self.repo.get_name_by_extension(resolved_extension)
 
             # 3. Get Call Data (старая логика для обратной совместимости)
-            data = await self.repo.get_call_data(extension, start_date, end_date)
+            data = await self.repo.get_call_data(resolved_extension, start_date, end_date)
             if not data['call_history'] and not data['call_scores']:
                 logger.warning(
                     "report: нет данных по звонкам для %s (extension=%s, period=%s-%s)",
                     user_id,
-                    extension,
+                    resolved_extension,
                     start_date,
                     end_date,
                 )
@@ -70,7 +71,7 @@ class ReportService:
             metrics = await self.metrics_service.calculate_operator_metrics(
                 call_history_data=data['call_history'],
                 call_scores_data=data['call_scores'],
-                extension=extension,
+                extension=resolved_extension,
                 start_date=start_date,
                 end_date=end_date
             )

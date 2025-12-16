@@ -4,6 +4,8 @@
 Быстрые команды для админских действий.
 """
 
+from __future__ import annotations
+
 from typing import List, Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update

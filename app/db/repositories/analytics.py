@@ -5,6 +5,8 @@ Repository для аналитики операторов и расчета ме
 Реализует методы согласно документу МЛ_РАСЧЕТЫ.
 """
 
+from __future__ import annotations
+
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import date, datetime, timedelta, time
 

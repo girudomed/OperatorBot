@@ -7,6 +7,8 @@
 Просто предоставляет красивый интерфейс вместо помойки команд.
 """
 
+from __future__ import annotations
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 

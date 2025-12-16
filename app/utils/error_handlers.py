@@ -12,10 +12,17 @@ import functools
 import sys
 import traceback
 from itertools import chain
-from typing import Any, Callable, Dict, Optional, TypeVar, cast
+from typing import Any, Awaitable, Callable, Dict, Optional, TypeVar, cast
 
 from telegram import Update
-from watch_dog import get_watchdog_logger
+
+from app.logging_config import (
+    bind_trace_id,
+    generate_trace_id,
+    get_trace_id,
+    get_watchdog_logger,
+    reset_trace_id,
+)
 
 # Используем watch_dog для всех логов
 logger = get_watchdog_logger(__name__)
@@ -23,11 +30,16 @@ logger = get_watchdog_logger(__name__)
 # Type variable для правильной типизации декораторов
 F = TypeVar('F', bound=Callable[..., Any])
 
+_loop_exception_handler: Optional[
+    Callable[[asyncio.AbstractEventLoop, Dict[str, Any]], None]
+] = None
+
 
 def setup_global_exception_handlers():
     """
     Настройка глобальных обработчиков исключений для sync и async кода.
     """
+    global _loop_exception_handler
     # Обработчик необработанных исключений (sync)
     def handle_exception(exc_type, exc_value, exc_traceback):
         if issubclass(exc_type, KeyboardInterrupt):
@@ -65,8 +77,8 @@ def setup_global_exception_handlers():
                 f"Async error: {message}",
                 extra={"context": str(context)}
             )
-    
-    # Устанавливаем обработчик для текущего event loop
+    _loop_exception_handler = handle_async_exception
+
     try:
         loop = asyncio.get_event_loop()
         loop.set_exception_handler(handle_async_exception)
@@ -78,7 +90,22 @@ def setup_global_exception_handlers():
             exc_info=True,
         )
     
-logger.info("Глобальные обработчики исключений установлены")
+    logger.info("Глобальные обработчики исключений установлены")
+
+
+def install_loop_exception_handler(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
+    """
+    Привязывает обработчик асинхронных исключений к конкретному event loop.
+    """
+    if _loop_exception_handler is None:
+        return
+    target_loop = loop
+    if target_loop is None:
+        try:
+            target_loop = asyncio.get_event_loop()
+        except RuntimeError:
+            return
+    target_loop.set_exception_handler(_loop_exception_handler)
 
 
 def _find_update_in_args(args: tuple, kwargs: dict) -> Optional[Update]:
@@ -138,6 +165,9 @@ def _build_update_context(update: Optional[Update]) -> Dict[str, Any]:
     context["handler_type"] = handler_type
     if command_or_callback:
         context["command_or_callback"] = command_or_callback
+    current_trace = get_trace_id()
+    if current_trace:
+        context["trace_id"] = current_trace
     return context
 
 
@@ -197,6 +227,7 @@ def log_exceptions(func: F) -> F:
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
+        token = bind_trace_id(generate_trace_id("sync"))
         try:
             return func(*args, **kwargs)
         except Exception as e:
@@ -222,6 +253,8 @@ def log_exceptions(func: F) -> F:
                 }
             )
             raise
+        finally:
+            reset_trace_id(token)
     
     return cast(F, wrapper)
 
@@ -237,6 +270,7 @@ def log_async_exceptions(func: F) -> F:
     """
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
+        token = bind_trace_id(generate_trace_id("tg"))
         try:
             return await func(*args, **kwargs)
         except asyncio.CancelledError:
@@ -278,6 +312,8 @@ def log_async_exceptions(func: F) -> F:
             )
             await _notify_user_about_error(update, error_category)
             raise
+        finally:
+            reset_trace_id(token)
     
     return cast(F, wrapper)
 
@@ -329,6 +365,35 @@ async def safe_async_execute(coro_func: Callable, *args, **kwargs) -> Optional[A
             }
         )
         return None
+
+
+async def safe_job(job_name: str, job_func: Callable[[], Awaitable[Any]]) -> None:
+    """
+    Выполняет задачу планировщика с единым логированием и trace_id.
+    
+    Использование (apscheduler):
+        scheduler.add_job(safe_job, args=("weekly_report", my_async_job))
+    """
+    token = bind_trace_id(generate_trace_id(f"job-{job_name}"))
+    logger.info("Старт фоновой задачи", extra={"job_name": job_name})
+    try:
+        await job_func()
+        logger.info("Фоновая задача завершена", extra={"job_name": job_name})
+    except asyncio.CancelledError:
+        logger.warning("Фоновая задача отменена", extra={"job_name": job_name})
+        raise
+    except Exception as exc:
+        logger.error(
+            "Ошибка в фоновой задаче",
+            exc_info=True,
+            extra={
+                "job_name": job_name,
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            },
+        )
+    finally:
+        reset_trace_id(token)
 
 
 class ErrorContext:

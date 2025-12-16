@@ -63,11 +63,9 @@ class AdminRepository:
         self._roles_loaded = False
         self._role_slug_to_id: Dict[str, int] = dict(ROLE_NAME_TO_ID)
         self._role_id_to_slug: Dict[int, str] = dict(ROLE_ID_TO_NAME)
-        self._role_display: Dict[str, str] = {
-            slug: slug.replace("_", " ").title()
-            for slug in self._role_slug_to_id.keys()
-        }
+        self._role_display: Dict[str, str] = {}
         self._admin_role_ids: Set[int] = set(ADMIN_ROLE_IDS)
+        self._operator_role_id: Optional[int] = ROLE_NAME_TO_ID.get("operator")
 
     def _attach_role_names(self, rows: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
         """Добавляет название роли к каждой записи."""
@@ -89,7 +87,9 @@ class AdminRepository:
     def _build_role_payload(self, row: Dict[str, Any]) -> Dict[str, Any]:
         role_id = row.get("role_id")
         slug = row.get("role_slug") or role_name_from_id(role_id)
-        display_name = role_display_name_from_name(slug) if slug else "Role"
+        display_name = self._role_display.get(self._normalize_role_slug(row.get("role_slug"))) if isinstance(row.get("role_slug"), str) else None
+        if not display_name:
+            display_name = self._role_display.get(slug) or row.get("role_slug") or role_display_name_from_name(slug)
         return {
             "id": role_id,
             "slug": slug,
@@ -122,11 +122,18 @@ class AdminRepository:
                 admin_ids: Set[int] = set()
                 for row in rows:
                     role_id = int(row.get("role_id"))
-                    slug = self._normalize_role_slug(row.get("role_name"))
-                    display_name = role_display_name_from_name(slug) if slug else f"Role {role_id}"
-                    slug_to_id[slug] = role_id
-                    id_to_slug[role_id] = slug
-                    display[slug] = display_name
+                    raw_name = (row.get("role_name") or "").strip() or f"Role {role_id}"
+                    normalized = self._normalize_role_slug(raw_name)
+                    alias = ROLE_ID_TO_NAME.get(role_id)
+                    primary_slug = alias or normalized
+                    slug_to_id[primary_slug] = role_id
+                    id_to_slug[role_id] = primary_slug
+                    display[primary_slug] = raw_name
+                    if normalized != primary_slug:
+                        slug_to_id.setdefault(normalized, role_id)
+                        display.setdefault(normalized, raw_name)
+                    if alias == "operator":
+                        self._operator_role_id = role_id
                     if bool(row.get("can_manage_users")):
                         admin_ids.add(role_id)
                 if slug_to_id:
@@ -150,12 +157,17 @@ class AdminRepository:
 
     async def _get_admin_role_ids(self) -> Set[int]:
         await self._load_roles()
-        if self._admin_role_ids:
-            return set(self._admin_role_ids)
-        return set(ADMIN_ROLE_IDS)
+        if not self._admin_role_ids:
+            logger.error("[ADMIN_REPO] Не удалось определить admin роли — roles_reference пустая")
+            raise RuntimeError("admin roles undefined")
+        return set(self._admin_role_ids)
 
     async def _get_operator_role_id(self) -> Optional[int]:
-        return await self._get_role_id_by_slug("operator")
+        await self._load_roles()
+        if self._operator_role_id is None:
+            logger.error("[ADMIN_REPO] Не удалось определить role_id оператора: нет роли с alias 'operator'")
+            raise RuntimeError("operator role undefined")
+        return self._operator_role_id
 
     
     @log_async_exceptions
@@ -629,16 +641,6 @@ class AdminRepository:
         try:
             admin_role_ids = await self._get_admin_role_ids()
             operator_role_id = await self._get_operator_role_id()
-            if not admin_role_ids:
-                logger.warning(
-                    "[ADMIN_REPO] Не удалось определить admin роли, используем значения по умолчанию"
-                )
-                admin_role_ids = set(ADMIN_ROLE_IDS)
-            if operator_role_id is None:
-                logger.warning(
-                    "[ADMIN_REPO] Не удалось определить role_id оператора, используем значение по умолчанию"
-                )
-                operator_role_id = ROLE_NAME_TO_ID.get("operator", 1)
             admin_placeholders = ', '.join(['%s'] * len(admin_role_ids))
             query = f"""
                 SELECT 
@@ -672,21 +674,27 @@ class AdminRepository:
             role_breakdown: Dict[str, Dict[str, int]] = {}
 
             for role_row in role_rows:
-                slug = self._role_id_to_slug.get(int(role_row.get('role_id', 0)))
-                if not slug:
-                    slug = role_name_from_id(role_row.get('role_id'))
-                if slug not in role_breakdown:
-                    role_breakdown[slug] = {
-                        'display': self._role_display.get(slug, slug.title()),
-                        'total': 0,
-                        'approved': 0,
-                        'pending': 0,
-                        'blocked': 0,
-                    }
-                role_breakdown[slug]['total'] = int(role_row.get('total_count') or 0)
-                role_breakdown[slug]['approved'] = int(role_row.get('approved_count') or 0)
-                role_breakdown[slug]['pending'] = int(role_row.get('pending_count') or 0)
-                role_breakdown[slug]['blocked'] = int(role_row.get('blocked_count') or 0)
+                role_id_raw = role_row.get('role_id')
+                if role_id_raw is None:
+                    continue
+                role_id = int(role_id_raw)
+                canonical_slug = ROLE_ID_TO_NAME.get(role_id)
+                slug = self._role_id_to_slug.get(role_id)
+                key = canonical_slug or slug or f"role_{role_id}"
+                display_name = None
+                if slug and slug in self._role_display:
+                    display_name = self._role_display[slug]
+                if not display_name and canonical_slug and canonical_slug in self._role_display:
+                    display_name = self._role_display[canonical_slug]
+                if not display_name:
+                    display_name = key.replace("_", " ").title()
+                role_breakdown[key] = {
+                    'display': display_name,
+                    'total': int(role_row.get('total_count') or 0),
+                    'approved': int(role_row.get('approved_count') or 0),
+                    'pending': int(role_row.get('pending_count') or 0),
+                    'blocked': int(role_row.get('blocked_count') or 0),
+                }
             
             admins_approved = sum(
                 role_breakdown.get(slug, {}).get('approved', 0)

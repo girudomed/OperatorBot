@@ -161,11 +161,12 @@ class _ReportHandler:
             return
 
         if action == "select":
-            if len(parts) < 3:
+            if len(parts) < 4:
                 await query.answer("Некорректные данные", show_alert=True)
                 return
             try:
                 target_user_id = int(parts[2])
+                extension = parts[3]
             except ValueError:
                 await query.answer("Некорректный оператор", show_alert=True)
                 return
@@ -186,6 +187,7 @@ class _ReportHandler:
                 header="Генерация отчёта…",
                 period=period,
                 date_range=date_range,
+                extension=extension,
             )
 
     async def _show_operator_keyboard(self, target, page: int = 0, edit: bool = False):
@@ -226,18 +228,18 @@ class _ReportHandler:
         keyboard: List[List[InlineKeyboardButton]] = []
         for operator in page_items:
             target_user_id = operator.get("user_id")
-            if not target_user_id:
+            extension = operator.get("extension")
+            if not target_user_id or not extension:
                 continue
-            name = operator.get("full_name") or operator.get("username") or "Без имени"
-            ext = operator.get("extension")
+            name = operator.get("full_name") or operator.get("username") or f"ext {extension}"
             status = operator.get("status")
-            label = f"{name}" + (f" ({ext})" if ext else "")
+            label = f"{name} ({extension})"
             if status and status != "approved":
                 label += f" [{status}]"
             keyboard.append([
                 InlineKeyboardButton(
                     label[:64],
-                    callback_data=f"{REPORT_CALLBACK_PREFIX}:select:{target_user_id}",
+                    callback_data=f"{REPORT_CALLBACK_PREFIX}:select:{target_user_id}:{extension}",
                 )
             ])
 
@@ -287,6 +289,7 @@ class _ReportHandler:
         header: str,
         period: str,
         date_range: Optional[str],
+        extension: Optional[str] = None,
     ):
         try:
             operator_info = await self.operator_repo.get_operator_info_by_user_id(
@@ -306,8 +309,9 @@ class _ReportHandler:
             )
             return
 
-        operator_name = operator_info.get("full_name") or operator_info.get("username") or f"оператор {target_user_id}"
-        if not operator_info.get("extension"):
+        operator_extension = operator_info.get("extension") or extension
+        operator_name = operator_info.get("full_name") or operator_info.get("username") or operator_extension or f"оператор {target_user_id}"
+        if not operator_extension:
             await bot.send_message(
                 chat_id=chat_id,
                 text=f"Для {operator_name} не указан extension — отчёт недоступен.",
@@ -320,6 +324,7 @@ class _ReportHandler:
                 user_id=target_user_id,
                 period=period,
                 date_range=date_range,
+                extension=operator_extension,
             )
 
             if not report:

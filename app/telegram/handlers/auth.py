@@ -4,6 +4,8 @@
 Telegram хендлеры авторизации и регистрации.
 """
 
+from __future__ import annotations
+
 import time
 from functools import partial
 

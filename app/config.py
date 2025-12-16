@@ -6,6 +6,8 @@
 Загружает переменные окружения и предоставляет конфигурационные параметры.
 """
 
+from __future__ import annotations
+
 import os
 from dotenv import load_dotenv
 from typing import Dict, Any

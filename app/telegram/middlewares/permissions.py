@@ -8,6 +8,8 @@
 Поддерживает Supreme Admin и Dev Admin из конфигурации.
 """
 
+from __future__ import annotations
+
 import asyncio
 import time
 from copy import deepcopy
@@ -15,7 +17,7 @@ from typing import Optional, Dict, Set, Tuple, Any, Literal, List
 from app.db.manager import DatabaseManager
 from app.logging_config import get_watchdog_logger
 from app.config import SUPREME_ADMIN_ID, SUPREME_ADMIN_USERNAME, DEV_ADMIN_ID, DEV_ADMIN_USERNAME
-from app.core.roles import role_display_name_from_name
+from app.core.roles import role_display_name_from_name, ROLE_ID_TO_NAME
 logger = get_watchdog_logger(__name__)
 
 
@@ -257,16 +259,30 @@ class PermissionsManager:
                 matrix: Dict[int, Dict[str, Any]] = {}
                 for row in rows:
                     role_id = int(row.get("role_id"))
-                    slug = self._normalize_slug(row.get("slug")) or f"role_{role_id}"
-                    display_name = role_display_name_from_name(slug) if slug else slug
-                    app_perm = DEFAULT_APP_PERMISSIONS.get(slug, {"call_lookup"})
+                    raw_name = (row.get("slug") or "").strip()
+                    alias = ROLE_ID_TO_NAME.get(role_id)
+                    slug = alias or self._normalize_slug(raw_name) or f"role_{role_id}"
+                    display_name = raw_name or role_display_name_from_name(slug)
+                    can_view_all_stats = bool(row.get("can_view_all_stats"))
+                    can_manage_users = bool(row.get("can_manage_users"))
+                    can_debug = bool(row.get("can_debug"))
+                    can_view_own_stats = bool(row.get("can_view_own_stats"))
+                    app_perm: Set[str] = {"call_lookup", "weekly_quality"}
+                    if can_view_own_stats:
+                        app_perm.add("report")
+                    if can_view_all_stats:
+                        app_perm.update({"all_stats", "report"})
+                    if can_manage_users:
+                        app_perm.update({"admin_panel", "user_management", "manage_roles"})
+                    if can_debug:
+                        app_perm.add("debug")
                     matrix[role_id] = {
                         "slug": slug,
-                        "display_name": display_name,
-                        "can_view_own_stats": bool(row.get("can_view_own_stats")),
-                        "can_view_all_stats": bool(row.get("can_view_all_stats")),
-                        "can_manage_users": bool(row.get("can_manage_users")),
-                        "can_debug": bool(row.get("can_debug")),
+                        "display_name": display_name or slug.replace("_", " ").title(),
+                        "can_view_own_stats": can_view_own_stats,
+                        "can_view_all_stats": can_view_all_stats,
+                        "can_manage_users": can_manage_users,
+                        "can_debug": can_debug,
                         "app_permissions": set(app_perm),
                     }
                 self._set_role_matrix(matrix)

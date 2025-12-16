@@ -6,6 +6,8 @@ Telegram handlers для Live Dashboard операторов.
 Полное логирование всех действий пользователя и бизнес-логики.
 """
 
+from __future__ import annotations
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 import traceback

@@ -101,11 +101,16 @@ class OperatorRepository:
 
         # Call History
         history_query = """
-        SELECT history_id, called_info, context_start_time, talk_duration
-        FROM call_history
+        SELECT 
+            ch.history_id, 
+            ch.called_info, 
+            ch.context_start_time, 
+            ch.talk_duration,
+            ch.answered_extension
+        FROM mangoapi_db.call_history ch
         WHERE 
-            called_info LIKE CONCAT(%s, '%%')
-            AND context_start_time BETWEEN %s AND %s
+            ch.answered_extension = %s
+            AND ch.context_start_time BETWEEN %s AND %s
         """
         history_rows = await self.db_manager.execute_with_retry(
             history_query, 
@@ -115,11 +120,19 @@ class OperatorRepository:
 
         # Call Scores
         scores_query = """
-        SELECT history_id, called_info, call_date, talk_duration, call_category, call_score, result
-        FROM call_scores
+        SELECT 
+            cs.history_id, 
+            cs.called_info, 
+            cs.call_date, 
+            cs.talk_duration, 
+            cs.call_category, 
+            cs.call_score, 
+            cs.result
+        FROM mangoapi_db.call_scores cs
+        INNER JOIN mangoapi_db.call_history ch ON ch.history_id = cs.history_id
         WHERE 
-            called_info LIKE CONCAT(%s, '%%')
-            AND call_date BETWEEN %s AND %s
+            ch.answered_extension = %s
+            AND cs.call_date BETWEEN %s AND %s
         """
         scores_rows = await self.db_manager.execute_with_retry(
             scores_query, 

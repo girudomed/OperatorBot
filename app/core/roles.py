@@ -13,6 +13,8 @@
     7 - marketing_director
 """
 
+from __future__ import annotations
+
 from typing import Dict, Optional, Tuple, Union, Any
 from dataclasses import dataclass
 

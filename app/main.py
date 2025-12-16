@@ -4,6 +4,8 @@
 Главный модуль приложения.
 """
 
+from __future__ import annotations
+
 import asyncio
 import fcntl
 import sys
@@ -19,13 +21,15 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
-from app.logging_config import setup_watchdog, get_watchdog_logger
+from app.logging_config import get_trace_id, setup_watchdog, get_watchdog_logger
 
 # Импортируем error handlers для установки глобальных обработчиков
 from app.utils.error_handlers import (
-    setup_global_exception_handlers,
+    ErrorContext,
+    install_loop_exception_handler,
     log_async_exceptions,
-    ErrorContext
+    safe_job,
+    setup_global_exception_handlers,
 )
 
 from app.db.manager import DatabaseManager
@@ -45,6 +49,7 @@ from app.telegram.handlers.weekly_quality import register_weekly_quality_handler
 from app.telegram.handlers.reports import register_report_handlers
 from app.telegram.handlers.system_menu import register_system_handlers
 from app.telegram.handlers.manual import register_manual_handlers
+from app.telegram.handlers.transcripts import TranscriptHandler
 
 # Воркеры
 from app.workers.task_worker import start_workers, stop_workers
@@ -96,6 +101,7 @@ async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_T
             "user_id": user.id if user else None,
             "username": user.username if user else None,
             "chat_id": chat.id if chat else None,
+            "trace_id": get_trace_id(),
         },
     )
     if update_obj:
@@ -175,6 +181,7 @@ async def main():
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
+    install_loop_exception_handler(loop)
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, stop_event.set)
@@ -262,6 +269,11 @@ async def main():
         
         # Reports (/report)
         register_report_handlers(application, report_service, permissions_manager, db_manager)
+        
+        # Transcripts (/transcript)
+        transcript_handler = TranscriptHandler(db_manager)
+        for handler in transcript_handler.get_handlers():
+            application.add_handler(handler)
 
         # Системное меню и кнопка помощи
         register_system_handlers(application, db_manager, permissions_manager)
@@ -274,20 +286,18 @@ async def main():
         
         async def send_weekly_report():
             logger.info("Запуск автоматической отправки еженедельного отчета...")
-            try:
-                report_text = await weekly_quality_service.get_text_report(period="weekly")
-                if TELEGRAM_CHAT_ID:
-                    await application.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=report_text)
-                    logger.info(f"Еженедельный отчет отправлен в чат {TELEGRAM_CHAT_ID}")
-                else:
-                    logger.warning("TELEGRAM_CHAT_ID не установлен, отчет не отправлен.")
-            except Exception:
-                logger.exception("Ошибка при отправке еженедельного отчета.")
+            report_text = await weekly_quality_service.get_text_report(period="weekly")
+            if TELEGRAM_CHAT_ID:
+                await application.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=report_text)
+                logger.info("Еженедельный отчет отправлен в чат %s", TELEGRAM_CHAT_ID)
+            else:
+                logger.warning("TELEGRAM_CHAT_ID не установлен, отчет не отправлен.")
 
         # Запуск каждый понедельник в 09:00
         scheduler.add_job(
-            send_weekly_report,
-            CronTrigger(day_of_week='mon', hour=9, minute=0),
+            safe_job,
+            args=('weekly_quality_report', send_weekly_report),
+            trigger=CronTrigger(day_of_week='mon', hour=9, minute=0),
             id='weekly_quality_report',
             replace_existing=True
         )
@@ -298,15 +308,13 @@ async def main():
 
         async def run_analytics_sync():
             logger.info("Запуск плановой синхронизации аналитики...")
-            try:
-                await analytics_sync_service.sync_new()
-            except Exception:
-                logger.exception("Ошибка при плановой синхронизации аналитики.")
+            await analytics_sync_service.sync_new()
 
         # Запуск синхронизации каждые 30 минут
         scheduler.add_job(
-            run_analytics_sync,
-            CronTrigger(minute='*/30'),
+            safe_job,
+            args=('analytics_sync', run_analytics_sync),
+            trigger=CronTrigger(minute='*/30'),
             id='analytics_sync',
             replace_existing=True
         )

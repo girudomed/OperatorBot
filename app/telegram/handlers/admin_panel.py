@@ -120,7 +120,7 @@ class AdminPanelHandler:
             ],
             [
                 InlineKeyboardButton(
-                    "👥 Операторы",
+                    "👥 Пользователи",
                     callback_data=self._callback("users", "list", "pending"),
                 )
             ],
@@ -166,7 +166,7 @@ class AdminPanelHandler:
                     f"⏳ Pending: <b>{counters['pending_users']}</b>\n"
                     f"✅ Approved: <b>{counters['approved_users']}</b>\n"
                     f"👑 Админов: <b>{counters['admins']}</b>\n"
-                    f"👷 Операторов: <b>{counters['operators']}</b>\n\n"
+                    f"👥 Пользователей: <b>{counters['approved_users']}</b>\n\n"
                     f"<b>Роли:</b>\n{roles_summary}\n\n"
                     "Выберите раздел:"
                 )
@@ -258,7 +258,6 @@ class AdminPanelHandler:
         pending_count = counters.get('pending_users', 0)
         admin_count = counters.get('admins', 0)
         approved_count = counters.get('approved_users', 0)
-        operators_count = counters.get('operators', 0)
         blocked_count = counters.get('blocked_users', 0)
         total_users = counters.get('total_users', 0)
         roles_summary = self._build_roles_summary(counters)
@@ -277,7 +276,7 @@ class AdminPanelHandler:
             f"✅ Approved: <b>{approved_count}</b>\n"
             f"🚫 Заблокировано: <b>{blocked_count}</b>\n"
             f"👑 Администраторов: <b>{admin_count}</b>\n"
-            f"👷 Операторов: <b>{operators_count}</b>\n\n"
+            f"👥 Активные пользователи: <b>{approved_count}</b>\n\n"
             f"Роли (approved):\n{roles_summary}\n\n"
             f"Последние действия:\n"
             f"<i>Скоро будет доступно</i>"
@@ -286,7 +285,7 @@ class AdminPanelHandler:
         keyboard = [
             [
                 InlineKeyboardButton(
-                    "👥 Операторы", callback_data=self._callback("users", "list", "pending")
+                    "👥 Пользователи", callback_data=self._callback("users", "list", "pending")
                 ),
                 InlineKeyboardButton(
                     "👑 Администраторы", callback_data=self._callback("admins", "list")
@@ -701,12 +700,12 @@ class AdminPanelHandler:
             approved = int(stats.get("approved") or 0)
             lines.append(f"{emoji} {display_name}: <b>{approved}</b>")
         # Выводим роли, которых нет в стандартном порядке, но присутствуют в БД
-        for role_name in breakdown.keys():
+        for role_name, role_stats in breakdown.items():
             if role_name in ROLE_DISPLAY_ORDER:
                 continue
-            display_name = stats.get("display") or role_display_name_from_name(role_name)
+            display_name = role_stats.get("display") or role_display_name_from_name(role_name)
             emoji = ROLE_EMOJI.get(role_name, "•")
-            approved = int(breakdown[role_name].get("approved") or 0)
+            approved = int(role_stats.get("approved") or 0)
             lines.append(f"{emoji} {display_name}: <b>{approved}</b>")
         return "\n".join(lines) if lines else "—"
 
