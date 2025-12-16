@@ -9,14 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from telegram import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Message,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
-    Update,
-)
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.error import BadRequest
 from telegram.ext import (
     Application,
@@ -36,7 +29,6 @@ from app.telegram.utils.logging import describe_user
 CALL_LOOKUP_COMMAND = "call_lookup"
 CALL_LOOKUP_PERMISSION = "call_lookup"
 CALL_LOOKUP_CALLBACK_PREFIX = "cl"
-BACK_BUTTON_TEXT = "⬅️ Назад"
 PERIOD_CHOICES = {
     "daily",
     "weekly",
@@ -115,9 +107,7 @@ class _CallLookupHandlers:
         text: str,
         *,
         parse_mode: Optional[str] = None,
-        reply_markup: Optional[
-            InlineKeyboardMarkup | ReplyKeyboardMarkup | ReplyKeyboardRemove
-        ] = None,
+        reply_markup: Optional[InlineKeyboardMarkup] = None,
     ) -> None:
         if not message:
             return
@@ -137,9 +127,7 @@ class _CallLookupHandlers:
         text: str,
         *,
         parse_mode: Optional[str] = None,
-        reply_markup: Optional[
-            InlineKeyboardMarkup | ReplyKeyboardMarkup | ReplyKeyboardRemove
-        ] = None,
+        reply_markup: Optional[InlineKeyboardMarkup] = None,
     ) -> None:
         try:
             await context.bot.send_message(
@@ -306,21 +294,15 @@ class _CallLookupHandlers:
         if action == "ask":
             period = parts[2] if len(parts) > 2 else "monthly"
             context.user_data[self._pending_key] = {"period": period}
-            keyboard = ReplyKeyboardMarkup(
-                [[BACK_BUTTON_TEXT]],
-                resize_keyboard=True,
-                one_time_keyboard=False,
-            )
             await self._safe_send_message(
                 context,
                 chat_id,
                 f"Введите номер телефона для поиска звонков ({period}).",
-                reply_markup=keyboard,
-            )
+                reply_markup=InlineKeyboardMarkup(
                     [
                         [
                             InlineKeyboardButton(
-                                "◀️ Назад",
+                                "⬅️ Назад",
                                 callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:cancel",
                             )
                         ]
@@ -477,15 +459,6 @@ class _CallLookupHandlers:
             )
             return
 
-        if phone_text == BACK_BUTTON_TEXT or phone_text.lower() in {"отмена", "cancel", "stop"}:
-            context.user_data.pop(self._pending_key, None)
-            await self._safe_reply_text(
-                message,
-                "Режим поиска звонков закрыт.",
-                reply_markup=ReplyKeyboardRemove(),
-            )
-            return
-
         period = pending.get("period", "monthly")
         try:
             response = await self.service.lookup_calls(
@@ -503,11 +476,7 @@ class _CallLookupHandlers:
                 "Call lookup (interactive) упал у %s",
                 describe_user(user),
             )
-            await self._safe_reply_text(
-                message,
-                self._error_reply,
-                reply_markup=ReplyKeyboardRemove(),
-            )
+            await self._safe_reply_text(message, self._error_reply)
             context.user_data.pop(self._pending_key, None)
             return
 
@@ -529,11 +498,7 @@ class _CallLookupHandlers:
             reply_markup=markup,
         )
         context.user_data.pop(self._pending_key, None)
-        await self._safe_reply_text(
-            message,
-            "Режим поиска звонков завершён.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
+        await self._safe_reply_text(message, "Режим поиска звонков завершён.")
 
     async def _is_allowed(self, user_id: int, username: Optional[str] = None) -> bool:
         # Supremes/devs всегда имеют доступ
