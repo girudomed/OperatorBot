@@ -22,7 +22,9 @@ class TestPermissionsManager:
     @pytest.fixture
     def permissions(self, mock_db):
         """Инстанс PermissionsManager."""
-        return PermissionsManager(mock_db)
+        perms = PermissionsManager(mock_db)
+        perms._roles_loaded = True  # Используем дефолтную матрицу
+        return perms
     
     @pytest.mark.asyncio
     async def test_get_user_role(self, permissions, mock_db):
@@ -39,7 +41,7 @@ class TestPermissionsManager:
     async def test_get_user_role_not_approved(self, permissions, mock_db):
         """Тест что pending пользователи не получают роль."""
         mock_db.execute_with_retry.return_value = {
-            'role': 'admin',
+            'role_id': 2,
             'status': 'pending'
         }
         
@@ -120,7 +122,9 @@ class TestAdminRepository:
     
     @pytest.fixture
     def admin_repo(self, mock_db):
-        return AdminRepository(mock_db)
+        repo = AdminRepository(mock_db)
+        repo._roles_loaded = True  # Используем дефолтное сопоставление ролей
+        return repo
     
     @pytest.mark.asyncio
     async def test_get_pending_users(self, admin_repo, mock_db):
@@ -157,7 +161,7 @@ class TestAdminRepository:
         
         admins = await admin_repo.get_admins()
         assert len(admins) == 2
-        assert any(a['role'] == 'superadmin' for a in admins)
+        assert any(a['role']['slug'] == 'superadmin' for a in admins)
 
     @pytest.mark.asyncio
     async def test_get_users_counters(self, admin_repo, mock_db):

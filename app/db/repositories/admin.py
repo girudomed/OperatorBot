@@ -16,7 +16,7 @@ from datetime import datetime
 
 from app.db.manager import DatabaseManager
 from app.db.models import UserRecord, AdminActionLog
-from app.core.roles import role_name_from_id, ADMIN_ROLE_IDS
+from app.core.roles import role_name_from_id, ROLE_NAME_TO_ID, ROLE_ID_TO_NAME, ADMIN_ROLE_IDS
 from app.logging_config import get_watchdog_logger
 from app.utils.error_handlers import log_async_exceptions
 
@@ -55,10 +55,13 @@ class AdminRepository:
         self.db = db_manager
         self._roles_lock = asyncio.Lock()
         self._roles_loaded = False
-        self._role_slug_to_id: Dict[str, int] = {}
-        self._role_id_to_slug: Dict[int, str] = {}
-        self._role_display: Dict[str, str] = {}
-        self._admin_role_ids: Set[int] = set()
+        self._role_slug_to_id: Dict[str, int] = dict(ROLE_NAME_TO_ID)
+        self._role_id_to_slug: Dict[int, str] = dict(ROLE_ID_TO_NAME)
+        self._role_display: Dict[str, str] = {
+            slug: slug.replace("_", " ").title()
+            for slug in self._role_slug_to_id.keys()
+        }
+        self._admin_role_ids: Set[int] = set(ADMIN_ROLE_IDS)
 
     def _attach_role_names(self, rows: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
         """Добавляет название роли к каждой записи."""
