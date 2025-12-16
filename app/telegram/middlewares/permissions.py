@@ -116,8 +116,8 @@ DEFAULT_EXCLUDE_SLUGS = {
     'head_of_registry',
     'marketing_director',
 }
-SUPERADMIN_MANAGEABLE_ROLES: Set[Role] = {'admin', 'operator', 'marketing_director'}
-ADMIN_MANAGEABLE_ROLES: Set[Role] = {'operator'}
+SUPERADMIN_MANAGEABLE_ROLES: Set[Role] = {'superadmin', 'admin', 'operator', 'marketing_director'}
+ADMIN_MANAGEABLE_ROLES: Set[Role] = {'admin', 'operator'}
 
 CACHE_TTL_SECONDS = 10.0
 
