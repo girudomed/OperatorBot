@@ -575,6 +575,18 @@ class PermissionsManager:
         """
         return await self.is_admin(user_id, username)
     
+    async def can_view_all_stats(self, user_id: int, username: Optional[str] = None) -> bool:
+        """
+        Проверяет право can_view_all_stats.
+        """
+        if self.is_supreme_admin(user_id, username) or self.is_dev_admin(user_id, username):
+            return True
+        await self._ensure_roles_loaded()
+        role = await self.get_user_role(user_id)
+        if not role:
+            return False
+        return role in self._stats_roles
+    
     async def can_access_call_lookup(self, user_id: int, username: Optional[str] = None) -> bool:
         """
         Проверяет доступ к поиску звонков.
@@ -614,6 +626,25 @@ class PermissionsManager:
         else:
             allowed = meta.get("app_permissions", set())
         return required_permission in allowed
+
+    async def has_permission(
+        self,
+        user_id: int,
+        required_permission: str,
+        username: Optional[str] = None,
+        require_approved: bool = True,
+    ) -> bool:
+        """
+        Универсальная проверка app_permission для пользователя.
+        """
+        if self.is_supreme_admin(user_id, username) or self.is_dev_admin(user_id, username):
+            return True
+        if require_approved:
+            status = await self.get_user_status(user_id)
+            if status != 'approved':
+                return False
+        role = await self.get_effective_role(user_id, username)
+        return await self.check_permission(role, required_permission)
 
     async def list_roles(self) -> List[Dict[str, str]]:
         """

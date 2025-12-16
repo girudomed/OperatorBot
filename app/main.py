@@ -16,7 +16,7 @@ from typing import Optional
 
 from telegram import BotCommand, Update
 from telegram.error import TelegramError
-from telegram.ext import ApplicationBuilder, ContextTypes
+from telegram.ext import ApplicationBuilder, ContextTypes, TypeHandler
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -64,6 +64,30 @@ LOCK_FILE = "/app/operabot.lock"
 
 
 USER_ERROR_MESSAGE = "Ошибка доступа к базе. Проверьте конфигурацию/схему БД."
+
+
+async def user_context_injector(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Единый резолвер пользователя: сохраняет user_ctx в context.user_data."""
+    user = update.effective_user
+    if not user:
+        return
+    repo: Optional[UserRepository] = context.application.bot_data.get("user_repository")  # type: ignore[assignment]
+    if not repo:
+        return
+    try:
+        user_ctx = await repo.get_user_context_by_telegram_id(user.id)
+    except Exception as exc:
+        logger.warning(
+            "Не удалось получить контекст пользователя %s: %s",
+            user.id,
+            exc,
+            exc_info=True,
+        )
+        return
+    if user_ctx:
+        context.user_data["user_ctx"] = user_ctx
+    else:
+        context.user_data.pop("user_ctx", None)
 
 
 async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -197,10 +221,8 @@ async def main():
     try:
         # 2. Инициализация сервисов
         permissions_manager = PermissionsManager(db_manager)
-        
-        from app.db.repositories.lm_repository import LMRepository
-
         lm_repo = LMRepository(db_manager)
+        user_repo = UserRepository(db_manager)
         call_lookup_service = CallLookupService(db_manager, lm_repo)
         weekly_quality_service = WeeklyQualityService(db_manager)
         report_service = ReportService(db_manager)
@@ -223,9 +245,14 @@ async def main():
         application.bot_data["weekly_quality_service"] = weekly_quality_service
         application.bot_data["permissions_manager"] = permissions_manager
         application.bot_data["admin_repo"] = admin_repo
+        application.bot_data["user_repository"] = user_repo
 
         # 4. Регистрация хендлеров
         logger.info("Регистрация хендлеров...")
+
+        context_handler = TypeHandler(Update, user_context_injector)
+        context_handler.block = False
+        application.add_handler(context_handler, group=-2)
         
         # Auth
         setup_auth_handlers(application, db_manager, permissions_manager)
@@ -271,7 +298,7 @@ async def main():
         register_report_handlers(application, report_service, permissions_manager, db_manager)
         
         # Transcripts (/transcript)
-        transcript_handler = TranscriptHandler(db_manager)
+        transcript_handler = TranscriptHandler(db_manager, permissions_manager, admin_repo)
         for handler in transcript_handler.get_handlers():
             application.add_handler(handler)
 

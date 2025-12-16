@@ -159,6 +159,10 @@ class AdminPanelHandler:
         
         if not message_text:
             if counters:
+                regular_users = counters.get(
+                    'non_admin_approved',
+                    max(0, counters.get('approved_users', 0) - counters.get('admins', 0))
+                )
                 message_text = (
                     "👑 <b>Админ-панель</b>\n"
                     "Следите за ключевыми метриками и управляйте командой.\n\n"
@@ -166,7 +170,7 @@ class AdminPanelHandler:
                     f"⏳ Pending: <b>{counters['pending_users']}</b>\n"
                     f"✅ Approved: <b>{counters['approved_users']}</b>\n"
                     f"👑 Админов: <b>{counters['admins']}</b>\n"
-                    f"👥 Пользователей: <b>{counters['approved_users']}</b>\n\n"
+                    f"👥 Пользователей (без админов): <b>{regular_users}</b>\n\n"
                     f"<b>Роли:</b>\n{roles_summary}\n\n"
                     "Выберите раздел:"
                 )
@@ -258,6 +262,10 @@ class AdminPanelHandler:
         pending_count = counters.get('pending_users', 0)
         admin_count = counters.get('admins', 0)
         approved_count = counters.get('approved_users', 0)
+        regular_users = counters.get(
+            'non_admin_approved',
+            max(0, approved_count - admin_count)
+        )
         blocked_count = counters.get('blocked_users', 0)
         total_users = counters.get('total_users', 0)
         roles_summary = self._build_roles_summary(counters)
@@ -276,7 +284,7 @@ class AdminPanelHandler:
             f"✅ Approved: <b>{approved_count}</b>\n"
             f"🚫 Заблокировано: <b>{blocked_count}</b>\n"
             f"👑 Администраторов: <b>{admin_count}</b>\n"
-            f"👥 Активные пользователи: <b>{approved_count}</b>\n\n"
+            f"👥 Пользователей (без админов): <b>{regular_users}</b>\n\n"
             f"Роли (approved):\n{roles_summary}\n\n"
             f"Последние действия:\n"
             f"<i>Скоро будет доступно</i>"

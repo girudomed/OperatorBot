@@ -5,12 +5,14 @@ Telegram handler для получения расшифровок звонков
 Операторы видят только свои звонки, админы - все.
 """
 
+from typing import Optional
+
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler
 
 from app.db.manager import DatabaseManager
-from app.db.repositories.users import UserRepository
-from app.services.permissions import PermissionChecker, require_role
+from app.db.repositories.admin import AdminRepository
+from app.telegram.middlewares.permissions import PermissionsManager
 from app.logging_config import get_watchdog_logger
 from app.telegram.utils.logging import describe_user
 
@@ -20,10 +22,15 @@ logger = get_watchdog_logger(__name__)
 class TranscriptHandler:
     """Handler для работы с расшифровками звонков."""
     
-    def __init__(self, db_manager: DatabaseManager):
+    def __init__(
+        self,
+        db_manager: DatabaseManager,
+        permissions: PermissionsManager,
+        admin_repo: Optional[AdminRepository] = None,
+    ):
         self.db_manager = db_manager
-        self.user_repo = UserRepository(db_manager)
-        self.permission_checker = PermissionChecker(db_manager)
+        self.permissions = permissions
+        self.admin_repo = admin_repo or AdminRepository(db_manager)
     
     async def transcript_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
@@ -38,8 +45,11 @@ class TranscriptHandler:
         """
         user_id = update.effective_user.id
         
-        # Проверяем доступ
-        has_access = await self.permission_checker.can_view_transcripts(user_id)
+        has_access = await self.permissions.has_permission(
+            user_id,
+            'call_lookup',
+            update.effective_user.username,
+        )
         if not has_access:
             logger.warning(
                 "Пользователь %s запросил расшифровку без доступа",
@@ -85,7 +95,7 @@ class TranscriptHandler:
             return
         
         # Проверяем права на просмотр этого звонка
-        can_view = await self._can_view_this_call(user_id, call_data)
+        can_view = await self._can_view_this_call(update.effective_user, call_data)
         
         if not can_view:
             await update.message.reply_text(
@@ -139,15 +149,15 @@ class TranscriptHandler:
         
         return result
     
-    async def _can_view_this_call(self, telegram_id: int, call_data: dict) -> bool:
+    async def _can_view_this_call(self, tg_user, call_data: dict) -> bool:
         """Проверить, может ли пользователь видеть этот звонок."""
-        # Админы видят все
-        can_view_all = await self.permission_checker.can_view_other_transcripts(telegram_id)
+        telegram_id = tg_user.id
+        username = tg_user.username
+        can_view_all = await self.permissions.can_view_all_stats(telegram_id, username)
         if can_view_all:
             return True
         
-        # Операторы видят только свои
-        user = await self.user_repo.get_user_by_telegram_id(telegram_id)
+        user = await self.admin_repo.get_user_by_telegram_id(telegram_id)
         if not user:
             return False
         

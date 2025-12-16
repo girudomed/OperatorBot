@@ -86,10 +86,13 @@ class AdminRepository:
 
     def _build_role_payload(self, row: Dict[str, Any]) -> Dict[str, Any]:
         role_id = row.get("role_id")
-        slug = row.get("role_slug") or role_name_from_id(role_id)
-        display_name = self._role_display.get(self._normalize_role_slug(row.get("role_slug"))) if isinstance(row.get("role_slug"), str) else None
-        if not display_name:
-            display_name = self._role_display.get(slug) or row.get("role_slug") or role_display_name_from_name(slug)
+        raw_slug = row.get("role_slug")
+        slug = (
+            self._normalize_role_slug(raw_slug)
+            if raw_slug
+            else self._normalize_role_slug(role_name_from_id(role_id))
+        )
+        display_name = self._role_display.get(slug) or role_display_name_from_name(slug)
         return {
             "id": role_id,
             "slug": slug,
@@ -645,12 +648,23 @@ class AdminRepository:
             query = f"""
                 SELECT 
                     COUNT(*) as total_users,
-                    SUM(CASE WHEN LOWER(status) = 'pending' THEN 1 ELSE 0 END) as pending_users,
-                    SUM(CASE WHEN LOWER(status) = 'approved' THEN 1 ELSE 0 END) as approved_users,
-                    SUM(CASE WHEN LOWER(status) = 'blocked' THEN 1 ELSE 0 END) as blocked_users,
-                    SUM(CASE WHEN LOWER(status) = 'approved' AND role_id IN ({admin_placeholders}) THEN 1 ELSE 0 END) as admins_count,
-                    SUM(CASE WHEN LOWER(status) = 'approved' AND role_id = %s THEN 1 ELSE 0 END) as operators_count
-                FROM UsersTelegaBot
+                    SUM(CASE WHEN LOWER(u.status) = 'pending' THEN 1 ELSE 0 END) as pending_users,
+                    SUM(CASE WHEN LOWER(u.status) = 'approved' THEN 1 ELSE 0 END) as approved_users,
+                    SUM(CASE WHEN LOWER(u.status) = 'blocked' THEN 1 ELSE 0 END) as blocked_users,
+                    SUM(
+                        CASE
+                            WHEN LOWER(u.status) = 'approved' AND u.role_id IN ({admin_placeholders})
+                                THEN 1 ELSE 0
+                        END
+                    ) as admins_count,
+                    SUM(
+                        CASE
+                            WHEN LOWER(u.status) = 'approved' AND u.role_id = %s
+                                THEN 1 ELSE 0
+                        END
+                    ) as operators_count
+                FROM UsersTelegaBot u
+                LEFT JOIN roles_reference rr ON rr.role_id = u.role_id
             """
             params = tuple(admin_role_ids) + (operator_role_id,)
             row = await self.db.execute_with_retry(
@@ -659,13 +673,16 @@ class AdminRepository:
             await self._load_roles()
             role_breakdown_query = """
                 SELECT 
-                    role_id,
-                    COUNT(*) AS total_count,
-                    SUM(CASE WHEN LOWER(status) = 'approved' THEN 1 ELSE 0 END) AS approved_count,
-                    SUM(CASE WHEN LOWER(status) = 'pending' THEN 1 ELSE 0 END) AS pending_count,
-                    SUM(CASE WHEN LOWER(status) = 'blocked' THEN 1 ELSE 0 END) AS blocked_count
-                FROM UsersTelegaBot
-                GROUP BY role_id
+                    rr.role_id,
+                    rr.role_name,
+                    COUNT(u.id) AS total_count,
+                    SUM(CASE WHEN LOWER(u.status) = 'approved' THEN 1 ELSE 0 END) AS approved_count,
+                    SUM(CASE WHEN LOWER(u.status) = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+                    SUM(CASE WHEN LOWER(u.status) = 'blocked' THEN 1 ELSE 0 END) AS blocked_count
+                FROM roles_reference rr
+                LEFT JOIN UsersTelegaBot u ON u.role_id = rr.role_id
+                GROUP BY rr.role_id, rr.role_name
+                ORDER BY rr.role_id
             """
             role_rows = await self.db.execute_with_retry(
                 role_breakdown_query,
@@ -675,20 +692,21 @@ class AdminRepository:
 
             for role_row in role_rows:
                 role_id_raw = role_row.get('role_id')
-                if role_id_raw is None:
-                    continue
-                role_id = int(role_id_raw)
-                canonical_slug = ROLE_ID_TO_NAME.get(role_id)
-                slug = self._role_id_to_slug.get(role_id)
-                key = canonical_slug or slug or f"role_{role_id}"
-                display_name = None
-                if slug and slug in self._role_display:
-                    display_name = self._role_display[slug]
-                if not display_name and canonical_slug and canonical_slug in self._role_display:
-                    display_name = self._role_display[canonical_slug]
+                role_id = int(role_id_raw) if role_id_raw is not None else None
+                display_name_db = role_row.get('role_name')
+                slug = None
+                if role_id is not None:
+                    slug = self._role_id_to_slug.get(role_id)
+                if not slug and display_name_db:
+                    slug = self._normalize_role_slug(display_name_db)
+                if not slug:
+                    slug = f"role_{role_id}" if role_id is not None else "role_unknown"
+                display_name = role_display_name_from_name(
+                    display_name_db or slug or ""
+                )
                 if not display_name:
-                    display_name = key.replace("_", " ").title()
-                role_breakdown[key] = {
+                    display_name = f"Роль {role_id}" if role_id is not None else "Без роли"
+                role_breakdown[slug] = {
                     'display': display_name,
                     'total': int(role_row.get('total_count') or 0),
                     'approved': int(role_row.get('approved_count') or 0),
@@ -709,6 +727,10 @@ class AdminRepository:
                 'blocked_users': int(row.get('blocked_users') or 0),
                 'admins': int(row.get('admins_count') or admins_approved),
                 'operators': int(row.get('operators_count') or 0),
+                'non_admin_approved': max(
+                    0,
+                    int(row.get('approved_users') or 0) - int(row.get('admins_count') or admins_approved)
+                ),
                 'roles_breakdown': role_breakdown,
             }
             
@@ -726,6 +748,7 @@ class AdminRepository:
                 'blocked_users': 0,
                 'admins': 0,
                 'operators': 0,
+                'non_admin_approved': 0,
                 'roles_breakdown': {
                     role: {
                         'display': self._role_display.get(role, role.title()),

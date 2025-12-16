@@ -1,0 +1,196 @@
+Ниже — конкретный план правок в коде, чтобы всё работало только через UsersTelegaBot.role_id → roles_reference и исчезли Role 0, дубли “operator/Оператор”, кривые счётчики и warnings.
+
+⸻
+
+0) Новое правило проекта (зафиксируй в голове и в коде)
+	1.	Единственный источник роли пользователя в боте: UsersTelegaBot.role_id
+	2.	Единственный справочник ролей/прав: roles_reference
+	3.	Никаких RolesTelegaBot, roles, строковых ролей ('admin', 'operator'), “role_level”, “role_name из таблицы RolesTelegaBot”.
+
+⸻
+
+1) Найти и выкинуть legacy-логику
+
+Что искать по проекту
+
+Команды (только чтение, безопасно):
+	•	rg "RolesTelegaBot|roles__|\\broles\\b|role_name|role_level|Role 0|developer|superadmin|operator'" -n app/
+Риск: отсутствует (поиск, ничего не меняет).
+
+Что должно исчезнуть из кода:
+	•	любые запросы к RolesTelegaBot / roles
+	•	любые маппинги типа if role == 'admin':
+	•	любые “фоллбеки” вида role_id = 0 / role_id = 1 по умолчанию при успешном чтении пользователя (это и рождает “Role 0”)
+
+⸻
+
+2) Сделай единый “UserContext” (одна функция — вся правда о пользователе)
+
+Создай в app/db/repositories/users.py (или где у тебя репо пользователей) метод, который возвращает роль + флаги прав.
+
+Пример: get_user_context_by_telegram_id
+
+# app/db/repositories/users.py
+from typing import Optional, Dict, Any
+
+class UsersRepository:
+    def __init__(self, db_manager):
+        self.db = db_manager
+
+    async def get_user_context_by_telegram_id(self, telegram_id: int) -> Optional[Dict[str, Any]]:
+        query = """
+        SELECT
+            u.id,
+            u.telegram_id,
+            u.username,
+            u.full_name,
+            u.extension,
+            u.operator_name,
+            u.status,
+            u.role_id,
+
+            r.role_name,
+            r.can_view_own_stats,
+            r.can_view_all_stats,
+            r.can_view_dashboard,
+            r.can_generate_reports,
+            r.can_view_transcripts,
+            r.can_manage_users,
+            r.can_debug
+        FROM UsersTelegaBot u
+        JOIN roles_reference r ON r.role_id = u.role_id
+        WHERE u.telegram_id = %s
+        LIMIT 1
+        """
+        row = await self.db.execute_query(query, (telegram_id,), fetchone=True)
+        return dict(row) if row else None
+
+Что это решает
+	•	ты в любом месте приложения можешь брать одинаковую, консистентную роль/права
+	•	исчезают кривые определения роли “из воздуха”
+	•	любой “developer/admin” становится просто флагом can_debug, can_manage_users, и т.д.
+
+⸻
+
+3) Перепиши проверки доступа (везде) на флаги roles_reference
+
+Было (плохо)
+	•	if user.role in ("Admin", "Developer")
+	•	if role_id in (2, 7)
+	•	if is_admin:
+
+Должно стать (правильно)
+	•	if user["can_manage_users"]:
+	•	if user["can_debug"]:
+	•	if user["can_view_all_stats"]:
+
+Сделай в app/telegram/permissions.py (или где у тебя декораторы) универсальный декоратор:
+
+def require_perm(flag: str):
+    async def wrapper(update, context, *args, **kwargs):
+        user_ctx = context.user_data.get("user_ctx")
+        if not user_ctx or not user_ctx.get(flag):
+            await update.effective_message.reply_text("Недостаточно прав.")
+            return
+        return await kwargs["handler"](update, context)
+    return wrapper
+
+И дальше:
+	•	админ-панель: require_perm("can_manage_users")
+	•	отладка: require_perm("can_debug")
+	•	отчёты по всем: require_perm("can_view_all_stats")
+
+⸻
+
+4) Админ-панель: счётчики и роли переписать на JOIN с roles_reference
+
+4.1 Counters (исправить “Admin:0”, “Role 0:3”)
+
+В app/db/repositories/admin.py (или аналог) сделай один запрос:
+
+SELECT
+  COUNT(*) AS total_users,
+  SUM(u.status='pending') AS pending_users,
+  SUM(u.status='approved') AS approved_users,
+  SUM(u.status='blocked') AS blocked_users,
+
+  SUM(r.can_manage_users=1) AS admins,         -- админов по праву управления
+  SUM(u.role_id=1) AS operators               -- операторов по конкретной роли
+FROM UsersTelegaBot u
+JOIN roles_reference r ON r.role_id = u.role_id;
+
+Важно: admins считай не по названию роли, а по праву (can_manage_users), иначе снова будет каша.
+
+4.2 Roles breakdown (исправить дубли “operator/Оператор”)
+
+SELECT
+  r.role_name,
+  COUNT(*) AS total,
+  SUM(u.status='approved') AS approved,
+  SUM(u.status='pending') AS pending,
+  SUM(u.status='blocked') AS blocked
+FROM UsersTelegaBot u
+JOIN roles_reference r ON r.role_id = u.role_id
+GROUP BY r.role_id, r.role_name
+ORDER BY r.role_id;
+
+И в UI показывай role_name как есть (у тебя он уже норм: Оператор, ЗавРег, СТ Админ…).
+
+Удалить полностью любые подсчёты, которые идут из RolesTelegaBot или из строковых ролей.
+
+⸻
+
+5) Убрать warning “Не удалось определить role_id оператора…”
+
+Это не БД. Это код, который пытается “определить роль” по чему-то ещё.
+
+Типовая причина: ты где-то делаешь “если extension есть — значит operator role”, или наоборот.
+
+Правка:
+	•	роль пользователя берёшь только из UsersTelegaBot.role_id
+	•	extension / operator_name — это не роль, а привязка к колл-центру
+
+Если у тебя есть метод типа resolve_role_id_by_extension(...) — его нужно либо удалить, либо переименовать и использовать только для привязки оператора, не для ролей.
+
+⸻
+
+6) Приведи /start и авторизацию к единой схеме
+
+В app/telegram/handlers/start.py и auth.py:
+	•	при каждом входе:
+	•	читаешь user_ctx = users_repo.get_user_context_by_telegram_id(telegram_id)
+	•	кладёшь в context.user_data["user_ctx"] = user_ctx
+	•	везде дальше работаешь только оттуда
+
+Если user не найден:
+	•	создаёшь запись в UsersTelegaBot с дефолтной ролью (обычно role_id=1 оператор или отдельный “pending user”), и статус pending
+	•	но никогда не выставляешь role_id=0
+
+⸻
+
+7) Быстрая проверка, что legacy больше не используется
+
+После правок в коде сделай поиск (безопасно):
+	•	rg "RolesTelegaBot|\\broles\\b" -n app/
+
+Ожидаемо: 0 результатов (кроме миграций/комментов).
+
+⸻
+
+
+
+
+Этап 3 — permissions на флагах roles_reference (снятие legacy-проверок)
+
+Цель: убрать проверки по строкам/таблицам/магическим id.
+	•	Декораторы/гварды вида require_perm("can_manage_users")
+	•	Перевести админку/отладку/отчёты на новые проверки
+	•	Проверка: роли не определяются по extension/username/прочему
+
+Этап 4 — авторизация/регистрация/статусы (самый чувствительный кусок)
+
+Цель: /start, pending/approved/blocked, назначения ролей — строго через UsersTelegaBot.role_id.
+	•	Удалить все остатки RolesTelegaBot
+	•	Нормализовать создание пользователя (никаких role_id=0)
+	•	Финальная проверка всех сценариев входа
+

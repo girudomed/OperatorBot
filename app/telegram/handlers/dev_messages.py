@@ -5,12 +5,14 @@ Telegram handler для системы сообщений разработчик
 Позволяет пользователям отправлять сообщения Dev/SuperAdmin.
 """
 
+from typing import Optional
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
 from app.db.manager import DatabaseManager
-from app.db.repositories.users import UserRepository
-from app.services.permissions import PermissionChecker, ROLE_DEV, ROLE_SUPER_ADMIN
+from app.db.repositories.admin import AdminRepository
+from app.telegram.middlewares.permissions import PermissionsManager
 from app.logging_config import get_watchdog_logger
 
 logger = get_watchdog_logger(__name__)
@@ -19,10 +21,15 @@ logger = get_watchdog_logger(__name__)
 class DevMessagesHandler:
     """Handler для отправки сообщений разработчикам."""
     
-    def __init__(self, db_manager: DatabaseManager):
+    def __init__(
+        self,
+        db_manager: DatabaseManager,
+        permissions: PermissionsManager,
+        admin_repo: Optional[AdminRepository] = None,
+    ):
         self.db_manager = db_manager
-        self.user_repo = UserRepository(db_manager)
-        self.permission_checker = PermissionChecker(db_manager)
+        self.admin_repo = admin_repo or AdminRepository(db_manager)
+        self.permissions = permissions
         # Хранилище для отслеживания состояния ожидания сообщения
         self.waiting_for_message = {}
     
@@ -33,9 +40,8 @@ class DevMessagesHandler:
         """
         user_id = update.effective_user.id
         
-        # Проверяем доступ
-        has_access = await self.permission_checker.can_message_dev(user_id)
-        if not has_access:
+        user_record = await self.admin_repo.get_user_by_telegram_id(user_id)
+        if not user_record or user_record.get('status') != 'approved':
             await update.message.reply_text(
                 "🔒 Вы должны быть зарегистрированы в системе для отправки сообщений."
             )
@@ -71,14 +77,11 @@ class DevMessagesHandler:
             return
         
         # Получаем информацию об отправителе
-        user_record = await self.user_repo.get_user_by_telegram_id(user_id)
-        
         sender_name = update.effective_user.full_name
         sender_username = update.effective_user.username
         operator_name = user_record.get('operator_name', 'Не указан') if user_record else 'Не указан'
         
-        # Получаем всех Dev и SuperAdmin
-        devs_and_admins = await self._get_devs_and_admins()
+        devs_and_admins = await self._get_debug_users()
         
         if not devs_and_admins:
             await update.message.reply_text(
@@ -190,9 +193,22 @@ class DevMessagesHandler:
             return
         
         # Получаем информацию о разработчике
-        dev_record = await self.user_repo.get_user_by_telegram_id(user_id)
+        can_debug = await self.permissions.has_permission(
+            user_id,
+            'debug',
+            update.effective_user.username,
+            require_approved=False,
+        )
+        if not can_debug:
+            await update.message.reply_text("🔒 У вас нет прав для ответа пользователям.")
+            return
+        
+        dev_record = await self.admin_repo.get_user_by_telegram_id(user_id)
         dev_name = update.effective_user.full_name
-        role_name = "Разработчик" if dev_record and dev_record.get('role_id') == ROLE_DEV else "Администратор"
+        role_payload = dev_record.get('role') if dev_record else None
+        role_name = "Разработчик" if can_debug else "Администратор"
+        if isinstance(role_payload, dict):
+            role_name = role_payload.get('name') or role_name
         
         # Формируем сообщение для пользователя
         user_message = f"""
@@ -263,3 +279,21 @@ class DevMessagesHandler:
             await self.handle_reply(update, context)
         elif user_id in self.waiting_for_message:
             await self.handle_message(update, context)
+
+    async def _get_debug_users(self):
+        """Получить пользователей с правом debug."""
+        admins = await self.admin_repo.get_admins()
+        result = []
+        for admin in admins:
+            telegram_id = admin.get('telegram_id')
+            username = admin.get('username')
+            if not telegram_id:
+                continue
+            if await self.permissions.has_permission(
+                telegram_id,
+                'debug',
+                username,
+                require_approved=False,
+            ):
+                result.append(admin)
+        return result

@@ -143,7 +143,9 @@ class DatabaseManager:
             raise
         finally:
             if conn and self.pool:
-                self.pool.release(conn)
+                release_result = self.pool.release(conn)
+                if inspect.isawaitable(release_result):
+                    await release_result
 
     async def execute_query(
         self,

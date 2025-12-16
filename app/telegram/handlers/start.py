@@ -45,19 +45,21 @@ class StartHandler:
         is_supreme = self.permissions.is_supreme_admin(user_id, username)
         is_dev = self.permissions.is_dev_admin(user_id, username)
         
-        # Получить пользователя
-        try:
-            user = await self.user_repo.get_user_by_telegram_id(user_id)
-        except Exception:
-            logger.exception(
-                "[START] Ошибка чтения пользователя",
-                extra={"user_id": user_id, "username": username},
-            )
-            await update.message.reply_text(DB_ERROR_MESSAGE)
-            return
+        user_ctx = context.user_data.get("user_ctx")
+        if not user_ctx:
+            try:
+                user_ctx = await self.user_repo.get_user_context_by_telegram_id(user_id)
+                if user_ctx:
+                    context.user_data["user_ctx"] = user_ctx
+            except Exception:
+                logger.exception(
+                    "[START] Ошибка чтения пользователя",
+                    extra={"user_id": user_id, "username": username},
+                )
+                await update.message.reply_text(DB_ERROR_MESSAGE)
+                return
         
-        if not user:
-            # Незарегистрированный пользователь
+        if not user_ctx:
             await update.message.reply_text(
                 f"👋 Добро пожаловать, {user_name}!\n\n"
                 "Вы не зарегистрированы в системе.\n"
@@ -65,7 +67,7 @@ class StartHandler:
             )
             return
         
-        status = user.get('status')
+        status = (user_ctx.get('status') or '').lower()
         
         if status == 'pending':
             await update.message.reply_text(
@@ -83,13 +85,18 @@ class StartHandler:
             return
         
         # Approved пользователь
-        role_id = user.get('role_id', 1)
-        role_slug = role_name_from_id(role_id)
+        role_id = int(user_ctx.get('role_id') or 1)
+        role_slug = (user_ctx.get('role_name') or role_name_from_id(role_id)).lower()
         try:
             role_name = role_display_name_from_name(role_slug)
-            perms = await self.roles_repo.get_user_permissions(role_id)
+            perms = {
+                'can_view_own_stats': bool(user_ctx.get('can_view_own_stats')),
+                'can_view_all_stats': bool(user_ctx.get('can_view_all_stats')),
+                'can_manage_users': bool(user_ctx.get('can_manage_users')),
+                'can_debug': bool(user_ctx.get('can_debug')),
+            }
             keyboard = await self.keyboard_builder.build_main_keyboard(
-                role_id, is_supreme, is_dev
+                role_id, is_supreme, is_dev, perms_override=perms
             )
         except Exception:
             logger.exception(

@@ -7,7 +7,7 @@ Keyboard Builder для создания клавиатур по ролям.
 """
 
 from telegram import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton, KeyboardButton
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 from app.db.repositories.roles import RolesRepository
 from app.logging_config import get_watchdog_logger
@@ -25,7 +25,8 @@ class KeyboardBuilder:
         self,
         role_id: int,
         is_supreme: bool = False,
-        is_dev: bool = False
+        is_dev: bool = False,
+        perms_override: Optional[Dict[str, bool]] = None,
     ) -> ReplyKeyboardMarkup:
         """
         Построить главную reply клавиатуру на основе роли.
@@ -40,7 +41,7 @@ class KeyboardBuilder:
         """
         logger.debug(f"[KEYBOARD] Building main keyboard for role_id={role_id}")
         
-        perms = await self.roles_repo.get_user_permissions(role_id)
+        perms = perms_override or await self.roles_repo.get_user_permissions(role_id)
         
         keyboard = []
         

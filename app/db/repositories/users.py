@@ -6,7 +6,9 @@
 Таблица users - это справочник Mango (телефонные пользователи).
 """
 
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
+
+from app.core.roles import DEFAULT_ROLE_ID
 
 from app.db.manager import DatabaseManager
 from app.db.models import UserRecord
@@ -23,6 +25,56 @@ class UserRepository:
     
     def __init__(self, db_manager: DatabaseManager):
         self.db_manager = db_manager
+        self._known_role_ids: set[int] = set()
+
+    async def _resolve_role_id(self, role_id: Optional[int]) -> int:
+        """
+        Возвращает валидный role_id из roles_reference.
+        Если передан None или некорректное значение — используется DEFAULT_ROLE_ID.
+        """
+        try:
+            candidate = int(role_id) if role_id is not None else DEFAULT_ROLE_ID
+        except (TypeError, ValueError):
+            candidate = DEFAULT_ROLE_ID
+        if candidate <= 0:
+            candidate = DEFAULT_ROLE_ID
+
+        if candidate in self._known_role_ids:
+            return candidate
+
+        query = """
+            SELECT role_id
+            FROM roles_reference
+            WHERE role_id = %s
+            LIMIT 1
+        """
+        row = await self.db_manager.execute_with_retry(
+            query,
+            params=(candidate,),
+            fetchone=True,
+        )
+        if row:
+            self._known_role_ids.add(candidate)
+            return candidate
+
+        fallback = await self.db_manager.execute_with_retry(
+            query,
+            params=(DEFAULT_ROLE_ID,),
+            fetchone=True,
+        )
+        if fallback:
+            self._known_role_ids.add(DEFAULT_ROLE_ID)
+            logger.warning(
+                "[USER_REPO] Некорректный role_id=%s, применён DEFAULT_ROLE_ID",
+                role_id,
+            )
+            return DEFAULT_ROLE_ID
+
+        logger.error(
+            "[USER_REPO] Таблица roles_reference пуста, возвращаем candidate=%s",
+            candidate,
+        )
+        return candidate
 
     async def register_telegram_user(
         self, 
@@ -49,6 +101,7 @@ class UserRepository:
         logger.info(f"[USER_REPO] Registering Telegram user: {user_id}, {full_name}")
         
         try:
+            normalized_role_id = await self._resolve_role_id(role_id)
             if not await self.user_exists(user_id):
                 query_insert = """
                     INSERT INTO UsersTelegaBot 
@@ -57,7 +110,7 @@ class UserRepository:
                 """
                 await self.db_manager.execute_query(
                     query_insert, 
-                    (user_id, full_name, role_id, status, operator_name, extension)
+                    (user_id, full_name, normalized_role_id, status, operator_name, extension)
                 )
                 logger.info(f"[USER_REPO] Telegram user '{full_name}' registered successfully")
             else:
@@ -88,26 +141,44 @@ class UserRepository:
             operator_id,
         )
         existing = await self.db_manager.execute_with_retry(
-            "SELECT id FROM UsersTelegaBot WHERE user_id = %s",
+            "SELECT id, role_id FROM UsersTelegaBot WHERE user_id = %s",
             params=(user_id,),
             fetchone=True,
         )
         if existing:
-            await self.db_manager.execute_with_retry(
-                """
+            current_role_id = existing.get("role_id")
+            normalized_role_id = await self._resolve_role_id(current_role_id)
+            set_parts = [
+                "username = %s",
+                "full_name = %s",
+                "operator_id = %s",
+                "updated_at = NOW()",
+            ]
+            params_list = [username, full_name, operator_id]
+            if normalized_role_id != current_role_id:
+                set_parts.insert(3, "role_id = %s")
+                params_list.append(normalized_role_id)
+                logger.info(
+                    "[USER_REPO] Обновлён role_id пользователя %s: %s -> %s",
+                    user_id,
+                    current_role_id,
+                    normalized_role_id,
+                )
+            params_list.append(user_id)
+            query = f"""
                 UPDATE UsersTelegaBot
-                SET username = %s,
-                    full_name = %s,
-                    operator_id = %s,
-                    updated_at = NOW()
+                SET {', '.join(set_parts)}
                 WHERE user_id = %s
-                """,
-                params=(username, full_name, operator_id, user_id),
+            """
+            await self.db_manager.execute_with_retry(
+                query,
+                params=tuple(params_list),
                 commit=True,
             )
             logger.info("[USER_REPO] Telegram user %s already existed, data refreshed.", user_id)
             return
 
+        normalized_role_id = await self._resolve_role_id(role_id)
         await self.db_manager.execute_with_retry(
             """
             INSERT INTO UsersTelegaBot (
@@ -119,7 +190,7 @@ class UserRepository:
                 status
             ) VALUES (%s, %s, %s, %s, %s, 'pending')
             """,
-            params=(user_id, username, full_name, operator_id, role_id),
+            params=(user_id, username, full_name, operator_id, normalized_role_id),
             commit=True,
         )
         logger.info("[USER_REPO] Telegram user %s inserted with status pending.", user_id)
@@ -129,6 +200,44 @@ class UserRepository:
         query = "SELECT 1 FROM UsersTelegaBot WHERE user_id = %s"
         result = await self.db_manager.execute_query(query, (user_id,), fetchone=True)
         return bool(result)
+
+    async def get_user_context_by_telegram_id(self, telegram_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Возвращает полную информацию о пользователе и его правах.
+        Источник истины: UsersTelegaBot.role_id + roles_reference.
+        """
+        query = """
+            SELECT
+                u.id,
+                u.user_id AS telegram_id,
+                u.username,
+                u.full_name,
+                u.extension,
+                u.operator_name,
+                u.status,
+                u.role_id,
+                r.role_name,
+                r.can_view_own_stats,
+                r.can_view_all_stats,
+                r.can_view_dashboard,
+                r.can_generate_reports,
+                r.can_view_transcripts,
+                r.can_manage_users,
+                r.can_debug
+            FROM UsersTelegaBot u
+            JOIN roles_reference r ON r.role_id = u.role_id
+            WHERE u.user_id = %s
+            LIMIT 1
+        """
+        row = await self.db_manager.execute_with_retry(
+            query,
+            params=(telegram_id,),
+            fetchone=True,
+        )
+        if not row:
+            logger.debug("[USER_REPO] user_context not found for telegram_id=%s", telegram_id)
+            return None
+        return dict(row)
 
     async def get_user_by_telegram_id(self, user_id: int) -> Optional[UserRecord]:
         """Получение Telegram пользователя по user_id."""
