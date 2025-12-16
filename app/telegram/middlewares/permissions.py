@@ -230,10 +230,25 @@ class PermissionsManager:
                     LEFT JOIN RolesTelegaBot rt ON rt.id = rr.role_id
                     ORDER BY rr.role_id
                 """
-                rows = await self.db_manager.execute_with_retry(
+                rows_raw = await self.db_manager.execute_with_retry(
                     query,
                     fetchall=True,
-                ) or []
+                )
+                rows: List[Dict[str, Any]] = []
+                if isinstance(rows_raw, dict):
+                    rows = [rows_raw]
+                elif isinstance(rows_raw, list):
+                    rows = [
+                        row for row in rows_raw
+                        if isinstance(row, dict)
+                    ]
+                elif rows_raw is None:
+                    rows = []
+                else:
+                    logger.warning(
+                        "[PERMISSIONS] roles_reference вернула неожиданный тип: %s",
+                        type(rows_raw),
+                    )
                 if not rows:
                     logger.warning(
                         "[PERMISSIONS] roles_reference пустая, используем значения по умолчанию"

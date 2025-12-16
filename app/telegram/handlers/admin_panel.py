@@ -643,14 +643,14 @@ class AdminPanelHandler:
         for role in ROLE_DISPLAY_ORDER:
             stats = breakdown.get(role, {})
             emoji = ROLE_EMOJI.get(role, "•")
-            display_name = role_display_name_from_name(role)
+            display_name = stats.get("display") or role_display_name_from_name(role)
             approved = int(stats.get("approved") or 0)
             lines.append(f"{emoji} {display_name}: <b>{approved}</b>")
         # Выводим роли, которых нет в стандартном порядке, но присутствуют в БД
         for role_name in breakdown.keys():
             if role_name in ROLE_DISPLAY_ORDER:
                 continue
-            display_name = role_display_name_from_name(role_name)
+            display_name = stats.get("display") or role_display_name_from_name(role_name)
             emoji = ROLE_EMOJI.get(role_name, "•")
             approved = int(breakdown[role_name].get("approved") or 0)
             lines.append(f"{emoji} {display_name}: <b>{approved}</b>")
@@ -670,7 +670,7 @@ def register_admin_panel_handlers(
     
     # Callback handlers
     application.add_handler(
-        CallbackQueryHandler(handler.handle_callback, pattern=r"^admin:(dashboard|back|menu)$")
+        CallbackQueryHandler(handler.handle_callback, pattern=r"^admin:(dashboard|back|menu|commands|command)")
     )
 
     logger.info("Admin panel handlers registered")

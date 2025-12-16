@@ -267,11 +267,17 @@ class AdminCommandsHandler:
 
         message_text = "👑 <b>Список администраторов:</b>\n\n"
         for admin in admins:
-            role_name = admin.get("role") or role_name_from_id(admin.get("role_id"))
-            role_emoji = "⭐" if role_name in ("superadmin", "developer", "founder") else "👤"
+            role_payload = admin.get("role")
+            if isinstance(role_payload, dict):
+                role_name = role_payload.get("name") or role_payload.get("slug")
+            else:
+                role_name = role_name_from_id(admin.get("role_id"))
+            role_name = role_name or "—"
+            role_emoji = "⭐" if role_name.lower() in ("superadmin", "developer", "founder") else "👤"
+            username = admin.get("username") or "нет"
             message_text += (
-                f"{role_emoji} <b>{admin['full_name']}</b>\n"
-                f"   @{admin.get('username', 'нет')} | Role: {role_name}\n\n"
+                f"{role_emoji} <b>{admin.get('full_name', 'Без имени')}</b>\n"
+                f"   @{username} | Роль: {role_name}\n\n"
             )
 
         await message.reply_text(message_text, parse_mode="HTML")

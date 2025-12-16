@@ -8,14 +8,15 @@
 ВАЖНО: Использует UsersTelegaBot для ролей/статусов, НЕ users (Mango справочник)!
 """
 
+import asyncio
 import json
 import traceback
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 from datetime import datetime
 
 from app.db.manager import DatabaseManager
 from app.db.models import UserRecord, AdminActionLog
-from app.core.roles import role_name_from_id, ROLE_NAME_TO_ID, ADMIN_ROLE_IDS
+from app.core.roles import role_name_from_id, ADMIN_ROLE_IDS
 from app.logging_config import get_watchdog_logger
 from app.utils.error_handlers import log_async_exceptions
 
@@ -52,6 +53,12 @@ class AdminRepository:
 
     def __init__(self, db_manager: DatabaseManager):
         self.db = db_manager
+        self._roles_lock = asyncio.Lock()
+        self._roles_loaded = False
+        self._role_slug_to_id: Dict[str, int] = {}
+        self._role_id_to_slug: Dict[int, str] = {}
+        self._role_display: Dict[str, str] = {}
+        self._admin_role_ids: Set[int] = set()
 
     def _attach_role_names(self, rows: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
         """Добавляет название роли к каждой записи."""
@@ -79,6 +86,69 @@ class AdminRepository:
             "slug": slug,
             "name": display_name,
         }
+
+    @staticmethod
+    def _normalize_role_slug(value: Optional[str]) -> str:
+        return (value or "").strip().lower().replace(" ", "_")
+
+    async def _load_roles(self, *, force: bool = False) -> None:
+        if self._roles_loaded and not force:
+            return
+        async with self._roles_lock:
+            if self._roles_loaded and not force:
+                return
+            try:
+                query = """
+                    SELECT
+                        rr.role_id,
+                        COALESCE(rt.role_name, rr.role_name) AS role_name,
+                        rr.can_manage_users
+                    FROM roles_reference rr
+                    LEFT JOIN RolesTelegaBot rt ON rt.id = rr.role_id
+                    ORDER BY rr.role_id
+                """
+                rows = await self.db.execute_with_retry(query, fetchall=True) or []
+                slug_to_id: Dict[str, int] = {}
+                id_to_slug: Dict[int, str] = {}
+                display: Dict[str, str] = {}
+                admin_ids: Set[int] = set()
+                for row in rows:
+                    role_id = int(row.get("role_id"))
+                    display_name = row.get("role_name") or f"Role {role_id}"
+                    slug = self._normalize_role_slug(display_name)
+                    slug_to_id[slug] = role_id
+                    id_to_slug[role_id] = slug
+                    display[slug] = display_name
+                    if bool(row.get("can_manage_users")):
+                        admin_ids.add(role_id)
+                if slug_to_id:
+                    self._role_slug_to_id = slug_to_id
+                    self._role_id_to_slug = id_to_slug
+                    self._role_display = display
+                    self._admin_role_ids = admin_ids
+            except Exception as exc:
+                logger.exception("[ADMIN_REPO] Не удалось загрузить роли: %s", exc)
+            finally:
+                self._roles_loaded = True
+
+    async def _get_role_id_by_slug(self, slug: str) -> Optional[int]:
+        normalized = self._normalize_role_slug(slug)
+        await self._load_roles()
+        role_id = self._role_slug_to_id.get(normalized)
+        if role_id is not None:
+            return role_id
+        await self._load_roles(force=True)
+        return self._role_slug_to_id.get(normalized)
+
+    async def _get_admin_role_ids(self) -> Set[int]:
+        await self._load_roles()
+        if self._admin_role_ids:
+            return set(self._admin_role_ids)
+        return set(ADMIN_ROLE_IDS)
+
+    async def _get_operator_role_id(self) -> Optional[int]:
+        return await self._get_role_id_by_slug("operator")
+
     
     @log_async_exceptions
     async def get_pending_users(self) -> List[Dict[str, Any]]:
@@ -351,7 +421,7 @@ class AdminRepository:
             actor_telegram_id,
         )
         try:
-            new_role_id = ROLE_NAME_TO_ID.get(new_role)
+            new_role_id = await self._get_role_id_by_slug(new_role)
             if not new_role_id:
                 logger.warning(f"[ADMIN_REPO] Unknown role '{new_role}' for action {action}")
                 return False
@@ -445,8 +515,11 @@ class AdminRepository:
         logger.info("[ADMIN_REPO] Getting admins list")
         
         try:
-            # Динамически строим IN clause для всех админских ролей
-            placeholders = ', '.join(['%s'] * len(ADMIN_ROLE_IDS))
+            admin_role_ids = await self._get_admin_role_ids()
+            if not admin_role_ids:
+                logger.warning("[ADMIN_REPO] Нет админских ролей в системе")
+                return []
+            placeholders = ', '.join(['%s'] * len(admin_role_ids))
             query = f"""
                 {self.USER_FIELDS_BASE}
                 WHERE u.role_id IN ({placeholders}) AND u.status != 'blocked'
@@ -454,7 +527,7 @@ class AdminRepository:
             """
             rows = await self.db.execute_with_retry(
                 query,
-                params=tuple(ADMIN_ROLE_IDS),
+                params=tuple(admin_role_ids),
                 fetchall=True
             ) or []
             
@@ -474,6 +547,10 @@ class AdminRepository:
         logger.info(f"[ADMIN_REPO] Getting admin candidates (limit={limit}, offset={offset})")
         
         try:
+            operator_role_id = await self._get_operator_role_id()
+            if not operator_role_id:
+                logger.warning("[ADMIN_REPO] Не удалось определить role_id оператора")
+                return []
             query = """
                 {base}
                 WHERE u.status = 'approved' AND (u.role_id IS NULL OR u.role_id = %s)
@@ -482,7 +559,7 @@ class AdminRepository:
             """
             rows = await self.db.execute_with_retry(
                 query.format(base=self.USER_FIELDS_BASE),
-                params=(ROLE_NAME_TO_ID['operator'], limit, offset),
+                params=(operator_role_id, limit, offset),
                 fetchall=True,
             ) or []
             
@@ -541,8 +618,12 @@ class AdminRepository:
         logger.info("[ADMIN_REPO] Getting user counters")
         
         try:
-            # Динамически строим IN clause для всех админских ролей
-            admin_placeholders = ', '.join(['%s'] * len(ADMIN_ROLE_IDS))
+            admin_role_ids = await self._get_admin_role_ids()
+            operator_role_id = await self._get_operator_role_id()
+            if not admin_role_ids or operator_role_id is None:
+                logger.warning("[ADMIN_REPO] Не удалось определить роли для подсчёта пользователей")
+                return {}
+            admin_placeholders = ', '.join(['%s'] * len(admin_role_ids))
             query = f"""
                 SELECT 
                     COUNT(*) as total_users,
@@ -553,11 +634,11 @@ class AdminRepository:
                     SUM(CASE WHEN status = 'approved' AND role_id = %s THEN 1 ELSE 0 END) as operators_count
                 FROM UsersTelegaBot
             """
-            params = tuple(ADMIN_ROLE_IDS) + (ROLE_NAME_TO_ID.get('operator'),)
+            params = tuple(admin_role_ids) + (operator_role_id,)
             row = await self.db.execute_with_retry(
                 query, params=params, fetchone=True
             ) or {}
-            
+            await self._load_roles()
             role_breakdown_query = """
                 SELECT 
                     role_id,
@@ -574,33 +655,37 @@ class AdminRepository:
             ) or []
             
             role_breakdown: Dict[str, Dict[str, int]] = {
-                role_name: {
+                slug: {
+                    'display': self._role_display.get(slug, slug.title()),
                     'total': 0,
                     'approved': 0,
                     'pending': 0,
                     'blocked': 0,
                 }
-                for role_name in ROLE_NAME_TO_ID.keys()
+                for slug in self._role_slug_to_id.keys()
             }
             
             for role_row in role_rows:
-                role_name = role_name_from_id(role_row.get('role_id'))
-                if role_name not in role_breakdown:
-                    role_breakdown[role_name] = {
+                slug = self._role_id_to_slug.get(int(role_row.get('role_id', 0)))
+                if not slug:
+                    slug = role_name_from_id(role_row.get('role_id'))
+                if slug not in role_breakdown:
+                    role_breakdown[slug] = {
+                        'display': self._role_display.get(slug, slug.title()),
                         'total': 0,
                         'approved': 0,
                         'pending': 0,
                         'blocked': 0,
                     }
-                role_breakdown[role_name]['total'] = int(role_row.get('total_count') or 0)
-                role_breakdown[role_name]['approved'] = int(role_row.get('approved_count') or 0)
-                role_breakdown[role_name]['pending'] = int(role_row.get('pending_count') or 0)
-                role_breakdown[role_name]['blocked'] = int(role_row.get('blocked_count') or 0)
+                role_breakdown[slug]['total'] = int(role_row.get('total_count') or 0)
+                role_breakdown[slug]['approved'] = int(role_row.get('approved_count') or 0)
+                role_breakdown[slug]['pending'] = int(role_row.get('pending_count') or 0)
+                role_breakdown[slug]['blocked'] = int(role_row.get('blocked_count') or 0)
             
             admins_approved = sum(
-                role_breakdown[role_name]['approved']
-                for role_name, role_id in ROLE_NAME_TO_ID.items()
-                if role_id in ADMIN_ROLE_IDS
+                role_breakdown.get(slug, {}).get('approved', 0)
+                for slug, role_id in self._role_slug_to_id.items()
+                if role_id in admin_role_ids
             )
             
             counters = {
@@ -619,6 +704,7 @@ class AdminRepository:
             logger.error(
                 f"[ADMIN_REPO] Error getting counters: {e}\n{traceback.format_exc()}"
             )
+            fallback_roles = list(self._role_slug_to_id.keys()) or ["operator", "admin"]
             return {
                 'total_users': 0,
                 'pending_users': 0,
@@ -627,8 +713,14 @@ class AdminRepository:
                 'admins': 0,
                 'operators': 0,
                 'roles_breakdown': {
-                    role_name: {'total': 0, 'approved': 0, 'pending': 0, 'blocked': 0}
-                    for role_name in ROLE_NAME_TO_ID.keys()
+                    role: {
+                        'display': self._role_display.get(role, role.title()),
+                        'total': 0,
+                        'approved': 0,
+                        'pending': 0,
+                        'blocked': 0,
+                    }
+                    for role in fallback_roles
                 },
             }
 
@@ -648,9 +740,13 @@ class AdminRepository:
         logger.info(f"[ADMIN_REPO] Getting users for promotion to {target_role}")
         
         try:
-            role_id = ROLE_NAME_TO_ID.get("operator")
             if target_role == "superadmin":
-                role_id = ROLE_NAME_TO_ID.get("admin")
+                role_id = await self._get_role_id_by_slug("admin")
+            else:
+                role_id = await self._get_role_id_by_slug("operator")
+            if not role_id:
+                logger.warning("[ADMIN_REPO] Не удалось определить role_id для %s", target_role)
+                return []
 
             query = """
                 {base}
