@@ -50,8 +50,7 @@ class MetricsService:
         booked_leads = stats.get("booked_leads", 0)
         
         missed_rate = (missed_calls / total_calls * 100) if total_calls else 0.0
-        lead_pool = total_leads + booked_leads
-        conversion_rate = (booked_leads / lead_pool * 100) if lead_pool else 0.0
+        conversion_rate = (booked_leads / total_leads * 100) if total_leads else 0.0
 
         return {
             "period": period,

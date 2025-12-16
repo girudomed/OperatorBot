@@ -8,6 +8,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
 from app.telegram.middlewares.permissions import PermissionsManager
+from app.telegram.handlers.call_lookup import CALL_LOOKUP_CALLBACK_PREFIX
 from app.utils.error_handlers import log_async_exceptions
 from app.logging_config import get_watchdog_logger
 from app.telegram.utils.logging import describe_user
@@ -48,28 +49,27 @@ class AdminLookupHandler:
             )
             message = (
                 "📂 <b>Расшифровки</b>\n\n"
-                "Введите команду <code>/call_lookup &lt;номер&gt; [период]</code>, "
-                "например: <code>/call_lookup +7 999 1234567 weekly</code>.\n\n"
-                "Ниже — быстрые кнопки для вставки команды в чат."
+                "Выберите период, после чего бот попросит ввести номер телефона "
+                "и автоматически выполнит поиск. Никаких команд вручную вводить не нужно."
             )
 
             keyboard = [
                 [
                     InlineKeyboardButton(
                         "Daily",
-                        switch_inline_query_current_chat="/call_lookup daily ",
+                        callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:daily",
                     )
                 ],
                 [
                     InlineKeyboardButton(
                         "Weekly",
-                        switch_inline_query_current_chat="/call_lookup weekly ",
+                        callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:weekly",
                     )
                 ],
                 [
                     InlineKeyboardButton(
                         "Monthly",
-                        switch_inline_query_current_chat="/call_lookup monthly ",
+                        callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:monthly",
                     )
                 ],
                 [InlineKeyboardButton("◀️ Назад", callback_data="admin:back")],

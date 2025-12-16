@@ -72,6 +72,12 @@ def register_call_lookup_handlers(
             pattern=rf"^{CALL_LOOKUP_CALLBACK_PREFIX}:",
         )
     )
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handler.handle_phone_input,
+        )
+    )
 
 
 @dataclass
@@ -93,6 +99,7 @@ class _CallLookupHandlers:
         self._error_reply = (
             "Не удалось выполнить поиск, ошибка конфигурации БД."
         )
+        self._pending_key = "call_lookup_pending"
 
     async def _safe_reply_text(
         self,
@@ -137,6 +144,8 @@ class _CallLookupHandlers:
         user = update.effective_user
         if not message or not user:
             return
+
+        context.user_data.pop(self._pending_key, None)
 
         if not await self._is_allowed(user.id, user.username):
             logger.warning(
@@ -282,7 +291,20 @@ class _CallLookupHandlers:
             describe_user(user),
         )
 
-        if action == "p":
+        if action == "ask":
+            period = parts[2] if len(parts) > 2 else "monthly"
+            context.user_data[self._pending_key] = {"period": period}
+            await self._safe_send_message(
+                context,
+                chat_id,
+                f"Введите номер телефона для поиска звонков ({period}).",
+            )
+            logger.info(
+                "Call lookup запрос номера (period=%s) пользователем %s",
+                period,
+                describe_user(user),
+            )
+        elif action == "p":
             if len(parts) < 6:
                 await query.answer("Некорректные данные", show_alert=True)
                 return
@@ -397,6 +419,66 @@ class _CallLookupHandlers:
                     chat_id,
                     "Запись недоступна для этого звонка.",
                 )
+    async def handle_phone_input(
+        self,
+        update: Update,
+        context: CallbackContext,
+    ) -> None:
+        message = update.effective_message
+        user = update.effective_user
+        if not message or not user:
+            return
+
+        pending = context.user_data.get(self._pending_key)
+        if not pending:
+            return
+
+        phone_text = (message.text or "").strip()
+        if not phone_text:
+            await self._safe_reply_text(
+                message,
+                "Введите номер телефона цифрами.",
+            )
+            return
+
+        period = pending.get("period", "monthly")
+        try:
+            response = await self.service.lookup_calls(
+                phone=phone_text,
+                period=period,
+                offset=0,
+                limit=self.service.DEFAULT_LIMIT,
+                requesting_user_id=user.id,
+            )
+        except ValueError as exc:
+            await self._safe_reply_text(message, str(exc))
+            return
+        except Exception:
+            logger.exception(
+                "Call lookup (interactive) упал у %s",
+                describe_user(user),
+            )
+            await self._safe_reply_text(message, self._error_reply)
+            return
+
+        request = _LookupRequest(
+            phone=response["normalized_phone"],
+            period=period,
+            offset=0,
+            limit=response["limit"],
+        )
+        text, markup = self._build_result_message(
+            response=response,
+            period=period,
+            request=request,
+        )
+        await self._safe_send_message(
+            context,
+            message.chat_id,
+            text,
+            reply_markup=markup,
+        )
+        context.user_data.pop(self._pending_key, None)
 
     async def _is_allowed(self, user_id: int, username: Optional[str] = None) -> bool:
         # Supremes/devs всегда имеют доступ
@@ -524,28 +606,26 @@ class _CallLookupHandlers:
     async def _send_usage_hint(self, message: Message) -> None:
         text = (
             "📂 <b>Расшифровки</b>\n\n"
-            "Используйте формат:\n"
-            "<code>/call_lookup &lt;период&gt; &lt;номер&gt;</code>\n"
-            "Например: <code>/call_lookup monthly +7 999 1234567</code>.\n\n"
-            "Выберите период, и бот подставит команду автоматически."
+            "Выберите период, после чего введите номер телефона — бот сам выполнит команду "
+            "и покажет расшифровки. Больше не нужно вручную писать /call_lookup."
         )
         keyboard = [
             [
                 InlineKeyboardButton(
                     "Daily",
-                    switch_inline_query_current_chat="/call_lookup daily ",
+                    callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:daily",
                 )
             ],
             [
                 InlineKeyboardButton(
                     "Weekly",
-                    switch_inline_query_current_chat="/call_lookup weekly ",
+                    callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:weekly",
                 )
             ],
             [
                 InlineKeyboardButton(
                     "Monthly",
-                    switch_inline_query_current_chat="/call_lookup monthly ",
+                    callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:monthly",
                 )
             ],
         ]

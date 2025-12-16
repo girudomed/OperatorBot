@@ -157,6 +157,12 @@ class CallAnalyticsSyncService:
         try:
             # Синхронизировать только новые или обновленные
             history_timestamp_field = "ch.created_at"
+            call_date_expr = (
+                "COALESCE(ch.context_start_time_dt, FROM_UNIXTIME(ch.context_start_time), cs.call_date)"
+            )
+            operator_name_expr = (
+                "COALESCE(cs.called_info, ch.answered_extension, 'Unknown')"
+            )
             query = f"""
                 INSERT INTO call_analytics (
                     call_scores_id,
@@ -174,29 +180,23 @@ class CallAnalyticsSyncService:
                     ml_p_complaint,
                     created_at
                 )
-                SELECT 
+                SELECT
                     cs.id,
                     cs.history_id,
-                    cs.call_date,
-                    COALESCE(
-                        CASE 
-                            WHEN cs.context_type = 'входящий' THEN cs.called_info
-                            WHEN cs.context_type = 'исходящий' THEN cs.caller_info
-                        END,
-                        'Unknown'
-                    ) as operator_name,
-                    NULL as operator_extension,
+                    {call_date_expr} AS call_date,
+                    {operator_name_expr} AS operator_name,
+                    ch.answered_extension AS operator_extension,
                     cs.is_target,
                     cs.outcome,
                     cs.call_category,
                     cs.call_score,
-                    cs.talk_duration,
+                    COALESCE(cs.talk_duration, ch.talk_duration) AS talk_duration,
                     cs.ml_p_record,
                     cs.ml_score_pred,
                     cs.ml_p_complaint,
                     NOW()
-                FROM call_scores cs
-                INNER JOIN call_history ch ON ch.history_id = cs.history_id
+                FROM call_history ch
+                INNER JOIN call_scores cs ON cs.history_id = ch.history_id
                 WHERE {history_timestamp_field} >= %s
                   AND NOT EXISTS (
                       SELECT 1 FROM call_analytics ca 
