@@ -3,43 +3,35 @@
 """
 Менеджер прав доступа для админ-панели.
 
-Использует таблицу UsersTelegaBot с полями role_id/status.
+Использует таблицы UsersTelegaBot, roles_reference и RolesTelegaBot.
 Таблица users - это Mango справочник (НЕ использовать для ролей!).
 Поддерживает Supreme Admin и Dev Admin из конфигурации.
 """
 
+import asyncio
 import time
-from typing import Optional, Literal, Dict, Set, Tuple
+from copy import deepcopy
+from typing import Optional, Dict, Set, Tuple, Any, Literal, List
 from app.db.manager import DatabaseManager
 from app.logging_config import get_watchdog_logger
 from app.config import SUPREME_ADMIN_ID, SUPREME_ADMIN_USERNAME, DEV_ADMIN_ID, DEV_ADMIN_USERNAME
-from app.core.roles import (
-    role_name_from_id, 
-    get_role_permissions, 
-    is_admin_role, 
-    is_superadmin_or_higher,
-    can_manage_users as role_can_manage_users,
-    can_view_all_stats as role_can_view_all_stats,
-    ADMIN_ROLE_IDS,
-    STATS_VIEWER_ROLE_IDS,
-)
-
 logger = get_watchdog_logger(__name__)
 
-# Типы ролей (все 8)
-Role = Literal[
-    'operator',
-    'admin',
-    'superadmin',
-    'developer',
-    'head_of_registry',
-    'founder',
-    'marketing_director',
-]
+
+def _normalize_username(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    return value.lstrip("@").lower()
+
+
+_SUPREME_ADMIN_USERNAME = _normalize_username(SUPREME_ADMIN_USERNAME)
+_DEV_ADMIN_USERNAME = _normalize_username(DEV_ADMIN_USERNAME)
+
+Role = str
 Status = Literal['pending', 'approved', 'blocked']
 
-# Права доступа по ролям (для обратной совместимости)
-ROLE_PERMISSIONS: Dict[str, Set[str]] = {
+# Настройка прав приложения по умолчанию (fallback, если не удалось загрузить из БД)
+DEFAULT_APP_PERMISSIONS: Dict[str, Set[str]] = {
     'operator': {'call_lookup', 'weekly_quality', 'report'},
     'admin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'report', 'all_stats'},
     'head_of_registry': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats'},
@@ -49,11 +41,81 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
     'founder': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats', 'debug'},
 }
 
-ADMIN_ROLES: Set[Role] = {'admin', 'head_of_registry', 'superadmin', 'developer', 'founder'}
-SUPER_ROLES: Set[Role] = {'superadmin', 'developer', 'founder'}
-ROLE_MANAGE_ROLES: Set[Role] = {'head_of_registry', 'superadmin', 'developer', 'founder'}
-TOP_PRIVILEGE_ROLES: Set[Role] = {'developer', 'founder'}
-LEADERSHIP_ROLES: Set[Role] = {'head_of_registry'} | TOP_PRIVILEGE_ROLES
+DEFAULT_ROLE_MATRIX: Dict[int, Dict[str, Any]] = {
+    1: {
+        "slug": "operator",
+        "display_name": "Оператор",
+        "can_view_own_stats": True,
+        "can_view_all_stats": False,
+        "can_manage_users": False,
+        "can_debug": False,
+        "app_permissions": DEFAULT_APP_PERMISSIONS["operator"],
+    },
+    2: {
+        "slug": "admin",
+        "display_name": "Администратор",
+        "can_view_own_stats": True,
+        "can_view_all_stats": True,
+        "can_manage_users": True,
+        "can_debug": False,
+        "app_permissions": DEFAULT_APP_PERMISSIONS["admin"],
+    },
+    3: {
+        "slug": "superadmin",
+        "display_name": "Суперадмин",
+        "can_view_own_stats": True,
+        "can_view_all_stats": True,
+        "can_manage_users": True,
+        "can_debug": True,
+        "app_permissions": DEFAULT_APP_PERMISSIONS["superadmin"],
+    },
+    4: {
+        "slug": "developer",
+        "display_name": "Developer",
+        "can_view_own_stats": True,
+        "can_view_all_stats": True,
+        "can_manage_users": True,
+        "can_debug": True,
+        "app_permissions": DEFAULT_APP_PERMISSIONS["developer"],
+    },
+    5: {
+        "slug": "head_of_registry",
+        "display_name": "Зав. регистратуры",
+        "can_view_own_stats": True,
+        "can_view_all_stats": True,
+        "can_manage_users": True,
+        "can_debug": False,
+        "app_permissions": DEFAULT_APP_PERMISSIONS["head_of_registry"],
+    },
+    6: {
+        "slug": "founder",
+        "display_name": "Founder",
+        "can_view_own_stats": True,
+        "can_view_all_stats": True,
+        "can_manage_users": True,
+        "can_debug": True,
+        "app_permissions": DEFAULT_APP_PERMISSIONS["founder"],
+    },
+    7: {
+        "slug": "marketing_director",
+        "display_name": "Директор по маркетингу",
+        "can_view_own_stats": True,
+        "can_view_all_stats": True,
+        "can_manage_users": False,
+        "can_debug": False,
+        "app_permissions": DEFAULT_APP_PERMISSIONS["marketing_director"],
+    },
+}
+
+DEFAULT_TOP_PRIVILEGE_SLUGS = {'developer', 'founder'}
+DEFAULT_SUPERADMIN_SLUGS = {'superadmin'}
+DEFAULT_EXCLUDE_SLUGS = {
+    'developer',
+    'founder',
+    'superadmin',
+    'head_of_registry',
+    'marketing_director',
+}
 SUPERADMIN_MANAGEABLE_ROLES: Set[Role] = {'admin', 'operator', 'marketing_director'}
 ADMIN_MANAGEABLE_ROLES: Set[Role] = {'operator'}
 
@@ -76,6 +138,142 @@ class PermissionsManager:
         self.db_manager = db_manager
         # user_id -> (role, status, timestamp)
         self._user_cache: Dict[int, Tuple[Optional[Role], Optional[Status], float]] = {}
+        self._roles_loaded = False
+        self._roles_lock = asyncio.Lock()
+        self._role_matrix: Dict[int, Dict[str, Any]] = {}
+        self._role_id_to_slug: Dict[int, str] = {}
+        self._role_slug_to_id: Dict[str, int] = {}
+        self._roles_by_slug: Dict[str, Dict[str, Any]] = {}
+        self._admin_roles: Set[Role] = set()
+        self._stats_roles: Set[Role] = set()
+        self._debug_roles: Set[Role] = set()
+        self._top_privilege_roles: Set[Role] = set()
+        self._super_roles: Set[Role] = set()
+        self._role_manage_roles: Set[Role] = set()
+        self._exclude_roles: Set[Role] = set()
+        self._set_role_matrix(DEFAULT_ROLE_MATRIX)
+
+    def _set_role_matrix(self, matrix: Dict[int, Dict[str, Any]]) -> None:
+        """Сохраняет матрицу ролей и производные множества."""
+        # Глубокая копия, чтобы не мутировать дефолт
+        cloned: Dict[int, Dict[str, Any]] = {}
+        for role_id, meta in matrix.items():
+            cloned_meta = deepcopy(meta)
+            cloned_meta["app_permissions"] = set(cloned_meta.get("app_permissions", set()))
+            cloned[role_id] = cloned_meta
+
+        self._role_matrix = cloned
+        self._role_id_to_slug = {
+            int(role_id): cloned_meta["slug"] for role_id, cloned_meta in cloned.items()
+        }
+        self._role_slug_to_id = {
+            cloned_meta["slug"]: int(role_id) for role_id, cloned_meta in cloned.items()
+        }
+        self._roles_by_slug = {
+            cloned_meta["slug"]: cloned_meta for cloned_meta in cloned.values()
+        }
+        self._admin_roles = {
+            meta["slug"]
+            for meta in cloned.values()
+            if meta.get("can_manage_users")
+        }
+        self._stats_roles = {
+            meta["slug"]
+            for meta in cloned.values()
+            if meta.get("can_view_all_stats")
+        }
+        self._debug_roles = {
+            meta["slug"]
+            for meta in cloned.values()
+            if meta.get("can_debug")
+        }
+        self._top_privilege_roles = {
+            meta["slug"]
+            for meta in cloned.values()
+            if meta["slug"] in DEFAULT_TOP_PRIVILEGE_SLUGS
+        }
+        self._super_roles = {
+            meta["slug"]
+            for meta in cloned.values()
+            if meta["slug"] in DEFAULT_SUPERADMIN_SLUGS
+        }
+        self._role_manage_roles = {'head_of_registry'} | self._super_roles | self._top_privilege_roles
+        self._exclude_roles = {
+            meta["slug"]
+            for meta in cloned.values()
+            if meta["slug"] in DEFAULT_EXCLUDE_SLUGS
+        }
+
+    @staticmethod
+    def _normalize_slug(value: Optional[str]) -> str:
+        slug = (value or "").strip().lower()
+        slug = slug.replace(" ", "_")
+        return slug or "role"
+
+    async def _ensure_roles_loaded(self) -> None:
+        if self._roles_loaded:
+            return
+        async with self._roles_lock:
+            if self._roles_loaded:
+                return
+            try:
+                query = """
+                    SELECT
+                        rr.role_id,
+                        rr.role_name AS slug,
+                        rr.can_view_own_stats,
+                        rr.can_view_all_stats,
+                        rr.can_manage_users,
+                        rr.can_debug,
+                        rt.role_name AS display_name
+                    FROM roles_reference rr
+                    LEFT JOIN RolesTelegaBot rt ON rt.id = rr.role_id
+                    ORDER BY rr.role_id
+                """
+                rows = await self.db_manager.execute_with_retry(
+                    query,
+                    fetchall=True,
+                ) or []
+                if not rows:
+                    logger.warning(
+                        "[PERMISSIONS] roles_reference пустая, используем значения по умолчанию"
+                    )
+                    self._roles_loaded = True
+                    return
+                matrix: Dict[int, Dict[str, Any]] = {}
+                for row in rows:
+                    role_id = int(row.get("role_id"))
+                    slug = self._normalize_slug(row.get("slug")) or f"role_{role_id}"
+                    display_name = row.get("display_name") or row.get("slug") or slug
+                    app_perm = DEFAULT_APP_PERMISSIONS.get(slug, {"call_lookup"})
+                    matrix[role_id] = {
+                        "slug": slug,
+                        "display_name": display_name,
+                        "can_view_own_stats": bool(row.get("can_view_own_stats")),
+                        "can_view_all_stats": bool(row.get("can_view_all_stats")),
+                        "can_manage_users": bool(row.get("can_manage_users")),
+                        "can_debug": bool(row.get("can_debug")),
+                        "app_permissions": set(app_perm),
+                    }
+                self._set_role_matrix(matrix)
+                logger.info(
+                    "[PERMISSIONS] Загружено %s ролей из roles_reference/RolesTelegaBot",
+                    len(matrix),
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Не удалось загрузить роли из БД, используем значения по умолчанию: %s",
+                    exc,
+                )
+            finally:
+                self._roles_loaded = True
+
+    async def get_role_display_name(self, role_slug: Role) -> str:
+        await self._ensure_roles_loaded()
+        meta = self._roles_by_slug.get(role_slug)
+        if not meta:
+            return role_slug
+        return meta.get("display_name") or role_slug.capitalize()
 
     def invalidate_cache(self, user_id: int) -> None:
         """Сбрасывает кэш роли/статуса пользователя."""
@@ -97,6 +295,12 @@ class PermissionsManager:
 
     def _set_cache_entry(self, user_id: int, role: Optional[Role], status: Optional[Status]) -> None:
         self._user_cache[user_id] = (role, status, time.monotonic())
+
+    async def _role_slug_from_id(self, role_id: Optional[int]) -> Role:
+        await self._ensure_roles_loaded()
+        if role_id is None:
+            return "operator"
+        return self._role_id_to_slug.get(int(role_id), "operator")
     
     async def get_user_role(self, user_id: int) -> Optional[Role]:
         """
@@ -132,7 +336,7 @@ class PermissionsManager:
                 return None
             
             status = row.get('status')
-            role = role_name_from_id(row.get('role_id'))
+            role = await self._role_slug_from_id(row.get('role_id'))
             self._set_cache_entry(user_id, role, status)
 
             if status != 'approved':
@@ -182,7 +386,8 @@ class PermissionsManager:
         """
         if SUPREME_ADMIN_ID and str(user_id) == str(SUPREME_ADMIN_ID):
             return True
-        if SUPREME_ADMIN_USERNAME and username and username.lower() == SUPREME_ADMIN_USERNAME.lower():
+        normalized = _normalize_username(username)
+        if _SUPREME_ADMIN_USERNAME and normalized == _SUPREME_ADMIN_USERNAME:
             return True
         return False
     
@@ -192,7 +397,8 @@ class PermissionsManager:
         """
         if DEV_ADMIN_ID and str(user_id) == str(DEV_ADMIN_ID):
             return True
-        if DEV_ADMIN_USERNAME and username and username.lower() == DEV_ADMIN_USERNAME.lower():
+        normalized = _normalize_username(username)
+        if _DEV_ADMIN_USERNAME and normalized == _DEV_ADMIN_USERNAME:
             return True
         return False
     
@@ -205,8 +411,9 @@ class PermissionsManager:
         if self.is_supreme_admin(user_id, username) or self.is_dev_admin(user_id, username):
             return True
         
+        await self._ensure_roles_loaded()
         role = await self.get_user_role(user_id)
-        return role in ADMIN_ROLES
+        return role in self._admin_roles
     
     async def is_superadmin(self, user_id: int, username: Optional[str] = None) -> bool:
         """
@@ -215,8 +422,20 @@ class PermissionsManager:
         if self.is_supreme_admin(user_id, username) or self.is_dev_admin(user_id, username):
             return True
         
+        await self._ensure_roles_loaded()
         role = await self.get_user_role(user_id)
-        return role in SUPER_ROLES
+        return role in self._super_roles or role in self._top_privilege_roles
+
+    async def has_top_privileges(self, user_id: int, username: Optional[str] = None) -> bool:
+        """
+        Возвращает True только для ролей developer/founder (и bootstrap-админов).
+        Используется для операций, доступных исключительно владельцам продукта.
+        """
+        if self.is_supreme_admin(user_id, username) or self.is_dev_admin(user_id, username):
+            return True
+        await self._ensure_roles_loaded()
+        role = await self.get_user_role(user_id)
+        return role in self._top_privilege_roles
     
     async def can_approve(self, user_id: int, username: Optional[str] = None) -> bool:
         """
@@ -240,6 +459,7 @@ class PermissionsManager:
         - admin может назначать только операторов;
         - operator не может никого назначать.
         """
+        await self._ensure_roles_loaded()
         # Supreme и Dev могут всё
         if self.is_supreme_admin(actor_id, actor_username) or self.is_dev_admin(actor_id, actor_username):
             return True
@@ -248,10 +468,10 @@ class PermissionsManager:
         if not actor_role:
             return False
         
-        if actor_role in TOP_PRIVILEGE_ROLES:
+        if actor_role in self._top_privilege_roles:
             return True  # Founder/Developer могут всё
         
-        if actor_role == 'superadmin':
+        if actor_role in self._super_roles:
             return target_role in SUPERADMIN_MANAGEABLE_ROLES
         
         if actor_role == 'head_of_registry':
@@ -277,6 +497,7 @@ class PermissionsManager:
         - admin может понижать только операторов;
         - руководителей (head_of_registry) и топ-ролей (founder/developer) могут снимать только founder/developer.
         """
+        await self._ensure_roles_loaded()
         if self.is_supreme_admin(actor_id, actor_username) or self.is_dev_admin(actor_id, actor_username):
             return True
         
@@ -286,16 +507,16 @@ class PermissionsManager:
         if not actor_role or not target_role:
             return False
 
-        if target_role in TOP_PRIVILEGE_ROLES:
-            return actor_role in TOP_PRIVILEGE_ROLES
+        if target_role in self._top_privilege_roles:
+            return actor_role in self._top_privilege_roles
         
         if target_role == 'head_of_registry':
-            return actor_role in TOP_PRIVILEGE_ROLES
+            return actor_role in self._top_privilege_roles
         
-        if actor_role in TOP_PRIVILEGE_ROLES:
+        if actor_role in self._top_privilege_roles:
             return True
         
-        if actor_role == 'superadmin':
+        if actor_role in self._super_roles:
             return target_role in SUPERADMIN_MANAGEABLE_ROLES
         
         if actor_role == 'head_of_registry':
@@ -349,10 +570,28 @@ class PermissionsManager:
         Проверяет, есть ли у роли доступ к указанному разрешению.
         SuperAdmin и Dev имеют доступ ко всем действиям.
         """
-        if role_name in SUPER_ROLES:
+        await self._ensure_roles_loaded()
+        if role_name in self._top_privilege_roles:
             return True
-        allowed = ROLE_PERMISSIONS.get(role_name, set())
+        meta = self._roles_by_slug.get(role_name)
+        if not meta:
+            allowed = DEFAULT_APP_PERMISSIONS.get(role_name, set())
+        else:
+            allowed = meta.get("app_permissions", set())
         return required_permission in allowed
+
+    async def list_roles(self) -> List[Dict[str, str]]:
+        """
+        Возвращает список ролей с отображаемыми именами.
+        """
+        await self._ensure_roles_loaded()
+        return [
+            {
+                "slug": slug,
+                "display_name": meta.get("display_name") or slug.capitalize(),
+            }
+            for slug, meta in self._roles_by_slug.items()
+        ]
 
     async def can_manage_roles(self, user_id: int, username: Optional[str] = None) -> bool:
         """
@@ -360,5 +599,16 @@ class PermissionsManager:
         """
         if self.is_supreme_admin(user_id, username) or self.is_dev_admin(user_id, username):
             return True
+        await self._ensure_roles_loaded()
         role = await self.get_user_role(user_id)
-        return role in ROLE_MANAGE_ROLES
+        return role in self._role_manage_roles
+
+    async def can_exclude_user(self, user_id: int, username: Optional[str] = None) -> bool:
+        """
+        Проверяет, может ли пользователь исключать (блокировать/удалять) других пользователей.
+        """
+        if self.is_supreme_admin(user_id, username) or self.is_dev_admin(user_id, username):
+            return True
+        await self._ensure_roles_loaded()
+        role = await self.get_user_role(user_id)
+        return role in self._exclude_roles

@@ -30,6 +30,26 @@ class AdminRepository:
     Таблица users - это Mango phone справочник, НЕ трогаем для ролей!
     """
     
+    USER_FIELDS_BASE = """
+        SELECT
+            u.id,
+            u.user_id AS telegram_id,
+            u.telegram_id AS legacy_telegram_id,
+            u.username,
+            u.full_name,
+            u.extension,
+            u.role_id,
+            u.status,
+            u.operator_name,
+            u.approved_by,
+            u.blocked_at,
+            u.created_at,
+            u.updated_at,
+            r.role_name AS role_name
+        FROM UsersTelegaBot u
+        LEFT JOIN RolesTelegaBot r ON r.id = u.role_id
+    """
+
     def __init__(self, db_manager: DatabaseManager):
         self.db = db_manager
 
@@ -38,15 +58,27 @@ class AdminRepository:
         if not rows:
             return []
         for row in rows:
-            row['role'] = role_name_from_id(row.get('role_id'))
+            row['role'] = self._build_role_payload(row)
+            row.pop("role_name", None)
         return rows
 
     def _attach_role_name(self, row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Добавляет название роли к записи."""
         if row is None:
             return None
-        row['role'] = role_name_from_id(row.get('role_id'))
+        row['role'] = self._build_role_payload(row)
+        row.pop("role_name", None)
         return row
+
+    def _build_role_payload(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        role_id = row.get("role_id")
+        slug = role_name_from_id(role_id)
+        display_name = row.get("role_name") or slug
+        return {
+            "id": role_id,
+            "slug": slug,
+            "name": display_name,
+        }
     
     @log_async_exceptions
     async def get_pending_users(self) -> List[Dict[str, Any]]:
@@ -55,19 +87,14 @@ class AdminRepository:
         
         try:
             query = """
-                SELECT 
-                    id,
-                    user_id as telegram_id,
-                    full_name,
-                    role_id,
-                    status,
-                    operator_name,
-                    extension
-                FROM UsersTelegaBot
-                WHERE status = 'pending'
-                ORDER BY id DESC
+                {base}
+                WHERE u.status = 'pending'
+                ORDER BY u.id DESC
             """
-            rows = await self.db.execute_with_retry(query, fetchall=True) or []
+            rows = await self.db.execute_with_retry(
+                query.format(base=self.USER_FIELDS_BASE),
+                fetchall=True,
+            ) or []
             
             logger.info(f"[ADMIN_REPO] Found {len(rows)} pending users")
             return self._attach_role_names(rows)
@@ -82,21 +109,13 @@ class AdminRepository:
         
         try:
             query = """
-                SELECT 
-                    id,
-                    user_id as telegram_id,
-                    full_name,
-                    role_id,
-                    status,
-                    operator_name,
-                    extension,
-                    approved_by,
-                    blocked_at
-                FROM UsersTelegaBot
-                WHERE user_id = %s
+                {base}
+                WHERE u.user_id = %s
             """
             row = await self.db.execute_with_retry(
-                query, params=(telegram_id,), fetchone=True
+                query.format(base=self.USER_FIELDS_BASE),
+                params=(telegram_id,),
+                fetchone=True,
             )
             
             if row:
@@ -123,22 +142,14 @@ class AdminRepository:
         
         try:
             query = """
-                SELECT 
-                    id,
-                    user_id as telegram_id,
-                    full_name,
-                    role_id,
-                    status,
-                    operator_name, 
-                    extension,
-                    approved_by,
-                    blocked_at
-                FROM UsersTelegaBot
-                WHERE id = %s
+                {base}
+                WHERE u.id = %s
                 LIMIT 1
             """
             row = await self.db.execute_with_retry(
-                query, params=(user_id,), fetchone=True
+                query.format(base=self.USER_FIELDS_BASE),
+                params=(user_id,),
+                fetchone=True,
             )
             
             return self._attach_role_name(row)
@@ -437,17 +448,9 @@ class AdminRepository:
             # Динамически строим IN clause для всех админских ролей
             placeholders = ', '.join(['%s'] * len(ADMIN_ROLE_IDS))
             query = f"""
-                SELECT 
-                    id,
-                    user_id as telegram_id,
-                    full_name,
-                    extension,
-                    role_id,
-                    status,
-                    operator_name
-                FROM UsersTelegaBot
-                WHERE role_id IN ({placeholders}) AND status != 'blocked'
-                ORDER BY role_id DESC, full_name
+                {self.USER_FIELDS_BASE}
+                WHERE u.role_id IN ({placeholders}) AND u.status != 'blocked'
+                ORDER BY u.role_id DESC, u.full_name
             """
             rows = await self.db.execute_with_retry(
                 query,
@@ -472,21 +475,13 @@ class AdminRepository:
         
         try:
             query = """
-                SELECT 
-                    id,
-                    user_id as telegram_id,
-                    full_name,
-                    extension,
-                    role_id,
-                    status,
-                    operator_name
-                FROM UsersTelegaBot
-                WHERE status = 'approved' AND (role_id IS NULL OR role_id = %s)
-                ORDER BY id DESC
+                {base}
+                WHERE u.status = 'approved' AND (u.role_id IS NULL OR u.role_id = %s)
+                ORDER BY u.id DESC
                 LIMIT %s OFFSET %s
             """
             rows = await self.db.execute_with_retry(
-                query,
+                query.format(base=self.USER_FIELDS_BASE),
                 params=(ROLE_NAME_TO_ID['operator'], limit, offset),
                 fetchall=True,
             ) or []
@@ -512,38 +507,22 @@ class AdminRepository:
         try:
             if status_filter:
                 query = """
-                    SELECT 
-                        id,
-                        user_id as telegram_id,
-                        full_name,
-                        extension,
-                        role_id,
-                        status,
-                        operator_name,
-                        approved_by
-                    FROM UsersTelegaBot
-                    WHERE status = %s
-                    ORDER BY id DESC
-                """
+                    {base}
+                    WHERE u.status = %s
+                    ORDER BY u.id DESC
+                """.format(base=self.USER_FIELDS_BASE)
                 params = (status_filter,)
             else:
                 query = """
-                    SELECT 
-                        id,
-                        user_id as telegram_id,
-                        full_name,
-                        extension,
-                        role_id,
-                        status,
-                        operator_name,
-                        approved_by
-                    FROM UsersTelegaBot
-                    ORDER BY id DESC
-                """
+                    {base}
+                    ORDER BY u.id DESC
+                """.format(base=self.USER_FIELDS_BASE)
                 params = None
             
             rows = await self.db.execute_with_retry(
-                query, params=params, fetchall=True
+                query,
+                params=params,
+                fetchall=True,
             ) or []
             
             logger.info(f"[ADMIN_REPO] Found {len(rows)} users")
@@ -674,21 +653,13 @@ class AdminRepository:
                 role_id = ROLE_NAME_TO_ID.get("admin")
 
             query = """
-                SELECT 
-                    id,
-                    user_id as telegram_id,
-                    full_name,
-                    extension,
-                    role_id,
-                    status,
-                    operator_name
-                FROM UsersTelegaBot
-                WHERE status = 'approved' AND role_id = %s
-                ORDER BY id DESC
+                {base}
+                WHERE u.status = 'approved' AND u.role_id = %s
+                ORDER BY u.id DESC
                 LIMIT %s
             """
             rows = await self.db.execute_with_retry(
-                query,
+                query.format(base=self.USER_FIELDS_BASE),
                 params=(role_id, limit),
                 fetchall=True,
             ) or []

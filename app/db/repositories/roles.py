@@ -11,10 +11,19 @@ from typing import Optional, Dict, List, Any
 
 from app.config import DB_CONFIG
 from app.db.manager import DatabaseManager
-from app.db.utils_schema import has_column
 from app.logging_config import get_watchdog_logger
 
 logger = get_watchdog_logger(__name__)
+
+ROLE_PRIORITY = {
+    "operator": 10,
+    "admin": 50,
+    "superadmin": 70,
+    "head_of_registry": 80,
+    "marketing_director": 85,
+    "developer": 90,
+    "founder": 100,
+}
 
 
 class RolesRepository:
@@ -35,10 +44,9 @@ class RolesRepository:
         
         Returns:
             Dict с полями:
-            - role_id, role_name, role_level
+            - role_id, role_name (slug), display_name
             - can_view_own_stats, can_view_all_stats
             - can_manage_users, can_debug
-            или None если роль не найдена
         """
         logger.debug(f"[ROLES] Getting role by id: {role_id}")
         
@@ -48,25 +56,19 @@ class RolesRepository:
             return self._roles_cache[role_id]
         
         try:
-            role_level_exists = await has_column(
-                self.db, "roles_reference", "role_level", self.db_name
-            )
-            role_level_select = (
-                "role_level" if role_level_exists else "NULL AS role_level"
-            )
             query = """
                 SELECT 
-                    role_id,
-                    role_name,
-                    {role_level_select},
-                    can_view_own_stats,
-                    can_view_all_stats,
-                    can_manage_users,
-                    can_debug
-                FROM roles_reference
-                WHERE role_id = %s
+                    rr.role_id,
+                    rr.role_name AS slug,
+                    COALESCE(rt.role_name, rr.role_name) AS display_name,
+                    rr.can_view_own_stats,
+                    rr.can_view_all_stats,
+                    rr.can_manage_users,
+                    rr.can_debug
+                FROM roles_reference rr
+                LEFT JOIN RolesTelegaBot rt ON rt.id = rr.role_id
+                WHERE rr.role_id = %s
             """
-            query = query.format(role_level_select=role_level_select)
 
             result = await self.db.execute_with_retry(
                 query,
@@ -86,8 +88,7 @@ class RolesRepository:
                 self._roles_cache[role_id] = role
                 
                 logger.debug(
-                    f"[ROLES] Found role: {role.get('role_name')}, "
-                    f"level={role.get('role_level')}"
+                    f"[ROLES] Found role: {role.get('display_name')}"
                 )
                 return role
             else:
@@ -105,30 +106,23 @@ class RolesRepository:
         Получить все роли из roles_reference.
         
         Returns:
-            Список всех ролей, отсортированных по role_level
+            Список всех ролей, отсортированных по приоритетам ROLE_PRIORITY
         """
         logger.info("[ROLES] Getting all roles")
         
         try:
-            role_level_exists = await has_column(
-                self.db, "roles_reference", "role_level", self.db_name
-            )
-            role_level_select = (
-                "role_level" if role_level_exists else "NULL AS role_level"
-            )
             query = """
                 SELECT 
-                    role_id,
-                    role_name,
-                    {role_level_select},
-                    can_view_own_stats,
-                    can_view_all_stats,
-                    can_manage_users,
-                    can_debug
-                FROM roles_reference
-                ORDER BY role_level ASC
+                    rr.role_id,
+                    rr.role_name AS slug,
+                    COALESCE(rt.role_name, rr.role_name) AS display_name,
+                    rr.can_view_own_stats,
+                    rr.can_view_all_stats,
+                    rr.can_manage_users,
+                    rr.can_debug
+                FROM roles_reference rr
+                LEFT JOIN RolesTelegaBot rt ON rt.id = rr.role_id
             """
-            query = query.format(role_level_select=role_level_select)
             
             results = await self.db.execute_with_retry(
                 query,
@@ -148,6 +142,7 @@ class RolesRepository:
                 # Кешировать
                 self._roles_cache[role['role_id']] = role
             
+            roles.sort(key=lambda role: ROLE_PRIORITY.get(role.get("slug"), 0))
             logger.info(f"[ROLES] Found {len(roles)} roles")
             return roles
             
@@ -267,13 +262,15 @@ class RolesRepository:
             Название роли или "Неизвестная роль"
         """
         role = await self.get_role_by_id(role_id)
-        return role.get('role_name', 'Неизвестная роль') if role else 'Неизвестная роль'
+        if not role:
+            return 'Неизвестная роль'
+        return role.get('display_name') or role.get('slug', 'Неизвестная роль')
     
     async def get_manageable_roles(self, manager_role_id: int) -> List[Dict[str, Any]]:
         """
         Получить роли, которыми может управлять данная роль.
         
-        Правило: можно назначать роли с role_level <= своего уровня.
+        Правило: можно назначать роли с приоритетом ниже или равным своему.
         
         Args:
             manager_role_id: role_id управляющего
@@ -288,17 +285,17 @@ class RolesRepository:
         if not manager_role:
             return []
         
-        manager_level = manager_role.get('role_level', 0)
+        manager_priority = ROLE_PRIORITY.get(manager_role.get('slug'), 0)
         all_roles = await self.get_all_roles()
         
         # Можно назначать роли <= своего уровня
         manageable = [
             role for role in all_roles
-            if role.get('role_level', 999) <= manager_level
+            if ROLE_PRIORITY.get(role.get('slug'), 0) <= manager_priority
         ]
         
         logger.info(
-            f"[ROLES] Role {manager_role.get('role_name')} (level={manager_level}) "
+            f"[ROLES] Role {manager_role.get('display_name')} (priority={manager_priority}) "
             f"can manage {len(manageable)} roles"
         )
         

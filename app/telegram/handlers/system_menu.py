@@ -8,10 +8,11 @@
 
 from __future__ import annotations
 
+import html
 from collections import deque
 from functools import partial
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Iterable, Deque
 
 from telegram import Update
 from telegram.ext import (
@@ -38,6 +39,13 @@ logger = get_watchdog_logger(__name__)
 
 class SystemMenuHandler:
     """Отвечает за вывод системного меню и обработку его действий."""
+
+    LOG_PATHS = [
+        Path("logs/app.log"),
+        Path("logs/logs.log"),
+        Path("logs/operabot.log"),
+        Path("logs/errors.log"),
+    ]
 
     def __init__(
         self,
@@ -153,28 +161,67 @@ class SystemMenuHandler:
         return "\n".join(lines)
 
     async def _collect_recent_errors(self) -> str:
-        log_path = Path("logs/app.log")
-        if not log_path.exists():
-            return "ℹ️ Лог-файл logs/app.log не найден."
-
-        recent_errors = deque(maxlen=8)
-        try:
-            with log_path.open("r", encoding="utf-8", errors="ignore") as log_file:
-                for line in log_file:
-                    normalized = line.strip()
-                    if not normalized:
-                        continue
-                    if "error" in normalized.lower():
-                        recent_errors.append(normalized)
-        except Exception as exc:
-            logger.exception("Не удалось прочитать лог ошибок", exc_info=True)
-            return f"❌ Не удалось прочитать logs/app.log: {exc}"
-
-        if not recent_errors:
+        errors = self._grep_logs(
+            paths=[Path("logs/app.log")],
+            limit=10,
+        )
+        if not errors:
             return "✅ В логе нет ошибок за последнюю сессию."
+        return "❌ <b>Последние ошибки</b>:\n" + "\n".join(errors)
 
-        snippet = "\n".join(recent_errors)
-        return f"❌ <b>Последние ошибки</b>:\n{snippet}"
+    def _grep_logs(
+        self,
+        paths: Iterable[Path],
+        limit: int,
+        include_tracebacks: bool = True,
+    ) -> Deque[str]:
+        patterns = ("error", "exception")
+        tb_keyword = "traceback"
+        bucket: Deque[str] = deque(maxlen=limit)
+        for path in paths:
+            if not path.exists():
+                continue
+            try:
+                with path.open("r", encoding="utf-8", errors="ignore") as handler:
+                    for line in handler:
+                        normalized = line.rstrip()
+                        if not normalized:
+                            continue
+                        lower = normalized.lower()
+                        if any(pattern in lower for pattern in patterns):
+                            bucket.append(f"[{path.name}] {normalized}")
+                        elif include_tracebacks and tb_keyword in lower:
+                            bucket.append(f"[{path.name}] {normalized}")
+            except Exception as exc:
+                logger.warning("Не удалось прочитать лог %s: %s", path, exc)
+        return bucket
+
+    async def handle_last_errors_command(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Выводит последние ошибки/трейсбеки из всех логов."""
+        message = update.effective_message
+        user = update.effective_user
+        if not message or not user:
+            return
+
+        if not await self._can_use_system(user.id, user.username):
+            await message.reply_text("❌ Доступ запрещён.")
+            return
+
+        errors = self._grep_logs(self.LOG_PATHS, limit=80)
+        if not errors:
+            await message.reply_text("✅ В логах нет сообщений уровней ERROR/Traceback.")
+            return
+
+        snippet = "\n".join(errors)
+        escaped = html.escape(snippet)
+        cropped = escaped[-3800:]
+        await message.reply_text(
+            "❌ <b>Последние ошибки/Traceback</b>\n"
+            f"<code>{cropped}</code>",
+            parse_mode="HTML",
+        )
 
     async def _run_integrity_checks(self) -> str:
         lines = ["🔌 <b>Проверка ключевых таблиц</b>"]
@@ -231,9 +278,16 @@ def register_system_handlers(
     """Регистрирует обработчики для системного меню и кнопки помощи."""
     handler = SystemMenuHandler(db_manager, permissions_manager)
     application.add_handler(CommandHandler("system", handler.handle_system_command))
+    application.add_handler(CommandHandler("last_errors", handler.handle_last_errors_command))
     application.add_handler(
         MessageHandler(
             filters.Regex(r"^⚙️ Система$"), handler.handle_system_command
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(r"(?i)последние ошибки"),
+            handler.handle_last_errors_command,
         )
     )
     application.add_handler(

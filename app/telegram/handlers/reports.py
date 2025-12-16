@@ -8,7 +8,14 @@ from math import ceil
 from typing import Dict, Any, Optional, List
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CallbackContext, CommandHandler, CallbackQueryHandler
+from telegram.ext import (
+    Application,
+    CallbackContext,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+)
 
 from app.services.reports import ReportService
 from app.telegram.middlewares.permissions import PermissionsManager
@@ -42,6 +49,13 @@ def register_report_handlers(
             pattern=rf"^{REPORT_CALLBACK_PREFIX}:"
         )
     )
+    application.bot_data["report_handler"] = handler
+    application.add_handler(
+        MessageHandler(
+            filters.Regex(r"^📊 Отчёты$"),
+            handler.handle_reports_button,
+        )
+    )
 
 
 class _ReportHandler:
@@ -56,14 +70,35 @@ class _ReportHandler:
         self.operator_repo = OperatorRepository(db_manager)
 
     async def handle_command(self, update: Update, context: CallbackContext) -> None:
+        args = context.args or []
+        period = args[0] if args else "daily"
+        date_range = args[1] if len(args) > 1 else None
+        await self._start_reports_flow(update, context, period, date_range)
+
+    async def handle_reports_button(self, update: Update, context: CallbackContext) -> None:
+        await self._start_reports_flow(update, context, period="daily", date_range=None)
+
+    async def start_report_flow(
+        self,
+        update: Update,
+        context: CallbackContext,
+        period: str = "daily",
+        date_range: Optional[str] = None,
+    ) -> None:
+        await self._start_reports_flow(update, context, period, date_range)
+
+    async def _start_reports_flow(
+        self,
+        update: Update,
+        context: CallbackContext,
+        period: str,
+        date_range: Optional[str],
+    ) -> None:
         message = update.effective_message
         user = update.effective_user
         if not message or not user:
             return
 
-        args = context.args or []
-        period = args[0] if args else "daily"
-        date_range = args[1] if len(args) > 1 else None
         context.user_data["report_args"] = {
             "period": period,
             "date_range": date_range,

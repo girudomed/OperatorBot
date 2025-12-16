@@ -199,7 +199,15 @@ class AdminUsersHandler:
             await safe_edit_message(query, text="❌ Пользователь не найден")
             return
         
-        role_name = user.get('role') or role_name_from_id(user.get('role_id'))
+        role_info = user.get('role') or {}
+        role_slug = role_info.get('slug') if isinstance(role_info, dict) else None
+        role_name = None
+        if isinstance(role_info, dict):
+            role_name = role_info.get('name') or role_info.get('slug')
+        if not role_name:
+            role_name = role_name_from_id(user.get('role_id'))
+        if not role_slug:
+            role_slug = role_name_from_id(user.get('role_id')).lower()
         username = user.get('username')
         username_line = f"@{username}" if username else "—"
         extension = user.get('extension') or "—"
@@ -237,7 +245,7 @@ class AdminUsersHandler:
             ])
 
         can_promote_admin = False
-        if actor and user.get('status') == 'approved' and role_name == 'operator':
+        if actor and user.get('status') == 'approved' and role_slug == 'operator':
             can_promote_admin = await self.permissions.can_promote(
                 actor.id,
                 'admin',
@@ -385,8 +393,8 @@ class AdminUsersHandler:
         user_id = self._extract_user_id(query.data)
         actor_id = update.effective_user.id
         
-        can_manage = await self.permissions.can_approve(actor_id, update.effective_user.username)
-        if not can_manage:
+        can_exclude = await self.permissions.can_exclude_user(actor_id, update.effective_user.username)
+        if not can_exclude:
             await query.answer("❌ Недостаточно прав", show_alert=True)
             logger.warning(
                 "Попытка блокировки без прав: %s -> target_id=%s",
@@ -419,8 +427,8 @@ class AdminUsersHandler:
         user_id = self._extract_user_id(query.data)
         actor_id = update.effective_user.id
         
-        can_manage = await self.permissions.can_approve(actor_id, update.effective_user.username)
-        if not can_manage:
+        can_exclude = await self.permissions.can_exclude_user(actor_id, update.effective_user.username)
+        if not can_exclude:
             await query.answer("❌ Недостаточно прав", show_alert=True)
             logger.warning(
                 "Попытка разблокировки без прав: %s -> target_id=%s",

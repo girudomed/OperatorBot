@@ -176,7 +176,7 @@ class CallLookupService:
                 ch.talk_duration,
                 {record_url_select} AS record_url,
                 ch.recording_id,
-                cs.score,
+                cs.call_score AS score,
                 cs.transcript
             FROM call_history ch
             LEFT JOIN call_scores cs ON cs.history_id = ch.history_id
@@ -272,7 +272,7 @@ class CallLookupService:
                 ch.talk_duration,
                 {record_url_select} AS record_url,
                 ch.recording_id,
-                cs.score,
+                cs.call_score AS score,
                 cs.transcript
             FROM call_history ch
             LEFT JOIN call_scores cs ON cs.history_id = ch.history_id

@@ -4,6 +4,8 @@
 Хендлер статистики для админ-панели.
 """
 
+from datetime import datetime
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackQueryHandler, ContextTypes, Application
 
@@ -47,12 +49,23 @@ class AdminStatsHandler:
             logger.error(f"Failed to get quality summary: {e}")
             quality_summary = {}
         
+        period_label = ""
+        start_label = quality_summary.get("start_date")
+        end_label = quality_summary.get("end_date")
+        if start_label and end_label:
+            try:
+                start_fmt = datetime.fromisoformat(start_label).strftime("%d.%m.%Y")
+                end_fmt = datetime.fromisoformat(end_label).strftime("%d.%m.%Y")
+                period_label = f" ({start_fmt} — {end_fmt})"
+            except ValueError:
+                period_label = f" ({start_label} — {end_label})"
+        
         message = (
             f"📈 <b>Статистика системы</b>\n\n"
             f"<b>Пользователи:</b>\n"
             f"⏳ Ожидают утверждения: {len(pending_users)}\n"
             f"👑 Администраторов: {len(all_admins)}\n\n"
-            f"<b>Качество (неделя):</b>\n"
+            f"<b>Качество (неделя{period_label}):</b>\n"
             f"📞 Всего звонков: {quality_summary.get('total_calls', 0)}\n"
             f"❌ Пропущено: {quality_summary.get('missed_calls', 0)} "
             f"({quality_summary.get('missed_rate', 0):.1f}%)\n"

@@ -778,6 +778,7 @@ def register_admin_commands_handlers(
             pattern=rf"^{COMMAND_CALLBACK_PREFIX}:approve:action:",
         )
     )
+    application.bot_data["admin_commands_handler"] = handler
     application.add_handler(
         CallbackQueryHandler(
             handler.handle_promote_list_callback,

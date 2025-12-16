@@ -210,6 +210,7 @@ async def main():
         # Привязываем сервисы к bot_data для доступа из воркеров и хендлеров
         application.bot_data["db_manager"] = db_manager
         application.bot_data["report_service"] = report_service
+        application.bot_data["weekly_quality_service"] = weekly_quality_service
         application.bot_data["permissions_manager"] = permissions_manager
         application.bot_data["admin_repo"] = admin_repo
 

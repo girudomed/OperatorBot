@@ -6,7 +6,7 @@
 Предоставляет точку входа /admin и основное меню.
 """
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest, TelegramError
@@ -24,7 +24,7 @@ from app.logging_config import get_watchdog_logger
 from app.telegram.utils.logging import describe_user
 from app.telegram.utils.messages import safe_edit_message
 from app.utils.error_handlers import log_async_exceptions
-from app.core.roles import role_display_name_from_name
+from app.core.roles import role_display_name_from_name, role_name_from_id
 
 logger = get_watchdog_logger(__name__)
 ADMIN_PREFIX = "admin"
@@ -93,11 +93,18 @@ class AdminPanelHandler:
         """Отображает главное меню админ-панели."""
         user = update.effective_user
         counters = None
+        role_slug: Optional[str] = None
+        allow_commands = False
         try:
             counters = await self.admin_repo.get_users_counters()
         except Exception as exc:
             logger.error("Не удалось получить счётчики пользователей: %s", exc)
-        
+        try:
+            role_slug = await self.permissions.get_effective_role(user.id, user.username)
+            allow_commands = role_slug not in {"operator", "admin"}
+        except Exception:
+            logger.warning("Не удалось определить роль пользователя %s", describe_user(user))
+
         roles_summary = self._build_roles_summary(counters)
         keyboard = [
             [
@@ -127,6 +134,14 @@ class AdminPanelHandler:
                 ),
             ],
         ]
+        if allow_commands:
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        "📑 Команды", callback_data=self._callback("commands")
+                    )
+                ]
+            )
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -203,6 +218,14 @@ class AdminPanelHandler:
             await self._show_dashboard(update, context)
             return
 
+        if section == "command":
+            await self._handle_command_action(action, payload, update, context)
+            return
+        
+        if section == "commands":
+            await self._show_command_shortcuts(update, context)
+            return
+
     async def _show_dashboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показывает dashboard с основными метриками."""
         query = update.callback_query
@@ -276,6 +299,121 @@ class AdminPanelHandler:
             parse_mode='HTML',
         )
 
+    async def _show_command_shortcuts(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        query = update.callback_query
+        user = update.effective_user
+        if not query or not user:
+            return
+        if not await self._has_commands_access(user.id, user.username):
+            await query.answer("Недостаточно прав", show_alert=True)
+            return
+        text = (
+            "📑 <b>Команды бота</b>\n"
+            "Выберите нужное действие – команда выполнится автоматически."
+        )
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "📅 Еженедельный отчёт",
+                    callback_data=self._callback("command", "weekly_quality"),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🧠 AI-отчёт",
+                    callback_data=self._callback("command", "report"),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "✅ Утвердить заявки",
+                    callback_data="admincmd:approve:list",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "👤 Кандидаты в админы",
+                    callback_data="admincmd:promote:admin:list",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⭐ Кандидаты в супер-админы",
+                    callback_data="admincmd:promote:superadmin:list",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "👑 Список админов",
+                    callback_data=self._callback("command", "admins"),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🧩 Назначить роль",
+                    callback_data=self._callback("command", "set_role"),
+                )
+            ],
+            [InlineKeyboardButton("◀️ Назад", callback_data=self._callback("back"))],
+        ]
+        await safe_edit_message(
+            query,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML",
+        )
+
+    async def _has_commands_access(self, user_id: int, username: Optional[str]) -> bool:
+        role_slug = await self.permissions.get_effective_role(user_id, username)
+        return role_slug not in {"operator", "admin"}
+
+    async def _handle_command_action(
+        self,
+        action: Optional[str],
+        payload: Optional[str],
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> None:
+        query = update.callback_query
+        user = update.effective_user
+        if not query or not user:
+            return
+        if not await self._has_commands_access(user.id, user.username):
+            await query.answer("Недостаточно прав", show_alert=True)
+            return
+        if action == "weekly_quality":
+            await self._run_weekly_quality(query, context)
+            return
+        if action == "report":
+            await self._open_report_flow(update, context)
+            return
+        if action == "admins":
+            await self._show_admins_list(query)
+            return
+        if action == "set_role":
+            await self._show_set_role_users(query, 0)
+            return
+        if action == "set_role_page":
+            page = int(payload or "0")
+            await self._show_set_role_users(query, page)
+            return
+        if action == "set_role_select":
+            if not payload:
+                await query.answer("Некорректный пользователь", show_alert=True)
+                return
+            await self._show_set_role_detail(query, int(payload))
+            return
+        if action == "set_role_assign":
+            if not payload:
+                await query.answer("Нет данных", show_alert=True)
+                return
+            user_part, role_part = payload.split("|", 1)
+            await self._assign_role_from_panel(query, int(user_part), role_part)
+            return
+        await query.answer("Команда в разработке", show_alert=True)
+
     def _callback(
         self,
         section: str,
@@ -288,6 +426,204 @@ class AdminPanelHandler:
         if payload:
             parts.append(str(payload))
         return ":".join(parts)
+
+    async def _run_weekly_quality(self, query, context: ContextTypes.DEFAULT_TYPE) -> None:
+        service = context.application.bot_data.get("weekly_quality_service")
+        if not service:
+            await query.answer("Сервис недоступен", show_alert=True)
+            return
+        try:
+            report_text = await service.get_text_report(period="weekly")
+        except Exception as exc:
+            logger.exception("weekly_quality shortcut failed: %s", exc)
+            await safe_edit_message(
+                query,
+                text="❌ Не удалось построить отчёт качества.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("◀️ Назад", callback_data=self._callback("commands"))]]
+                ),
+            )
+            return
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "🔄 Обновить", callback_data=self._callback("command", "weekly_quality")
+                    )
+                ],
+                [InlineKeyboardButton("◀️ Назад", callback_data=self._callback("commands"))],
+            ]
+        )
+        await safe_edit_message(
+            query,
+            text=report_text,
+            reply_markup=keyboard,
+        )
+
+    async def _open_report_flow(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        handler = context.application.bot_data.get("report_handler")
+        if not handler:
+            await update.callback_query.answer("Сервис отчётов недоступен", show_alert=True)
+            return
+        await handler.start_report_flow(update, context, period="daily", date_range=None)
+
+    async def _show_admins_list(self, query) -> None:
+        admins = await self.admin_repo.get_admins()
+        if not admins:
+            await safe_edit_message(
+                query,
+                text="👑 Нет администраторов в системе.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("◀️ Назад", callback_data=self._callback("commands"))]]
+                ),
+            )
+            return
+        text = "👑 <b>Список администраторов</b>\n\n"
+        for admin in admins:
+            role_info = admin.get("role")
+            role_name = None
+            if isinstance(role_info, dict):
+                role_name = role_info.get("name")
+            role_name = role_name or admin.get("role_name") or "—"
+            username = admin.get("username") or "—"
+            text += f"• <b>{admin.get('full_name', 'Без имени')}</b> — {role_name}\n   @{username}\n\n"
+        await safe_edit_message(
+            query,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("◀️ Назад", callback_data=self._callback("commands"))]]
+            ),
+            parse_mode="HTML",
+        )
+
+    async def _show_set_role_users(self, query, page: int) -> None:
+        users = await self.admin_repo.get_all_users(status_filter="approved")
+        if not users:
+            await safe_edit_message(
+                query,
+                text="Нет утверждённых пользователей.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("◀️ Назад", callback_data=self._callback("commands"))]]
+                ),
+            )
+            return
+        page_size = 8
+        total_pages = max(1, (len(users) + page_size - 1) // page_size)
+        page = max(0, min(page, total_pages - 1))
+        start = page * page_size
+        end = start + page_size
+        keyboard: List[List[InlineKeyboardButton]] = []
+        for user in users[start:end]:
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        user.get("full_name") or f"#{user.get('id')}",
+                        callback_data=self._callback(
+                            "command", "set_role_select", str(user.get("id"))
+                        ),
+                    )
+                ]
+            )
+        nav_row: List[InlineKeyboardButton] = []
+        if page > 0:
+            nav_row.append(
+                InlineKeyboardButton(
+                    "⬅️", callback_data=self._callback("command", "set_role_page", str(page - 1))
+                )
+            )
+        if page < total_pages - 1:
+            nav_row.append(
+                InlineKeyboardButton(
+                    "➡️", callback_data=self._callback("command", "set_role_page", str(page + 1))
+                )
+            )
+        if nav_row:
+            keyboard.append(nav_row)
+        keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data=self._callback("commands"))])
+        await safe_edit_message(
+            query,
+            text="🧩 <b>Выберите пользователя для смены роли</b>",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML",
+        )
+
+    async def _show_set_role_detail(self, query, user_id: int) -> None:
+        user = await self.admin_repo.get_user_by_id(user_id)
+        if not user:
+            await query.answer("Пользователь не найден", show_alert=True)
+            return
+        roles = await self.permissions.list_roles()
+        actor = query.from_user
+        username = actor.username if actor else None
+        buttons: List[List[InlineKeyboardButton]] = []
+        for role in roles:
+            slug = role["slug"]
+            display = role["display_name"]
+            can_assign = (
+                await self.permissions.can_promote(actor.id, slug, username)
+                if actor
+                else False
+            )
+            if not can_assign:
+                continue
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        display,
+                        callback_data=self._callback(
+                            "command", "set_role_assign", f"{user_id}|{slug}"
+                        ),
+                    )
+                ]
+            )
+        if not buttons:
+            await query.answer("Нет доступных ролей", show_alert=True)
+            await self._show_set_role_users(query, 0)
+            return
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    "◀️ Назад к списку",
+                    callback_data=self._callback("command", "set_role"),
+                )
+            ]
+        )
+        role_info = user.get("role")
+        if isinstance(role_info, dict):
+            current_role = role_info.get("name") or role_info.get("slug")
+        else:
+            current_role = role_name_from_id(user.get("role_id"))
+        info = (
+            f"🧩 <b>Смена роли</b>\n"
+            f"Пользователь: <b>{user.get('full_name', '—')}</b>\n"
+            f"Текущая роль: {current_role}\n"
+            "Выберите новую роль:"
+        )
+        await safe_edit_message(
+            query,
+            text=info,
+            reply_markup=InlineKeyboardMarkup(buttons),
+            parse_mode="HTML",
+        )
+
+    async def _assign_role_from_panel(
+        self, query, user_id: int, role_slug: str
+    ) -> None:
+        actor = query.from_user
+        if not actor:
+            return
+        can_assign = await self.permissions.can_promote(actor.id, role_slug, actor.username)
+        if not can_assign:
+            await query.answer("Недостаточно прав для назначения роли", show_alert=True)
+            return
+        success = await self.admin_repo.set_user_role(user_id, role_slug, actor.id)
+        if success:
+            await query.answer("✅ Роль обновлена")
+        else:
+            await query.answer("Не удалось обновить роль", show_alert=True)
+        await self._show_set_role_detail(query, user_id)
 
     def _parse_callback(self, data: str) -> Tuple[str, Optional[str], Optional[str]]:
         if not data.startswith(f"{ADMIN_PREFIX}:"):

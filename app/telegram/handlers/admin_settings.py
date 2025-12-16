@@ -45,12 +45,11 @@ class AdminSettingsHandler:
 
     async def _ensure_access(self, user_id: int, username: Optional[str]) -> bool:
         """
-        Доступ к настройкам разрешаем только суперадминам/девам.
+        Доступ к настройкам разрешаем только владельцам продукта (founder/developer)
+        и bootstrap-админам.
         Остальным показываем предупреждение и не выполняем действие.
         """
-        if await self.permissions.is_superadmin(user_id, username):
-            return True
-        return False
+        return await self.permissions.has_top_privileges(user_id, username)
 
     @log_async_exceptions
     async def show_settings_menu(
@@ -71,19 +70,11 @@ class AdminSettingsHandler:
             "⚙️ <b>Настройки</b>\n\n"
             "Сервисные операции для администраторов:\n"
             "• просматривайте последние логи;\n"
-            "• проверяйте ключевые токены и подключение к БД;\n"
-            "• перезапускайте воркеры очереди отчётов;\n"
             "• очищайте устаревший кеш дашбордов."
         )
         keyboard = [
             [
                 InlineKeyboardButton("📄 Логи", callback_data="admin:settings:logs"),
-                InlineKeyboardButton("🔑 API-ключи", callback_data="admin:settings:check"),
-            ],
-            [
-                InlineKeyboardButton(
-                    "🔁 Перезапустить воркеры", callback_data="admin:settings:restart"
-                ),
             ],
             [
                 InlineKeyboardButton(
@@ -128,10 +119,6 @@ class AdminSettingsHandler:
 
         if action == "logs":
             await self._send_logs(query)
-        elif action == "check":
-            await self._show_env_status(query)
-        elif action == "restart":
-            await self._restart_workers(query, context)
         elif action == "cleanup":
             await self._cleanup_cache(query)
         else:
@@ -182,67 +169,6 @@ class AdminSettingsHandler:
             parse_mode="HTML",
         )
 
-    async def _show_env_status(self, query) -> None:
-        statuses = [
-            ("OPENAI_API_KEY", bool(OPENAI_API_KEY)),
-            ("TELEGRAM_BOT_TOKEN", bool(TELEGRAM_TOKEN)),
-            ("DB_HOST/USER/PASSWORD/NAME", all(DB_CONFIG.get(k) for k in ("host", "user", "password", "db"))),
-            ("DB_PORT", bool(DB_CONFIG.get("port"))),
-            ("SENTRY_DSN", bool(SENTRY_DSN)),
-        ]
-        formatted = "\n".join(
-            f"{'✅' if ok else '⚠️'} {name}" for name, ok in statuses
-        )
-        message = (
-            "🔑 <b>Проверка конфигурации</b>\n"
-            "Статус ключевых переменных окружения:\n\n"
-            f"{formatted}\n\n"
-            "⚠️ Значения не отображаются полностью из соображений безопасности."
-        )
-        await safe_edit_message(
-            query,
-            text=message,
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton("🔄 Проверить снова", callback_data="admin:settings:check"),
-                        InlineKeyboardButton("◀️ Назад", callback_data="admin:settings"),
-                    ]
-                ]
-            ),
-            parse_mode="HTML",
-        )
-
-    async def _restart_workers(
-        self, query, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
-        application = context.application
-        if not application:
-            await safe_edit_message(
-                query,
-                text="⚠️ Невозможно перезапустить воркеры: приложение недоступно.",
-                reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("◀️ Назад", callback_data="admin:settings")]]
-                ),
-            )
-            return
-
-        try:
-            await stop_workers(application)
-            await start_workers(application)
-            text = "🔁 Воркеры очереди перезапущены."
-            logger.info("Workers restarted via admin settings")
-        except Exception as exc:
-            logger.exception("Не удалось перезапустить воркеры: %s", exc)
-            text = f"⚠️ Ошибка при перезапуске воркеров: {exc}"
-
-        await safe_edit_message(
-            query,
-            text=text,
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("◀️ Назад", callback_data="admin:settings")]]
-            ),
-        )
 
     async def _cleanup_cache(self, query) -> None:
         try:
