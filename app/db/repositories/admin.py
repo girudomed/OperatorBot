@@ -322,6 +322,52 @@ class AdminRepository:
             return False
     
     @log_async_exceptions
+    async def _update_user_role(
+        self,
+        telegram_id: int,
+        new_role: str,
+        actor_telegram_id: int,
+        action: str,
+        *,
+        only_approved: bool = False,
+    ) -> bool:
+        """Базовый метод смены роли пользователя."""
+        logger.info(
+            "[ADMIN_REPO] %s user %s -> role %s by %s",
+            action,
+            telegram_id,
+            new_role,
+            actor_telegram_id,
+        )
+        try:
+            new_role_id = ROLE_NAME_TO_ID.get(new_role)
+            if not new_role_id:
+                logger.warning(f"[ADMIN_REPO] Unknown role '{new_role}' for action {action}")
+                return False
+            
+            status_clause = "AND status = 'approved'" if only_approved else ""
+            query = f"""
+                UPDATE UsersTelegaBot
+                SET role_id = %s
+                WHERE user_id = %s {status_clause}
+            """
+            await self.db.execute_with_retry(query, params=(new_role_id, telegram_id), commit=True)
+
+            await self.log_admin_action(
+                actor_telegram_id=actor_telegram_id,
+                action=action,
+                target_telegram_id=telegram_id,
+                payload={'new_role': new_role},
+            )
+
+            logger.info("[ADMIN_REPO] User %s role updated to %s", telegram_id, new_role)
+            return True
+        except Exception as e:
+            logger.error(
+                f"[ADMIN_REPO] Error updating role for user {telegram_id}: {e}\n{traceback.format_exc()}"
+            )
+            return False
+    
     async def promote_user(
         self, 
         telegram_id: int, 
@@ -330,46 +376,14 @@ class AdminRepository:
     ) -> bool:
         """
         Повышает Telegram пользователя до новой роли.
-        
-        Args:
-            telegram_id: Telegram ID пользователя
-            new_role: Новая роль ('admin' или 'superadmin')
-            promoter_telegram_id: Telegram ID повышающего админа
         """
-        logger.info(
-            f"[ADMIN_REPO] Promoting user {telegram_id} to {new_role} "
-            f"by {promoter_telegram_id}"
+        return await self._update_user_role(
+            telegram_id,
+            new_role,
+            promoter_telegram_id,
+            action='promote',
+            only_approved=True,
         )
-        
-        try:
-            new_role_id = ROLE_NAME_TO_ID.get(new_role)
-            if not new_role_id:
-                logger.warning(f"[ADMIN_REPO] Unknown role '{new_role}' for promotion")
-                return False
-            
-            query = """
-                UPDATE UsersTelegaBot
-                SET role_id = %s
-                WHERE user_id = %s AND status = 'approved'
-            """
-            await self.db.execute_with_retry(
-                query, params=(new_role_id, telegram_id), commit=True
-            )
-            
-            await self.log_admin_action(
-                actor_telegram_id=promoter_telegram_id,
-                action='promote',
-                target_telegram_id=telegram_id,
-                payload={'new_role': new_role}
-            )
-            
-            logger.info(f"[ADMIN_REPO] User {telegram_id} promoted to {new_role} successfully")
-            return True
-        except Exception as e:
-            logger.error(
-                f"[ADMIN_REPO] Error promoting user {telegram_id}: {e}\n{traceback.format_exc()}"
-            )
-            return False
     
     @log_async_exceptions
     async def demote_user(
@@ -391,35 +405,32 @@ class AdminRepository:
             f"by {demoter_telegram_id}"
         )
         
-        try:
-            new_role_id = ROLE_NAME_TO_ID.get(new_role)
-            if not new_role_id:
-                logger.warning(f"[ADMIN_REPO] Unknown role '{new_role}' for demotion")
-                return False
-            
-            query = "UPDATE UsersTelegaBot SET role_id = %s WHERE user_id = %s"
-            await self.db.execute_with_retry(
-                query, params=(new_role_id, telegram_id), commit=True
-            )
-            
-            await self.log_admin_action(
-                actor_telegram_id=demoter_telegram_id,
-                action='demote',
-                target_telegram_id=telegram_id,
-                payload={'new_role': new_role}
-            )
-            
-            logger.info(f"[ADMIN_REPO] User {telegram_id} demoted to {new_role} successfully")
-            return True
-        except Exception as e:
-            logger.error(
-                f"[ADMIN_REPO] Error demoting user {telegram_id}: {e}\n{traceback.format_exc()}"
-            )
-            return False
+        return await self._update_user_role(
+            telegram_id,
+            new_role,
+            demoter_telegram_id,
+            action='demote',
+            only_approved=False,
+        )
+    
+    async def set_user_role(
+        self,
+        telegram_id: int,
+        new_role: str,
+        actor_telegram_id: int,
+    ) -> bool:
+        """Явно устанавливает роль пользователя (wrap вокруг _update_user_role)."""
+        return await self._update_user_role(
+            telegram_id,
+            new_role,
+            actor_telegram_id,
+            action='set_role',
+            only_approved=False,
+        )
     
     @log_async_exceptions
     async def get_admins(self) -> List[Dict[str, Any]]:
-        """Получает список всех админов (роли 2,4,5,7,8) из UsersTelegaBot."""
+        """Получает список всех админов (admin/superadmin/developer/head_of_registry/founder) из UsersTelegaBot."""
         logger.info("[ADMIN_REPO] Getting admins list")
         
         try:
@@ -544,7 +555,7 @@ class AdminRepository:
             return []
     
     @log_async_exceptions
-    async def get_users_counters(self) -> Dict[str, int]:
+    async def get_users_counters(self) -> Dict[str, Any]:
         """
         Возвращает счётчики пользователей для Dashboard.
         """
@@ -559,8 +570,8 @@ class AdminRepository:
                     SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_users,
                     SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved_users,
                     SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) as blocked_users,
-                    SUM(CASE WHEN role_id IN ({admin_placeholders}) THEN 1 ELSE 0 END) as admins_count,
-                    SUM(CASE WHEN role_id = %s THEN 1 ELSE 0 END) as operators_count
+                    SUM(CASE WHEN status = 'approved' AND role_id IN ({admin_placeholders}) THEN 1 ELSE 0 END) as admins_count,
+                    SUM(CASE WHEN status = 'approved' AND role_id = %s THEN 1 ELSE 0 END) as operators_count
                 FROM UsersTelegaBot
             """
             params = tuple(ADMIN_ROLE_IDS) + (ROLE_NAME_TO_ID.get('operator'),)
@@ -568,13 +579,59 @@ class AdminRepository:
                 query, params=params, fetchone=True
             ) or {}
             
+            role_breakdown_query = """
+                SELECT 
+                    role_id,
+                    COUNT(*) AS total_count,
+                    SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved_count,
+                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+                    SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked_count
+                FROM UsersTelegaBot
+                GROUP BY role_id
+            """
+            role_rows = await self.db.execute_with_retry(
+                role_breakdown_query,
+                fetchall=True,
+            ) or []
+            
+            role_breakdown: Dict[str, Dict[str, int]] = {
+                role_name: {
+                    'total': 0,
+                    'approved': 0,
+                    'pending': 0,
+                    'blocked': 0,
+                }
+                for role_name in ROLE_NAME_TO_ID.keys()
+            }
+            
+            for role_row in role_rows:
+                role_name = role_name_from_id(role_row.get('role_id'))
+                if role_name not in role_breakdown:
+                    role_breakdown[role_name] = {
+                        'total': 0,
+                        'approved': 0,
+                        'pending': 0,
+                        'blocked': 0,
+                    }
+                role_breakdown[role_name]['total'] = int(role_row.get('total_count') or 0)
+                role_breakdown[role_name]['approved'] = int(role_row.get('approved_count') or 0)
+                role_breakdown[role_name]['pending'] = int(role_row.get('pending_count') or 0)
+                role_breakdown[role_name]['blocked'] = int(role_row.get('blocked_count') or 0)
+            
+            admins_approved = sum(
+                role_breakdown[role_name]['approved']
+                for role_name, role_id in ROLE_NAME_TO_ID.items()
+                if role_id in ADMIN_ROLE_IDS
+            )
+            
             counters = {
                 'total_users': int(row.get('total_users') or 0),
                 'pending_users': int(row.get('pending_users') or 0),
                 'approved_users': int(row.get('approved_users') or 0),
                 'blocked_users': int(row.get('blocked_users') or 0),
-                'admins': int(row.get('admins_count') or 0),
+                'admins': int(row.get('admins_count') or admins_approved),
                 'operators': int(row.get('operators_count') or 0),
+                'roles_breakdown': role_breakdown,
             }
             
             logger.info(f"[ADMIN_REPO] Counters: {counters}")
@@ -590,6 +647,10 @@ class AdminRepository:
                 'blocked_users': 0,
                 'admins': 0,
                 'operators': 0,
+                'roles_breakdown': {
+                    role_name: {'total': 0, 'approved': 0, 'pending': 0, 'blocked': 0}
+                    for role_name in ROLE_NAME_TO_ID.keys()
+                },
             }
 
     @log_async_exceptions

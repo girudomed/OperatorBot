@@ -162,20 +162,29 @@ class TestAdminRepository:
     @pytest.mark.asyncio
     async def test_get_users_counters(self, admin_repo, mock_db):
         """Тест агрегированного счётчика пользователей."""
-        mock_db.execute_with_retry.return_value = {
-            'total_users': 10,
-            'pending_users': 3,
-            'approved_users': 6,
-            'blocked_users': 1,
-            'admins_count': 2,
-            'operators_count': 4,
-        }
+        mock_db.execute_with_retry.side_effect = [
+            {
+                'total_users': 10,
+                'pending_users': 3,
+                'approved_users': 6,
+                'blocked_users': 1,
+                'admins_count': 2,
+                'operators_count': 4,
+            },
+            [
+                {'role_id': 1, 'total_count': 4, 'approved_count': 4, 'pending_count': 0, 'blocked_count': 0},
+                {'role_id': 2, 'total_count': 2, 'approved_count': 2, 'pending_count': 0, 'blocked_count': 0},
+                {'role_id': 3, 'total_count': 1, 'approved_count': 1, 'pending_count': 0, 'blocked_count': 0},
+            ],
+        ]
 
         counters = await admin_repo.get_users_counters()
         assert counters['total_users'] == 10
         assert counters['pending_users'] == 3
         assert counters['admins'] == 2
         assert counters['operators'] == 4
+        assert 'roles_breakdown' in counters
+        assert counters['roles_breakdown']['operator']['approved'] == 4
 
 
 if __name__ == "__main__":

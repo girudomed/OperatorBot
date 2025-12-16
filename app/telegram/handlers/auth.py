@@ -40,7 +40,7 @@ logger = get_watchdog_logger(__name__)
 COMMON_COMMANDS = ["start", "help"]
 OPERATOR_COMMANDS = COMMON_COMMANDS + ["weekly_quality", "report"]
 ADMIN_COMMANDS = OPERATOR_COMMANDS + ["call_lookup", "admin", "approve", "make_admin", "admins"]
-SUPERADMIN_COMMANDS = ADMIN_COMMANDS + ["make_superadmin", "register"]
+SUPERADMIN_COMMANDS = ADMIN_COMMANDS + ["make_superadmin", "set_role", "register"]
 
 COMMAND_DESCRIPTIONS = {
     "start": "Перезапустить диалог с ботом",
@@ -53,6 +53,7 @@ COMMAND_DESCRIPTIONS = {
     "approve": "Утвердить пользователя по ID",
     "make_admin": "Назначить администратора",
     "make_superadmin": "Назначить супер-админа",
+    "set_role": "Назначить конкретную роль",
     "admins": "Показать текущий список админов",
 }
 
@@ -313,8 +314,11 @@ async def help_command(update: Update, context: CallbackContext, permissions: Pe
     role = 'operator'
     status = None
     
-    if permissions.is_supreme_admin(user.id, user.username) or permissions.is_dev_admin(user.id, user.username):
-        role = 'superadmin'
+    if permissions.is_supreme_admin(user.id, user.username):
+        role = 'founder'
+        status = 'approved'
+    elif permissions.is_dev_admin(user.id, user.username):
+        role = 'developer'
         status = 'approved'
     else:
         status = await permissions.get_user_status(user.id)
@@ -331,7 +335,7 @@ async def help_command(update: Update, context: CallbackContext, permissions: Pe
         await message.reply_text("Ваш аккаунт заблокирован. Свяжитесь с администратором для разблокировки.")
         return
     
-    if role != 'superadmin':
+    if role not in ('superadmin', 'developer', 'founder'):
         role = await permissions.get_effective_role(user.id, user.username)
     
     keyboard = _build_keyboard_for_role(role)
@@ -492,9 +496,9 @@ async def registration_guard_callback(update: Update, context: CallbackContext, 
 
 
 def _commands_for_role(role: str) -> List[str]:
-    if role == 'superadmin':
+    if role in ('superadmin', 'developer', 'founder'):
         return SUPERADMIN_COMMANDS
-    if role == 'admin':
+    if role in ('admin', 'head_of_registry'):
         return ADMIN_COMMANDS
     return OPERATOR_COMMANDS
 
@@ -502,7 +506,7 @@ def _commands_for_role(role: str) -> List[str]:
 def _build_keyboard_for_role(role: str) -> Optional[ReplyKeyboardMarkup]:
     # Для админов и суперадминов отключаем Reply клавиатуру, 
     # так как они должны использовать Inline меню (/admin)
-    if role in ('admin', 'superadmin'):
+    if role in ('admin', 'head_of_registry', 'superadmin', 'developer', 'founder'):
         return None
         
     commands = _commands_for_role(role)

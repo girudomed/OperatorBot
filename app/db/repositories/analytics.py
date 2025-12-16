@@ -5,8 +5,8 @@ Repository для аналитики операторов и расчета ме
 Реализует методы согласно документу МЛ_РАСЧЕТЫ.
 """
 
-from typing import List, Dict, Any, Optional
-from datetime import date, datetime, timedelta
+from typing import List, Dict, Any, Optional, Tuple
+from datetime import date, datetime, timedelta, time
 
 from app.db.manager import DatabaseManager
 from app.db.models import DashboardMetrics, OperatorRecommendation
@@ -20,6 +20,18 @@ class AnalyticsRepository:
     def __init__(self, db_manager: DatabaseManager):
         self.db_manager = db_manager
         self.call_analytics_repo = CallAnalyticsRepository(db_manager)
+
+    @staticmethod
+    def _normalize_period(
+        date_from: date | datetime,
+        date_to: date | datetime,
+    ) -> Tuple[datetime, datetime]:
+        """
+        Приводит границы периода к datetime (00:00:00 — 23:59:59).
+        """
+        start_dt = date_from if isinstance(date_from, datetime) else datetime.combine(date_from, time.min)
+        end_dt = date_to if isinstance(date_to, datetime) else datetime.combine(date_to, time.max)
+        return start_dt, end_dt
 
     # ========================================================================
     # Общая статистика по звонкам
@@ -45,9 +57,10 @@ class AnalyticsRepository:
         logger.info(f"[ANALYTICS] Getting daily stats: operator={operator_name}, period={date_from} to {date_to}")
         
         try:
+            period_start, period_end = self._normalize_period(date_from, date_to)
             # Используем call_analytics для быстрого доступа
             metrics = await self.call_analytics_repo.get_aggregated_metrics(
-                operator_name, date_from, date_to
+                operator_name, period_start, period_end
             )
             
             if not metrics:
@@ -70,7 +83,7 @@ class AnalyticsRepository:
                 
                 result = await self.db_manager.execute_query(
                     query,
-                    (date_from, date_to, operator_name, operator_name),
+                    (period_start, period_end, operator_name, operator_name),
                     fetchone=True
                 )
             else:
@@ -146,6 +159,7 @@ class AnalyticsRepository:
         logger.info(f"[ANALYTICS] Getting quality metrics for {operator_name}")
         
         try:
+            period_start, period_end = self._normalize_period(date_from, date_to)
             query = """
             SELECT 
                 AVG(CASE WHEN call_score IS NOT NULL THEN call_score END) as avg_score_all,
@@ -172,7 +186,7 @@ class AnalyticsRepository:
             
             result = await self.db_manager.execute_query(
                 query,
-                (date_from, date_to, operator_name, operator_name),
+                (period_start, period_end, operator_name, operator_name),
                 fetchone=True
             )
             
@@ -220,6 +234,8 @@ class AnalyticsRepository:
         - reschedule_calls: количество переносов
         - cancel_share: доля отмен от (отмены + переносы), %
         """
+        period_start, period_end = self._normalize_period(date_from, date_to)
+
         query = """
         SELECT 
             SUM(CASE WHEN call_category = 'Отмена записи' AND is_target = 1 THEN 1 ELSE 0 END) as cancel_calls,
@@ -235,7 +251,7 @@ class AnalyticsRepository:
         
         result = await self.db_manager.execute_query(
             query,
-            (date_from, date_to, operator_name, operator_name),
+            (period_start, period_end, operator_name, operator_name),
             fetchone=True
         )
         
@@ -271,6 +287,8 @@ class AnalyticsRepository:
         - avg_talk_navigation: среднее время навигации (сек)
         - avg_talk_spam: среднее время со спамом (сек)
         """
+        period_start, period_end = self._normalize_period(date_from, date_to)
+
         query = """
         SELECT 
             AVG(CASE WHEN talk_duration > 10 THEN talk_duration END) as avg_talk_all,
@@ -301,7 +319,7 @@ class AnalyticsRepository:
         
         result = await self.db_manager.execute_query(
             query,
-            (date_from, date_to, operator_name, operator_name),
+            (period_start, period_end, operator_name, operator_name),
             fetchone=True
         )
         
@@ -330,6 +348,8 @@ class AnalyticsRepository:
         - complaint_calls: количество звонков с жалобами
         - avg_score_complaint: средняя оценка жалоб
         """
+        period_start, period_end = self._normalize_period(date_from, date_to)
+
         query = """
         SELECT 
             COUNT(*) as complaint_calls,
@@ -347,7 +367,7 @@ class AnalyticsRepository:
         
         result = await self.db_manager.execute_query(
             query,
-            (date_from, date_to, operator_name, operator_name),
+            (period_start, period_end, operator_name, operator_name),
             fetchone=True
         )
         
@@ -440,15 +460,18 @@ class AnalyticsRepository:
             Список DashboardMetrics для каждого оператора
         """
         # Получаем список уникальных операторов
-        query = """
-        SELECT DISTINCT
+        operator_case = """
             CASE 
                 WHEN context_type = 'входящий' THEN called_info
                 ELSE caller_info
-            END as operator_name
+            END
+        """
+        query = f"""
+        SELECT DISTINCT
+            {operator_case} as operator_name
         FROM call_scores
-        WHERE operator_name IS NOT NULL 
-          AND operator_name != ''
+        HAVING operator_name IS NOT NULL 
+           AND operator_name != ''
         ORDER BY operator_name
         """
         
@@ -488,6 +511,8 @@ class AnalyticsRepository:
         Returns:
             Список звонков с полями: transcript, call_score, call_category, outcome, refusal_reason
         """
+        period_start, period_end = self._normalize_period(date_from, date_to)
+
         query = """
         SELECT 
             id,
@@ -516,7 +541,7 @@ class AnalyticsRepository:
         
         result = await self.db_manager.execute_query(
             query,
-            (date_from, date_to, operator_name, operator_name, limit),
+            (period_start, period_end, operator_name, operator_name, limit),
             fetchall=True
         )
         

@@ -24,9 +24,28 @@ from app.logging_config import get_watchdog_logger
 from app.telegram.utils.logging import describe_user
 from app.telegram.utils.messages import safe_edit_message
 from app.utils.error_handlers import log_async_exceptions
+from app.core.roles import role_display_name_from_name
 
 logger = get_watchdog_logger(__name__)
 ADMIN_PREFIX = "admin"
+ROLE_DISPLAY_ORDER = [
+    "founder",
+    "developer",
+    "superadmin",
+    "head_of_registry",
+    "admin",
+    "marketing_director",
+    "operator",
+]
+ROLE_EMOJI = {
+    "founder": "🛡️",
+    "developer": "👨‍💻",
+    "superadmin": "⭐",
+    "head_of_registry": "📋",
+    "admin": "👑",
+    "marketing_director": "📣",
+    "operator": "👷",
+}
 
 
 class AdminPanelHandler:
@@ -79,6 +98,7 @@ class AdminPanelHandler:
         except Exception as exc:
             logger.error("Не удалось получить счётчики пользователей: %s", exc)
         
+        roles_summary = self._build_roles_summary(counters)
         keyboard = [
             [
                 InlineKeyboardButton(
@@ -120,6 +140,7 @@ class AdminPanelHandler:
                     f"✅ Approved: <b>{counters['approved_users']}</b>\n"
                     f"👑 Админов: <b>{counters['admins']}</b>\n"
                     f"👷 Операторов: <b>{counters['operators']}</b>\n\n"
+                    f"<b>Роли:</b>\n{roles_summary}\n\n"
                     "Выберите раздел:"
                 )
             else:
@@ -182,17 +203,6 @@ class AdminPanelHandler:
             await self._show_dashboard(update, context)
             return
 
-        if section == "settings":
-            await safe_edit_message(
-                query,
-                text="⚙️ Настройки в разработке",
-                reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("◀️ Назад", callback_data=self._callback("back"))]]
-                ),
-            )
-            return
-
-
     async def _show_dashboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показывает dashboard с основными метриками."""
         query = update.callback_query
@@ -216,6 +226,7 @@ class AdminPanelHandler:
         operators_count = counters.get('operators', 0)
         blocked_count = counters.get('blocked_users', 0)
         total_users = counters.get('total_users', 0)
+        roles_summary = self._build_roles_summary(counters)
 
         logger.info(
             "Dashboard открыт пользователем %s (pending=%s admins=%s)",
@@ -232,6 +243,7 @@ class AdminPanelHandler:
             f"🚫 Заблокировано: <b>{blocked_count}</b>\n"
             f"👑 Администраторов: <b>{admin_count}</b>\n"
             f"👷 Операторов: <b>{operators_count}</b>\n\n"
+            f"Роли (approved):\n{roles_summary}\n\n"
             f"Последние действия:\n"
             f"<i>Скоро будет доступно</i>"
         )
@@ -286,6 +298,28 @@ class AdminPanelHandler:
         payload = parts[3] if len(parts) > 3 else None
         return section or "", action, payload
 
+    def _build_roles_summary(self, counters: Optional[dict]) -> str:
+        """Формирует текстовый блок с разбивкой по ролям."""
+        if not counters:
+            return "—"
+        breakdown = counters.get("roles_breakdown") or {}
+        lines = []
+        for role in ROLE_DISPLAY_ORDER:
+            stats = breakdown.get(role, {})
+            emoji = ROLE_EMOJI.get(role, "•")
+            display_name = role_display_name_from_name(role)
+            approved = int(stats.get("approved") or 0)
+            lines.append(f"{emoji} {display_name}: <b>{approved}</b>")
+        # Выводим роли, которых нет в стандартном порядке, но присутствуют в БД
+        for role_name in breakdown.keys():
+            if role_name in ROLE_DISPLAY_ORDER:
+                continue
+            display_name = role_display_name_from_name(role_name)
+            emoji = ROLE_EMOJI.get(role_name, "•")
+            approved = int(breakdown[role_name].get("approved") or 0)
+            lines.append(f"{emoji} {display_name}: <b>{approved}</b>")
+        return "\n".join(lines) if lines else "—"
+
 
 def register_admin_panel_handlers(
     application: Application,
@@ -300,7 +334,7 @@ def register_admin_panel_handlers(
     
     # Callback handlers
     application.add_handler(
-        CallbackQueryHandler(handler.handle_callback, pattern=r"^admin:(dashboard|settings|back|menu)$")
+        CallbackQueryHandler(handler.handle_callback, pattern=r"^admin:(dashboard|back|menu)$")
     )
 
     logger.info("Admin panel handlers registered")

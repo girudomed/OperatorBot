@@ -13,6 +13,7 @@ import os
 from typing import Optional
 
 from telegram import BotCommand, Update
+from telegram.error import TelegramError
 from telegram.ext import ApplicationBuilder, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -41,6 +42,7 @@ from app.telegram.handlers.start import StartHandler
 from app.telegram.handlers.call_lookup import register_call_lookup_handlers
 from app.telegram.handlers.weekly_quality import register_weekly_quality_handlers
 from app.telegram.handlers.reports import register_report_handlers
+from app.telegram.handlers.system_menu import register_system_handlers
 
 # Воркеры
 from app.workers.task_worker import start_workers, stop_workers
@@ -52,6 +54,9 @@ logger = get_watchdog_logger(__name__)
 
 # Блокировка повторного запуска
 LOCK_FILE = "/app/operabot.lock"
+
+
+USER_ERROR_MESSAGE = "Ошибка доступа к базе. Проверьте конфигурацию/схему БД."
 
 
 async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -91,6 +96,47 @@ async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_T
             "chat_id": chat.id if chat else None,
         },
     )
+    if update_obj:
+        try:
+            if update_obj.callback_query:
+                try:
+                    await update_obj.callback_query.answer(USER_ERROR_MESSAGE, show_alert=True)
+                except Exception:
+                    logger.debug("Не удалось показать alert пользователю", exc_info=True)
+                if update_obj.callback_query.message:
+                    await update_obj.callback_query.message.reply_text(USER_ERROR_MESSAGE)
+            elif update_obj.message:
+                await update_obj.message.reply_text(USER_ERROR_MESSAGE)
+        except Exception:
+            logger.debug("Не удалось уведомить пользователя об ошибке", exc_info=True)
+    user_notified = False
+    if update_obj and update_obj.callback_query:
+        try:
+            await update_obj.callback_query.answer(
+                text="Команда временно недоступна. Попробуйте позже.",
+                show_alert=True,
+            )
+            user_notified = True
+        except TelegramError as notify_error:
+            logger.warning(
+                "Не удалось уведомить пользователя через callback: %s",
+                notify_error,
+            )
+    if (
+        not user_notified
+        and update_obj
+        and update_obj.effective_message
+    ):
+        try:
+            await update_obj.effective_message.reply_text(
+                "Команда временно недоступна. Попробуйте позже."
+            )
+            user_notified = True
+        except TelegramError as notify_error:
+            logger.warning(
+                "Не удалось отправить сообщение об ошибке: %s",
+                notify_error,
+            )
 
 def acquire_lock():
     os.makedirs(os.path.dirname(LOCK_FILE), exist_ok=True)
@@ -184,6 +230,7 @@ async def main():
         from app.telegram.handlers.admin_stats import register_admin_stats_handlers
         from app.telegram.handlers.admin_admins import register_admin_admins_handlers
         from app.telegram.handlers.admin_lookup import register_admin_lookup_handlers
+        from app.telegram.handlers.admin_settings import register_admin_settings_handlers
         
         # Initialize MetricsService for stats
         from app.services.metrics_service import MetricsService
@@ -197,6 +244,7 @@ async def main():
         register_admin_commands_handlers(application, admin_repo, permissions_manager, notification_service)
         register_admin_stats_handlers(application, admin_repo, metrics_service, permissions_manager)
         register_admin_lookup_handlers(application, permissions_manager)
+        register_admin_settings_handlers(application, admin_repo, permissions_manager)
         
         # LM Metrics
         from app.telegram.handlers.admin_lm import register_admin_lm_handlers
@@ -210,6 +258,9 @@ async def main():
         
         # Reports (/report)
         register_report_handlers(application, report_service, permissions_manager, db_manager)
+        
+        # Системное меню и кнопка помощи
+        register_system_handlers(application, db_manager, permissions_manager)
 
         await set_bot_commands(application)
 

@@ -129,16 +129,17 @@ class KeyboardBuilder:
         ]
         return InlineKeyboardMarkup(keyboard)
     
-    def build_system_menu(self) -> InlineKeyboardMarkup:
-        """Построить системное меню (только SuperAdmin/Dev)."""
+    def build_system_menu(self, include_cache_reset: bool = False) -> InlineKeyboardMarkup:
+        """Построить системное меню (только для привилегированных пользователей)."""
         keyboard = [
             [InlineKeyboardButton("🔍 Состояние бота", callback_data="system_status")],
             [InlineKeyboardButton("❌ Последние ошибки", callback_data="system_errors")],
             [InlineKeyboardButton("🔌 Проверка БД/Mango", callback_data="system_check")],
             [InlineKeyboardButton("🔄 Синхронизация аналитики", callback_data="system_sync")],
-            [InlineKeyboardButton("🗑️ Очистить кеш", callback_data="system_clear_cache")],
-            [InlineKeyboardButton("◀️ Назад", callback_data="main_menu")],
         ]
+        if include_cache_reset:
+            keyboard.append([InlineKeyboardButton("🗑️ Очистить кеш", callback_data="system_clear_cache")])
+        keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="main_menu")])
         return InlineKeyboardMarkup(keyboard)
     
     def build_back_button(self, callback_data: str = "main_menu") -> InlineKeyboardMarkup:

@@ -8,9 +8,10 @@ Repository для работы с ролями через таблицу roles_r
 
 import traceback
 from typing import Optional, Dict, List, Any
-from functools import lru_cache
 
+from app.config import DB_CONFIG
 from app.db.manager import DatabaseManager
+from app.db.utils_schema import has_column
 from app.logging_config import get_watchdog_logger
 
 logger = get_watchdog_logger(__name__)
@@ -23,8 +24,9 @@ class RolesRepository:
     Предоставляет проверку прав через can_* флаги вместо hardcoded role_id.
     """
     
-    def __init__(self, db_manager: DatabaseManager):
+    def __init__(self, db_manager: DatabaseManager, db_name: Optional[str] = None):
         self.db = db_manager
+        self.db_name = db_name or DB_CONFIG.get("db")
         self._roles_cache: Dict[int, Dict[str, Any]] = {}
     
     async def get_role_by_id(self, role_id: int) -> Optional[Dict[str, Any]]:
@@ -46,11 +48,17 @@ class RolesRepository:
             return self._roles_cache[role_id]
         
         try:
+            role_level_exists = await has_column(
+                self.db, "roles_reference", "role_level", self.db_name
+            )
+            role_level_select = (
+                "role_level" if role_level_exists else "NULL AS role_level"
+            )
             query = """
                 SELECT 
                     role_id,
                     role_name,
-                    role_level,
+                    {role_level_select},
                     can_view_own_stats,
                     can_view_all_stats,
                     can_manage_users,
@@ -58,9 +66,12 @@ class RolesRepository:
                 FROM roles_reference
                 WHERE role_id = %s
             """
-            
+            query = query.format(role_level_select=role_level_select)
+
             result = await self.db.execute_with_retry(
-                query, params=(role_id,), fetchone=True
+                query,
+                params=(role_id,),
+                fetchone=True
             )
             
             if result:
@@ -99,11 +110,17 @@ class RolesRepository:
         logger.info("[ROLES] Getting all roles")
         
         try:
+            role_level_exists = await has_column(
+                self.db, "roles_reference", "role_level", self.db_name
+            )
+            role_level_select = (
+                "role_level" if role_level_exists else "NULL AS role_level"
+            )
             query = """
                 SELECT 
                     role_id,
                     role_name,
-                    role_level,
+                    {role_level_select},
                     can_view_own_stats,
                     can_view_all_stats,
                     can_manage_users,
@@ -111,8 +128,12 @@ class RolesRepository:
                 FROM roles_reference
                 ORDER BY role_level ASC
             """
+            query = query.format(role_level_select=role_level_select)
             
-            results = await self.db.execute_with_retry(query, fetchall=True) or []
+            results = await self.db.execute_with_retry(
+                query,
+                fetchall=True
+            ) or []
             
             # Конвертировать tinyint в bool
             roles = []
@@ -289,20 +310,18 @@ class RolesRepository:
 
 ROLE_OPERATOR = 1
 ROLE_ADMINISTRATOR = 2
-ROLE_MARKETER = 3
-ROLE_HEAD_RECEPTION = 4
-ROLE_SENIOR_ADMIN = 5
-ROLE_MANAGEMENT = 6
-ROLE_SUPERADMIN = 7
-ROLE_DEV = 8
+ROLE_SUPERADMIN = 3
+ROLE_DEVELOPER = 4
+ROLE_HEAD_OF_REGISTRY = 5
+ROLE_FOUNDER = 6
+ROLE_MARKETING_DIRECTOR = 7
 
 ROLE_NAMES = {
-    1: "Оператор",
-    2: "Администратор",
-    3: "Маркетолог",
-    4: "ЗавРег",
-    5: "Ст.админ",
-    6: "Руководство",
-    7: "SuperAdmin",
-    8: "Dev"
+    ROLE_OPERATOR: "Operator",
+    ROLE_ADMINISTRATOR: "Admin",
+    ROLE_SUPERADMIN: "SuperAdmin",
+    ROLE_DEVELOPER: "Developer",
+    ROLE_HEAD_OF_REGISTRY: "Head of Registry",
+    ROLE_FOUNDER: "Founder",
+    ROLE_MARKETING_DIRECTOR: "Marketing Director",
 }

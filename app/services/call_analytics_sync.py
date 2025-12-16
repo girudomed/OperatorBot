@@ -127,11 +127,14 @@ class CallAnalyticsSyncService:
             since_date = date.today() - timedelta(days=1)
 
         if isinstance(since_date, datetime):
-            since_point = since_date
+            history_since_point = since_date
         else:
-            since_point = datetime.combine(since_date, datetime.min.time())
+            history_since_point = datetime.combine(since_date, datetime.min.time())
         
-        logger.info(f"[ETL] Starting INCREMENTAL sync since {since_date}")
+        logger.info(
+            "[ETL] Starting INCREMENTAL sync since %s (call_history.created_at)",
+            history_since_point,
+        )
         
         stats = {
             'inserted': 0,
@@ -143,7 +146,8 @@ class CallAnalyticsSyncService:
         
         try:
             # Синхронизировать только новые или обновленные
-            query = """
+            history_timestamp_field = "ch.created_at"
+            query = f"""
                 INSERT INTO call_analytics (
                     call_scores_id,
                     history_id,
@@ -183,17 +187,18 @@ class CallAnalyticsSyncService:
                     NOW()
                 FROM call_scores cs
                 INNER JOIN call_history ch ON ch.history_id = cs.history_id
-                WHERE ch.created_at >= %s
+                WHERE {history_timestamp_field} >= %s
                   AND NOT EXISTS (
                       SELECT 1 FROM call_analytics ca 
                       WHERE ca.call_scores_id = cs.id
                   )
+                ORDER BY {history_timestamp_field} ASC
                 LIMIT %s
             """
             
             result = await self.db.execute_with_retry(
                 query,
-                params=(since_point, batch_size),
+                params=(history_since_point, batch_size),
                 commit=True
             )
             

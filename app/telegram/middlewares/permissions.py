@@ -27,20 +27,35 @@ from app.core.roles import (
 logger = get_watchdog_logger(__name__)
 
 # Типы ролей (все 8)
-Role = Literal['operator', 'admin', 'marketer', 'zavreg', 'senior_admin', 'management', 'superadmin', 'dev']
+Role = Literal[
+    'operator',
+    'admin',
+    'superadmin',
+    'developer',
+    'head_of_registry',
+    'founder',
+    'marketing_director',
+]
 Status = Literal['pending', 'approved', 'blocked']
 
 # Права доступа по ролям (для обратной совместимости)
 ROLE_PERMISSIONS: Dict[str, Set[str]] = {
     'operator': {'call_lookup', 'weekly_quality', 'report'},
-    'admin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'report'},
-    'marketer': {'call_lookup', 'weekly_quality', 'report', 'all_stats'},
-    'zavreg': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'report', 'all_stats'},
-    'senior_admin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'report', 'all_stats'},
-    'management': {'call_lookup', 'weekly_quality', 'report', 'all_stats'},
-    'superadmin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats'},
-    'dev': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats', 'debug'},
+    'admin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'report', 'all_stats'},
+    'head_of_registry': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats'},
+    'marketing_director': {'call_lookup', 'weekly_quality', 'report', 'all_stats'},
+    'superadmin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats', 'debug'},
+    'developer': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats', 'debug'},
+    'founder': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats', 'debug'},
 }
+
+ADMIN_ROLES: Set[Role] = {'admin', 'head_of_registry', 'superadmin', 'developer', 'founder'}
+SUPER_ROLES: Set[Role] = {'superadmin', 'developer', 'founder'}
+ROLE_MANAGE_ROLES: Set[Role] = {'head_of_registry', 'superadmin', 'developer', 'founder'}
+TOP_PRIVILEGE_ROLES: Set[Role] = {'developer', 'founder'}
+LEADERSHIP_ROLES: Set[Role] = {'head_of_registry'} | TOP_PRIVILEGE_ROLES
+SUPERADMIN_MANAGEABLE_ROLES: Set[Role] = {'admin', 'operator', 'marketing_director'}
+ADMIN_MANAGEABLE_ROLES: Set[Role] = {'operator'}
 
 CACHE_TTL_SECONDS = 10.0
 
@@ -65,6 +80,10 @@ class PermissionsManager:
     def invalidate_cache(self, user_id: int) -> None:
         """Сбрасывает кэш роли/статуса пользователя."""
         self._user_cache.pop(user_id, None)
+    
+    def clear_cache(self) -> None:
+        """Полностью очищает кэш ролей/статусов."""
+        self._user_cache.clear()
 
     def _get_cached_entry(self, user_id: int) -> Optional[Tuple[Optional[Role], Optional[Status]]]:
         entry = self._user_cache.get(user_id)
@@ -180,25 +199,24 @@ class PermissionsManager:
     async def is_admin(self, user_id: int, username: Optional[str] = None) -> bool:
         """
         Проверяет имеет ли пользователь роль admin или выше.
-        Включает supreme/dev админов и все роли с can_manage_users.
-        Роли: admin(2), zavreg(4), senior_admin(5), superadmin(7), dev(8)
+        Включает supreme/dev админов и все роли, у которых есть доступ в админ-панель.
         """
         # Проверяем bootstrap админов
         if self.is_supreme_admin(user_id, username) or self.is_dev_admin(user_id, username):
             return True
         
         role = await self.get_user_role(user_id)
-        return role in ('admin', 'zavreg', 'senior_admin', 'superadmin', 'dev')
+        return role in ADMIN_ROLES
     
     async def is_superadmin(self, user_id: int, username: Optional[str] = None) -> bool:
         """
-        Проверяет имеет ли пользователь роль superadmin или dev.
+        Проверяет имеет ли пользователь роль superadmin/developer/founder.
         """
         if self.is_supreme_admin(user_id, username) or self.is_dev_admin(user_id, username):
             return True
         
         role = await self.get_user_role(user_id)
-        return role in ('superadmin', 'dev')
+        return role in SUPER_ROLES
     
     async def can_approve(self, user_id: int, username: Optional[str] = None) -> bool:
         """
@@ -217,21 +235,30 @@ class PermissionsManager:
         Проверяет может ли actor повысить кого-то до target_role.
         
         Правила:
-        - supreme/dev/superadmin могут назначать всех
-        - обычный admin может назначать только admin (не superadmin)
-        - operator не может никого назначать
+        - supreme/dev и роли founder/developer могут назначать любую роль;
+        - superadmin/head_of_registry работают только с admin/operator (включая marketing_director);
+        - admin может назначать только операторов;
+        - operator не может никого назначать.
         """
         # Supreme и Dev могут всё
         if self.is_supreme_admin(actor_id, actor_username) or self.is_dev_admin(actor_id, actor_username):
             return True
         
         actor_role = await self.get_user_role(actor_id)
+        if not actor_role:
+            return False
+        
+        if actor_role in TOP_PRIVILEGE_ROLES:
+            return True  # Founder/Developer могут всё
         
         if actor_role == 'superadmin':
-            return True  # Может назначать всех
+            return target_role in SUPERADMIN_MANAGEABLE_ROLES
+        
+        if actor_role == 'head_of_registry':
+            return target_role in SUPERADMIN_MANAGEABLE_ROLES
         
         if actor_role == 'admin':
-            return target_role in ('operator', 'admin')  # Не может назначать superadmin
+            return target_role in ADMIN_MANAGEABLE_ROLES
         
         return False
     
@@ -245,9 +272,10 @@ class PermissionsManager:
         Проверяет может ли actor понизить target.
         
         Правила:
-        - supreme/dev могут понижать всех
-        - superadmin может понижать admin и operator (но не другого superadmin)
-        - admin может понижать только operator
+        - supreme/dev и роли founder/developer могут менять любые роли;
+        - superadmin/head_of_registry могут понижать admin/operator/marketing_director;
+        - admin может понижать только операторов;
+        - руководителей (head_of_registry) и топ-ролей (founder/developer) могут снимать только founder/developer.
         """
         if self.is_supreme_admin(actor_id, actor_username) or self.is_dev_admin(actor_id, actor_username):
             return True
@@ -257,12 +285,24 @@ class PermissionsManager:
         
         if not actor_role or not target_role:
             return False
+
+        if target_role in TOP_PRIVILEGE_ROLES:
+            return actor_role in TOP_PRIVILEGE_ROLES
+        
+        if target_role == 'head_of_registry':
+            return actor_role in TOP_PRIVILEGE_ROLES
+        
+        if actor_role in TOP_PRIVILEGE_ROLES:
+            return True
         
         if actor_role == 'superadmin':
-            return target_role in ('admin', 'operator')
+            return target_role in SUPERADMIN_MANAGEABLE_ROLES
+        
+        if actor_role == 'head_of_registry':
+            return target_role in SUPERADMIN_MANAGEABLE_ROLES
         
         if actor_role == 'admin':
-            return target_role == 'operator'
+            return target_role in ADMIN_MANAGEABLE_ROLES
         
         return False
     
@@ -296,8 +336,10 @@ class PermissionsManager:
         """
         Получает эффективную роль с учетом bootstrap админов.
         """
-        if self.is_supreme_admin(user_id, username) or self.is_dev_admin(user_id, username):
-            return 'superadmin'
+        if self.is_supreme_admin(user_id, username):
+            return 'founder'
+        if self.is_dev_admin(user_id, username):
+            return 'developer'
         
         role = await self.get_user_role(user_id)
         return role if role else 'operator'
@@ -307,7 +349,16 @@ class PermissionsManager:
         Проверяет, есть ли у роли доступ к указанному разрешению.
         SuperAdmin и Dev имеют доступ ко всем действиям.
         """
-        if role_name in ('superadmin', 'dev'):
+        if role_name in SUPER_ROLES:
             return True
         allowed = ROLE_PERMISSIONS.get(role_name, set())
         return required_permission in allowed
+
+    async def can_manage_roles(self, user_id: int, username: Optional[str] = None) -> bool:
+        """
+        Проверяет, доступно ли управление ролями.
+        """
+        if self.is_supreme_admin(user_id, username) or self.is_dev_admin(user_id, username):
+            return True
+        role = await self.get_user_role(user_id)
+        return role in ROLE_MANAGE_ROLES

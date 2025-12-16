@@ -83,10 +83,10 @@ class AdminMenu:
             counters = await self.admin_repo.get_users_counters()
             
             total = counters.get('total_users', 0)
-            pending = counters.get('pending_count', 0)
-            approved = counters.get('approved_count', 0)
-            blocked = counters.get('blocked_count', 0)
-            admins = counters.get('admin_count', 0)
+            pending = counters.get('pending_users', 0)
+            approved = counters.get('approved_users', 0)
+            blocked = counters.get('blocked_users', 0)
+            admins = counters.get('admins', 0)
             
             text = (
                 "📊 <b>LIVE Dashboard</b>\n\n"
@@ -136,9 +136,9 @@ class AdminMenu:
         try:
             counters = await self.admin_repo.get_users_counters()
             
-            pending = counters.get('pending_count', 0)
-            approved = counters.get('approved_count', 0)
-            blocked = counters.get('blocked_count', 0)
+            pending = counters.get('pending_users', 0)
+            approved = counters.get('approved_users', 0)
+            blocked = counters.get('blocked_users', 0)
             
             text = (
                 "👥 <b>Управление пользователями</b>\n\n"

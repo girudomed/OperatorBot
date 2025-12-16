@@ -122,9 +122,7 @@ class OperatorRepository:
             "date_range_end": end_str,
         }
         logger.info(
-            "weekly_quality_report: подсчёт звонков (history) за период %s — %s",
-            start_str,
-            end_str,
+            f"weekly_quality_report: подсчёт звонков (history) за период {start_str} — {end_str}",
             extra=log_extra,
         )
 
@@ -147,30 +145,32 @@ class OperatorRepository:
             SELECT
                 COUNT(*) AS total_scored_calls,
                 AVG(cs.call_score) AS avg_score,
-                SUM(CASE 
-                    WHEN cs.outcome = 'lead_no_record' 
-                         OR cs.call_category LIKE CONCAT('%', 'Лид', '%') 
-                    THEN 1 ELSE 0 
-                END) AS total_leads,
+                SUM(
+                    CASE 
+                        WHEN cs.outcome = 'lead_no_record' 
+                             OR cs.call_category LIKE CONCAT('%%', %s, '%%') 
+                        THEN 1 ELSE 0 
+                    END
+                ) AS total_leads,
                 SUM(CASE WHEN cs.outcome = 'record' THEN 1 ELSE 0 END) AS booked_leads,
-                SUM(CASE 
-                    WHEN cs.outcome = 'cancel' OR cs.refusal_reason IS NOT NULL 
-                    THEN 1 ELSE 0 
-                END) AS cancellations
+                SUM(
+                    CASE 
+                        WHEN cs.outcome = 'cancel' OR cs.refusal_reason IS NOT NULL 
+                        THEN 1 ELSE 0 
+                    END
+                ) AS cancellations
             FROM call_scores cs
             WHERE cs.call_date BETWEEN %s AND %s
         """
         logger.info(
-            "weekly_quality_report: подсчёт скорингов (scores) за период %s — %s",
-            start_str,
-            end_str,
+            f"weekly_quality_report: подсчёт скорингов (scores) за период {start_str} — {end_str}",
             extra=log_extra,
         )
 
         try:
             scores_stats = await self.db_manager.execute_with_retry(
                 scores_query,
-                (start_str, end_str),
+                ("Лид", start_str, end_str),
                 fetchone=True,
             ) or {}
         except Exception:

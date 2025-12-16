@@ -15,6 +15,7 @@ from app.services.weekly_quality import WeeklyQualityService
 from app.logging_config import get_watchdog_logger
 
 logger = get_watchdog_logger(__name__)
+DB_ERROR_MESSAGE = "Ошибка доступа к базе. Проверьте конфигурацию/схему БД."
 
 WEEKLY_QUALITY_COMMAND = "weekly_quality"
 WEEKLY_QUALITY_PERMISSION = "weekly_quality"
@@ -61,11 +62,12 @@ class _WeeklyQualityHandler:
         except ValueError as exc:
             await message.reply_text(f"Ошибка: {exc}")
             return
-        except Exception as exc:
-            logger.exception("Ошибка при генерации weekly_quality: %s", exc)
-            await message.reply_text(
-                "Не удалось получить отчёт качества. Попробуйте позже."
+        except Exception:
+            logger.exception(
+                "weekly_quality: ошибка генерации отчёта",
+                extra={"user_id": user.id, "username": user.username},
             )
+            await message.reply_text(DB_ERROR_MESSAGE)
             return
 
         await message.reply_text(report_text)

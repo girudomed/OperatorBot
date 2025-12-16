@@ -15,11 +15,17 @@ from telegram.ext import (
     ContextTypes,
 )
 
-from app.core.roles import role_name_from_id
+from app.core.roles import (
+    ROLE_ID_TO_NAME,
+    ROLE_NAME_TO_ID,
+    role_display_name_from_name,
+    role_name_from_id,
+)
 from app.db.repositories.admin import AdminRepository
 from app.logging_config import get_watchdog_logger
 from app.services.notifications import NotificationService
 from app.telegram.middlewares.permissions import PermissionsManager
+from app.telegram.utils.logging import describe_user
 from app.telegram.utils.messages import safe_edit_message
 from app.utils.error_handlers import log_async_exceptions
 
@@ -40,6 +46,15 @@ class AdminCommandsHandler:
         self.permissions = permissions
         self.notifications = notifications
         self.list_limit = 10
+        self._roles_help_text = self._build_roles_help_text()
+
+    def _build_roles_help_text(self) -> str:
+        lines = []
+        for role_id in sorted(ROLE_ID_TO_NAME.keys()):
+            role_name = ROLE_ID_TO_NAME[role_id]
+            display = role_display_name_from_name(role_name)
+            lines.append(f"- {role_name}: {display} (ID {role_id})")
+        return "\n".join(lines)
 
     @log_async_exceptions
     async def approve_command(
@@ -174,6 +189,62 @@ class AdminCommandsHandler:
             await message.reply_text("❌ Ошибка при повышении")
 
     @log_async_exceptions
+    async def set_role_command(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """
+        Команда /set_role <telegram_id> <role>
+        Позволяет назначить любую доступную роль.
+        """
+        message = update.effective_message
+        user = update.effective_user
+        if not message or not user:
+            return
+
+        can_manage_roles = await self.permissions.can_manage_roles(user.id, user.username)
+        if not can_manage_roles:
+            await message.reply_text("❌ Недостаточно прав для управления ролями.")
+            return
+
+        if len(context.args) < 2:
+            await message.reply_text(
+                "Использование: /set_role <telegram_id> <role>\nДоступные роли:\n"
+                f"{self._roles_help_text}"
+            )
+            return
+
+        try:
+            target_user_id = int(context.args[0])
+        except ValueError as exc:
+            logger.warning(
+                "Некорректный user_id в /set_role от %s: %s",
+                describe_user(user),
+                exc,
+                exc_info=True,
+            )
+            await message.reply_text("❌ user_id должен быть числом")
+            return
+
+        role_slug = context.args[1].lower()
+        if role_slug not in ROLE_NAME_TO_ID:
+            await message.reply_text(
+                "❌ Неизвестная роль.\nДоступные роли:\n" + self._roles_help_text
+            )
+            return
+
+        if not await self.permissions.can_promote(user.id, role_slug, user.username):
+            await message.reply_text("❌ Нельзя назначить эту роль.")
+            return
+
+        success = await self.admin_repo.set_user_role(target_user_id, role_slug, user.id)
+        if success:
+            display = role_display_name_from_name(role_slug)
+            await message.reply_text(f"✅ Роль пользователя обновлена: {display}.")
+            await self._notify_promotion(target_user_id, role_slug, user.full_name)
+        else:
+            await message.reply_text("❌ Не удалось обновить роль.")
+
+    @log_async_exceptions
     async def admins_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
         Команда /admins
@@ -197,7 +268,7 @@ class AdminCommandsHandler:
         message_text = "👑 <b>Список администраторов:</b>\n\n"
         for admin in admins:
             role_name = admin.get("role") or role_name_from_id(admin.get("role_id"))
-            role_emoji = "⭐" if role_name == "superadmin" else "👤"
+            role_emoji = "⭐" if role_name in ("superadmin", "developer", "founder") else "👤"
             message_text += (
                 f"{role_emoji} <b>{admin['full_name']}</b>\n"
                 f"   @{admin.get('username', 'нет')} | Role: {role_name}\n\n"
@@ -686,6 +757,7 @@ def register_admin_commands_handlers(
     application.add_handler(
         CommandHandler("make_superadmin", handler.make_superadmin_command)
     )
+    application.add_handler(CommandHandler("set_role", handler.set_role_command))
     application.add_handler(CommandHandler("admins", handler.admins_command))
     application.add_handler(CommandHandler("dev", handler.dev_alert_command))
     application.add_handler(

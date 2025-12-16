@@ -19,11 +19,13 @@ from app.telegram.utils.logging import describe_user
 from app.telegram.utils.messages import safe_edit_message
 
 logger = get_watchdog_logger(__name__)
+DB_ERROR_MESSAGE = "Ошибка доступа к базе. Проверьте конфигурацию/схему БД."
 
 REPORT_COMMAND = "report"
 REPORT_CALLBACK_PREFIX = "reports"
 REPORT_PERMISSION = "report"
 OPERATORS_PAGE_SIZE = 8
+ADMIN_REPORT_ROLES = {"admin", "head_of_registry", "superadmin", "developer", "founder", "marketing_director"}
 
 
 def register_report_handlers(
@@ -67,8 +69,18 @@ class _ReportHandler:
             "date_range": date_range,
         }
 
-        role = await self.permissions_manager.get_effective_role(user.id, user.username)
-        if role in ("admin", "superadmin"):
+        try:
+            role = await self.permissions_manager.get_effective_role(
+                user.id, user.username
+            )
+        except Exception:
+            logger.exception(
+                "report: не удалось определить роль пользователя",
+                extra={"user_id": user.id, "username": user.username},
+            )
+            await message.reply_text(DB_ERROR_MESSAGE)
+            return
+        if role in ADMIN_REPORT_ROLES:
             logger.info(
                 "Админ %s запрашивает отчёт (period=%s, date_range=%s)",
                 describe_user(user),
@@ -142,7 +154,17 @@ class _ReportHandler:
             )
 
     async def _show_operator_keyboard(self, target, page: int = 0, edit: bool = False):
-        operators = await self.operator_repo.get_approved_operators(include_pending=True)
+        try:
+            operators = await self.operator_repo.get_approved_operators(
+                include_pending=True
+            )
+        except Exception:
+            logger.exception("report: не удалось загрузить операторов для отчёта")
+            if edit:
+                await safe_edit_message(target, text=DB_ERROR_MESSAGE)
+            else:
+                await target.reply_text(DB_ERROR_MESSAGE)
+            return
         cleaned_operators: List[Dict[str, Any]] = []
         skipped_no_extension = 0
         for operator in operators:
@@ -231,7 +253,17 @@ class _ReportHandler:
         period: str,
         date_range: Optional[str],
     ):
-        operator_info = await self.operator_repo.get_operator_info_by_user_id(target_user_id)
+        try:
+            operator_info = await self.operator_repo.get_operator_info_by_user_id(
+                target_user_id
+            )
+        except Exception:
+            logger.exception(
+                "report: не удалось получить оператора",
+                extra={"target_user_id": target_user_id, "chat_id": chat_id},
+            )
+            await bot.send_message(chat_id=chat_id, text=DB_ERROR_MESSAGE)
+            return
         if not operator_info:
             await bot.send_message(
                 chat_id=chat_id,
@@ -265,9 +297,12 @@ class _ReportHandler:
             chunks = [report[i:i + 4000] for i in range(0, len(report), 4000)]
             for chunk in chunks:
                 await bot.send_message(chat_id=chat_id, text=chunk)
-        except Exception as exc:
-            logger.error("Ошибка при генерации отчёта: %s", exc, exc_info=True)
-            await bot.send_message(chat_id=chat_id, text="Произошла ошибка при генерации отчёта.")
+        except Exception:
+            logger.exception(
+                "report: генерация отчёта завершилась с ошибкой",
+                extra={"target_user_id": target_user_id, "period": period},
+            )
+            await bot.send_message(chat_id=chat_id, text=DB_ERROR_MESSAGE)
         finally:
             try:
                 await status_message.delete()

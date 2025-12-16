@@ -147,9 +147,9 @@ class _CallLookupHandlers:
                 describe_user(user),
             )
             await message.reply_text(
-                "Не удалось выполнить поиск. Попробуйте позже."
+                "Не удалось выполнить поиск, ошибка конфигурации БД."
             )
-            raise
+            return
 
         text, markup = self._build_result_message(
             response=response,
@@ -229,13 +229,24 @@ class _CallLookupHandlers:
                 request,
                 describe_user(user),
             )
-            response = await self.service.lookup_calls(
-                phone=request.phone,
-                period=request.period,
-                offset=request.offset,
-                limit=request.limit,
-                requesting_user_id=user.id,
-            )
+            try:
+                response = await self.service.lookup_calls(
+                    phone=request.phone,
+                    period=request.period,
+                    offset=request.offset,
+                    limit=request.limit,
+                    requesting_user_id=user.id,
+                )
+            except Exception:
+                logger.exception(
+                    "Ошибка пагинации call_lookup для %s",
+                    describe_user(user),
+                )
+                await safe_edit_message(
+                    query,
+                    text="Не удалось выполнить поиск, ошибка конфигурации БД.",
+                )
+                return
             text, markup = self._build_result_message(
                 response=response,
                 period=request.period,
@@ -250,7 +261,19 @@ class _CallLookupHandlers:
             )
         elif action == "transcript":
             history_id = int(payload["history_id"])
-            details = await self.service.fetch_call_details(history_id)
+            try:
+                details = await self.service.fetch_call_details(history_id)
+            except Exception:
+                logger.exception(
+                    "Ошибка загрузки расшифровки звонка %s от %s",
+                    history_id,
+                    describe_user(user),
+                )
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text="Не удалось выполнить поиск, ошибка конфигурации БД.",
+                )
+                return
             details_payload = details or {}
             transcript = details_payload.get("transcript")
             text = self._format_transcript_details(details_payload, transcript)
@@ -266,7 +289,19 @@ class _CallLookupHandlers:
             )
         elif action == "record":
             history_id = int(payload["history_id"])
-            details = await self.service.fetch_call_details(history_id)
+            try:
+                details = await self.service.fetch_call_details(history_id)
+            except Exception:
+                logger.exception(
+                    "Ошибка загрузки записи звонка %s от %s",
+                    history_id,
+                    describe_user(user),
+                )
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text="Не удалось выполнить поиск, ошибка конфигурации БД.",
+                )
+                return
             details_payload = details or {}
             record_url = details_payload.get("record_url")
             if record_url:

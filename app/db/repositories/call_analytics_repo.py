@@ -9,7 +9,7 @@ Repository для работы с аналитической таблицей ca
 
 import traceback
 from typing import List, Dict, Any, Optional
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 from app.db.manager import DatabaseManager
 from app.logging_config import get_watchdog_logger
@@ -30,6 +30,15 @@ class CallAnalyticsRepository:
     def __init__(self, db_manager: DatabaseManager):
         self.db = db_manager
     
+    @staticmethod
+    def _normalize_period(
+        date_from: date | datetime,
+        date_to: date | datetime,
+    ) -> tuple[datetime, datetime]:
+        start_dt = date_from if isinstance(date_from, datetime) else datetime.combine(date_from, time.min)
+        end_dt = date_to if isinstance(date_to, datetime) else datetime.combine(date_to, time.max)
+        return start_dt, end_dt
+
     async def get_by_operator_period(
         self,
         operator_name: str,
@@ -53,6 +62,7 @@ class CallAnalyticsRepository:
         )
         
         try:
+            period_start, period_end = self._normalize_period(date_from, date_to)
             query = """
                 SELECT 
                     call_scores_id,
@@ -77,7 +87,7 @@ class CallAnalyticsRepository:
             
             results = await self.db.execute_with_retry(
                 query,
-                params=(operator_name, date_from, date_to),
+                params=(operator_name, period_start, period_end),
                 fetchall=True
             ) or []
             
@@ -109,6 +119,7 @@ class CallAnalyticsRepository:
         logger.info(f"[CALL_ANALYTICS] Getting all operators calls: {date_from} to {date_to}")
         
         try:
+            period_start, period_end = self._normalize_period(date_from, date_to)
             query = """
                 SELECT 
                     operator_name,
@@ -126,7 +137,7 @@ class CallAnalyticsRepository:
             
             results = await self.db.execute_with_retry(
                 query,
-                params=(date_from, date_to),
+                params=(period_start, period_end),
                 fetchall=True
             ) or []
             
@@ -219,6 +230,7 @@ class CallAnalyticsRepository:
         )
         
         try:
+            period_start, period_end = self._normalize_period(date_from, date_to)
             query = """
                 SELECT 
                     COUNT(*) as total_calls,
@@ -244,7 +256,7 @@ class CallAnalyticsRepository:
             
             result = await self.db.execute_with_retry(
                 query,
-                params=(operator_name, date_from, date_to),
+                params=(operator_name, period_start, period_end),
                 fetchone=True
             )
             
@@ -304,6 +316,7 @@ class CallAnalyticsRepository:
         
         try:
             if date_from and date_to:
+                period_start, period_end = self._normalize_period(date_from, date_to)
                 query = """
                     SELECT DISTINCT operator_name
                     FROM call_analytics
@@ -311,7 +324,7 @@ class CallAnalyticsRepository:
                       AND operator_name IS NOT NULL
                     ORDER BY operator_name
                 """
-                params = (date_from, date_to)
+                params = (period_start, period_end)
             else:
                 query = """
                     SELECT DISTINCT operator_name
@@ -358,8 +371,9 @@ class CallAnalyticsRepository:
                 params.append(operator_name)
             
             if date_from and date_to:
+                period_start, period_end = self._normalize_period(date_from, date_to)
                 conditions.append("call_date BETWEEN %s AND %s")
-                params.extend([date_from, date_to])
+                params.extend([period_start, period_end])
             
             where_clause = ""
             if conditions:

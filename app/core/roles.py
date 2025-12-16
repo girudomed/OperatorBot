@@ -1,3 +1,5 @@
+# Файл: app/core/roles.py
+
 """
 Роли и права пользователей на основе таблицы roles_reference.
 
@@ -5,6 +7,10 @@
     1 - operator
     2 - admin
     3 - superadmin
+    4 - developer
+    5 - head_of_registry
+    6 - founder
+    7 - marketing_director
 """
 
 from typing import Dict, Optional
@@ -25,15 +31,23 @@ ROLE_ID_TO_NAME: Dict[int, str] = {
     1: "operator",
     2: "admin",
     3: "superadmin",
+    4: "developer",
+    5: "head_of_registry",
+    6: "founder",
+    7: "marketing_director",
 }
 
 ROLE_NAME_TO_ID: Dict[str, int] = {name: role_id for role_id, name in ROLE_ID_TO_NAME.items()}
 
 # Человекочитаемые названия ролей
 ROLE_DISPLAY_NAMES: Dict[int, str] = {
-    1: "Оператор",
-    2: "Администратор",
+    1: "Operator",
+    2: "Admin",
     3: "SuperAdmin",
+    4: "Developer",
+    5: "Head of Registry",
+    6: "Founder",
+    7: "Marketing Director",
 }
 
 # Права ролей согласно roles_reference
@@ -41,18 +55,28 @@ ROLE_PERMISSIONS: Dict[int, RolePermissions] = {
     1: RolePermissions(can_view_own_stats=True),
     2: RolePermissions(can_view_own_stats=True, can_view_all_stats=True, can_manage_users=True),
     3: RolePermissions(can_view_own_stats=True, can_view_all_stats=True, can_manage_users=True, can_debug=True),
+    4: RolePermissions(can_view_own_stats=True, can_view_all_stats=True, can_manage_users=True, can_debug=True),
+    5: RolePermissions(can_view_own_stats=True, can_view_all_stats=True, can_manage_users=True),
+    6: RolePermissions(can_view_own_stats=True, can_view_all_stats=True, can_manage_users=True, can_debug=True),
+    7: RolePermissions(can_view_own_stats=True, can_view_all_stats=True),
 }
 
 # Роли с админскими правами (can_manage_users=True)
-ADMIN_ROLE_IDS = {2, 3}
+ADMIN_ROLE_IDS = {2, 3, 4, 5, 6}
 
 # Роли с полным доступом к статистике (can_view_all_stats=True)
-STATS_VIEWER_ROLE_IDS = {2, 3}
+STATS_VIEWER_ROLE_IDS = {2, 3, 4, 5, 6, 7}
 
 # Роли с правами отладки (can_debug=True) 
-DEBUG_ROLE_IDS = {3}
+DEBUG_ROLE_IDS = {3, 4, 6}
 
 DEFAULT_ROLE_ID = 1
+
+# Соответствие role_name -> display name
+ROLE_NAME_TO_DISPLAY = {
+    ROLE_ID_TO_NAME[role_id]: ROLE_DISPLAY_NAMES[role_id]
+    for role_id in ROLE_ID_TO_NAME
+}
 
 
 def role_name_from_id(role_id: int | None) -> str:
@@ -73,6 +97,11 @@ def role_display_name(role_id: int | None) -> str:
     if role_id is None:
         return ROLE_DISPLAY_NAMES[DEFAULT_ROLE_ID]
     return ROLE_DISPLAY_NAMES.get(int(role_id), ROLE_DISPLAY_NAMES[DEFAULT_ROLE_ID])
+
+
+def role_display_name_from_name(role_name: str) -> str:
+    """Возвращает человекочитаемое название для slug роли."""
+    return ROLE_NAME_TO_DISPLAY.get(role_name, ROLE_DISPLAY_NAMES[DEFAULT_ROLE_ID])
 
 
 def get_role_permissions(role_id: int | None) -> RolePermissions:

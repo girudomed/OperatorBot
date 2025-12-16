@@ -22,23 +22,24 @@ logger = get_watchdog_logger(__name__)
 # Константы ролей (должны соответствовать role_id в БД)
 ROLE_OPERATOR = 1
 ROLE_ADMINISTRATOR = 2
-ROLE_MARKETER = 3
-ROLE_ZAV_REG = 4
-ROLE_ST_ADMIN = 5
-ROLE_MANAGEMENT = 6
-ROLE_SUPER_ADMIN = 7
-ROLE_DEV = 8
+ROLE_SUPER_ADMIN = 3
+ROLE_DEVELOPER = 4
+ROLE_HEAD_OF_REGISTRY = 5
+ROLE_FOUNDER = 6
+ROLE_MARKETING_DIRECTOR = 7
+
+# Совместимость со старым названием
+ROLE_DEV = ROLE_DEVELOPER
 
 # Названия ролей
 ROLE_NAMES = {
     ROLE_OPERATOR: "Оператор",
     ROLE_ADMINISTRATOR: "Администратор",
-    ROLE_MARKETER: "Маркетолог",
-    ROLE_ZAV_REG: "Зав. Рег.",
-    ROLE_ST_ADMIN: "СТ Админ",
-    ROLE_MANAGEMENT: "Руководство",
     ROLE_SUPER_ADMIN: "SuperAdmin",
-    ROLE_DEV: "Dev"
+    ROLE_DEVELOPER: "Developer",
+    ROLE_HEAD_OF_REGISTRY: "Head of Registry",
+    ROLE_FOUNDER: "Founder",
+    ROLE_MARKETING_DIRECTOR: "Marketing Director",
 }
 
 
@@ -140,15 +141,21 @@ class PermissionChecker:
         ]
         
         # Команды для админов
-        if role_id >= ROLE_ADMINISTRATOR:
+        if role_id in (
+            ROLE_ADMINISTRATOR,
+            ROLE_SUPER_ADMIN,
+            ROLE_DEVELOPER,
+            ROLE_HEAD_OF_REGISTRY,
+            ROLE_FOUNDER,
+        ):
             commands.extend([
                 '/admin',
                 '/users',
                 '/stats'
             ])
         
-        # Команды для разработчиков
-        if role_id == ROLE_DEV:
+        # Команды для разработчиков/основателей
+        if role_id in (ROLE_DEVELOPER, ROLE_FOUNDER):
             commands.extend([
                 '/debug',
                 '/logs',

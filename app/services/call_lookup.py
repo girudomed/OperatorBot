@@ -9,8 +9,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.config import DB_CONFIG
 from app.db.manager import DatabaseManager
 from app.db.repositories.lm_repository import LMRepository
+from app.db.utils_schema import has_column
 from app.logging_config import get_watchdog_logger
 
 logger = get_watchdog_logger(__name__)
@@ -64,9 +66,11 @@ class CallLookupService:
         self,
         db_manager: DatabaseManager,
         lm_repo: Optional[LMRepository] = None,
+        db_name: Optional[str] = None,
     ):
         self.db_manager = db_manager
         self.lm_repo = lm_repo
+        self.db_name = db_name or DB_CONFIG.get("db")
 
     def _normalize_phone_input(self, phone: str) -> str:
         digits = re.sub(r"\D+", "", phone or "")
@@ -151,16 +155,26 @@ class CallLookupService:
 
         called_expr = _normalize_phone_sql("COALESCE(ch.called_info, '')")
         caller_expr = _normalize_phone_sql("COALESCE(ch.caller_info, '')")
+        call_time_expr = "COALESCE(ch.context_start_time_dt, FROM_UNIXTIME(ch.context_start_time))"
 
+        record_url_exists = await has_column(
+            self.db_manager,
+            "call_history",
+            "record_url",
+            self.db_name,
+        )
+        record_url_select = (
+            "ch.record_url" if record_url_exists else "NULL"
+        )
         query = f"""
             SELECT
                 ch.history_id AS history_id,
-                ch.context_start_time AS call_time,
+                {call_time_expr} AS call_time,
                 ch.caller_info,
                 ch.caller_number,
                 ch.called_info,
                 ch.talk_duration,
-                ch.record_url,
+                {record_url_select} AS record_url,
                 ch.recording_id,
                 cs.score,
                 cs.transcript
@@ -170,8 +184,8 @@ class CallLookupService:
                 {called_expr} LIKE %s
                 OR {caller_expr} LIKE %s
             )
-            AND ch.call_time BETWEEN %s AND %s
-            ORDER BY ch.call_time DESC
+            AND {call_time_expr} BETWEEN %s AND %s
+            ORDER BY {call_time_expr} DESC
             LIMIT %s OFFSET %s
         """
 
@@ -238,15 +252,25 @@ class CallLookupService:
 
     async def fetch_call_details(self, history_id: int) -> Optional[Dict[str, Any]]:
         logger.info("Запрошены детали звонка history_id=%s", history_id)
-        query = """
+        call_time_expr = "COALESCE(ch.context_start_time_dt, FROM_UNIXTIME(ch.context_start_time))"
+        record_url_exists = await has_column(
+            self.db_manager,
+            "call_history",
+            "record_url",
+            self.db_name,
+        )
+        record_url_select = (
+            "ch.record_url" if record_url_exists else "NULL"
+        )
+        query = f"""
             SELECT
                 ch.history_id AS history_id,
-                ch.context_start_time AS call_time,
+                {call_time_expr} AS call_time,
                 ch.caller_info,
                 ch.caller_number,
                 ch.called_info,
                 ch.talk_duration,
-                ch.record_url,
+                {record_url_select} AS record_url,
                 ch.recording_id,
                 cs.score,
                 cs.transcript

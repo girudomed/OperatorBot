@@ -32,56 +32,66 @@ class AdminLookupHandler:
 
         await query.answer()
 
-        user = update.effective_user
-        if not await self.permissions.can_access_call_lookup(user.id, user.username):
-            await query.answer("Нет доступа к расшифровкам", show_alert=True)
-            logger.warning(
-                "Пользователь %s попытался открыть раздел расшифровок без прав",
+        try:
+            user = update.effective_user
+            if not await self.permissions.can_access_call_lookup(user.id, user.username):
+                await query.answer("Нет доступа к расшифровкам", show_alert=True)
+                logger.warning(
+                    "Пользователь %s попытался открыть раздел расшифровок без прав",
+                    describe_user(user),
+                )
+                return
+
+            logger.info(
+                "Админ %s открыл подсказку раздела расшифровок",
                 describe_user(user),
             )
-            return
+            message = (
+                "📂 <b>Расшифровки</b>\n\n"
+                "Введите команду <code>/call_lookup &lt;номер&gt; [период]</code>, "
+                "например: <code>/call_lookup +7 999 1234567 weekly</code>.\n\n"
+                "Ниже — быстрые кнопки для вставки команды в чат."
+            )
 
-        logger.info(
-            "Админ %s открыл подсказку раздела расшифровок",
-            describe_user(user),
-        )
-        message = (
-            "📂 <b>Расшифровки</b>\n\n"
-            "Введите команду <code>/call_lookup &lt;номер&gt; [период]</code>, "
-            "например: <code>/call_lookup +7 999 1234567 weekly</code>.\n\n"
-            "Ниже — быстрые кнопки для вставки команды в чат."
-        )
+            keyboard = [
+                [
+                    InlineKeyboardButton(
+                        "🔍 Вставить команду",
+                        switch_inline_query_current_chat="/call_lookup ",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "Daily",
+                        switch_inline_query_current_chat="/call_lookup  daily",
+                    ),
+                    InlineKeyboardButton(
+                        "Weekly",
+                        switch_inline_query_current_chat="/call_lookup  weekly",
+                    ),
+                    InlineKeyboardButton(
+                        "Monthly",
+                        switch_inline_query_current_chat="/call_lookup  monthly",
+                    ),
+                ],
+                [InlineKeyboardButton("◀️ Назад", callback_data="admin:back")],
+            ]
 
-        keyboard = [
-            [
-                InlineKeyboardButton(
-                    "🔍 Вставить команду",
-                    switch_inline_query_current_chat="/call_lookup ",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "Daily",
-                    switch_inline_query_current_chat="/call_lookup  daily",
+            await safe_edit_message(
+                query,
+                text=message,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML",
+            )
+        except Exception as exc:
+            logger.exception("Не удалось открыть подсказку расшифровок: %s", exc)
+            await safe_edit_message(
+                query,
+                text="⚠️ Не удалось открыть раздел «Расшифровки». Попробуйте снова чуть позже.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("◀️ Назад", callback_data="admin:back")]]
                 ),
-                InlineKeyboardButton(
-                    "Weekly",
-                    switch_inline_query_current_chat="/call_lookup  weekly",
-                ),
-                InlineKeyboardButton(
-                    "Monthly",
-                    switch_inline_query_current_chat="/call_lookup  monthly",
-                ),
-            ],
-            [InlineKeyboardButton("◀️ Назад", callback_data="admin:back")],
-        ]
-
-        await safe_edit_message(
-            query,
-            text=message,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="HTML",
-        )
+            )
 
 
 def register_admin_lookup_handlers(

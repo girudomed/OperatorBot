@@ -12,11 +12,13 @@ from telegram.ext import ContextTypes, CommandHandler
 from app.db.manager import DatabaseManager
 from app.db.repositories.users import UserRepository
 from app.db.repositories.roles import RolesRepository
+from app.core.roles import role_name_from_id, role_display_name_from_name
 from app.telegram.utils.keyboard_builder import KeyboardBuilder
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.logging_config import get_watchdog_logger
 
 logger = get_watchdog_logger(__name__)
+DB_ERROR_MESSAGE = "Ошибка доступа к базе. Проверьте конфигурацию/схему БД."
 
 
 class StartHandler:
@@ -44,7 +46,15 @@ class StartHandler:
         is_dev = self.permissions.is_dev_admin(user_id, username)
         
         # Получить пользователя
-        user = await self.user_repo.get_user_by_telegram_id(user_id)
+        try:
+            user = await self.user_repo.get_user_by_telegram_id(user_id)
+        except Exception:
+            logger.exception(
+                "[START] Ошибка чтения пользователя",
+                extra={"user_id": user_id, "username": username},
+            )
+            await update.message.reply_text(DB_ERROR_MESSAGE)
+            return
         
         if not user:
             # Незарегистрированный пользователь
@@ -74,23 +84,30 @@ class StartHandler:
         
         # Approved пользователь
         role_id = user.get('role_id', 1)
-        role_name = await self.roles_repo.get_role_name(role_id)
-        perms = await self.roles_repo.get_user_permissions(role_id)
-        
-        # Построить клавиатуру
-        keyboard = await self.keyboard_builder.build_main_keyboard(
-            role_id, is_supreme, is_dev
-        )
+        role_slug = role_name_from_id(role_id)
+        try:
+            role_name = role_display_name_from_name(role_slug)
+            perms = await self.roles_repo.get_user_permissions(role_id)
+            keyboard = await self.keyboard_builder.build_main_keyboard(
+                role_id, is_supreme, is_dev
+            )
+        except Exception:
+            logger.exception(
+                "[START] Ошибка получения данных роли",
+                extra={"user_id": user_id, "role_id": role_id},
+            )
+            await update.message.reply_text(DB_ERROR_MESSAGE)
+            return
         
         # Сообщение в зависимости от роли
         if is_supreme or is_dev:
             message = (
                 f"👋 Добро пожаловать, **{user_name}**!\n\n"
-                f"🔱 Вы авторизованы как **{'Supreme Admin' if is_supreme else 'Dev Admin'}**.\n\n"
+                f"🔱 Вы авторизованы как **{'Founder' if is_supreme else 'Developer'}**.\n\n"
                 "Доступен **полный контроль** всех функций системы.\n\n"
                 "⚠️ Опасные операции требуют подтверждения."
             )
-        elif role_id >= 7:  # SuperAdmin (из БД)
+        elif role_slug in ('founder', 'developer', 'superadmin'):
             message = (
                 f"👋 Добро пожаловать, **{user_name}**!\n\n"
                 f"👑 Вы авторизованы как **{role_name}**.\n\n"
@@ -101,7 +118,7 @@ class StartHandler:
                 "• ⚙️ Системные функции\n\n"
                 "Используйте кнопки ниже для навигации."
             )
-        elif perms.get('can_manage_users'):  # Админ/Ст.админ/ЗавРег
+        elif perms.get('can_manage_users'):  # Админские роли
             message = (
                 f"👋 Добро пожаловать, **{user_name}**!\n\n"
                 f"🛡️ Вы авторизованы как **{role_name}**.\n\n"
@@ -111,7 +128,7 @@ class StartHandler:
                 "• 👥 Управление пользователями\n\n"
                 "Для настройки доступов → «Пользователи и роли»."
             )
-        elif perms.get('can_view_all_stats'):  # Руководство/Маркетолог
+        elif perms.get('can_view_all_stats'):  # Руководство/маркетинг
             message = (
                 f"👋 Добро пожаловать, **{user_name}**!\n\n"
                 f"📊 Вы авторизованы как **{role_name}**.\n\n"
@@ -136,7 +153,7 @@ class StartHandler:
             reply_markup=keyboard
         )
         
-        logger.info(f"[START] Sent welcome for {user_id}, role={role_name}")
+        logger.info(f"[START] Sent welcome for {user_id}, role={role_slug}")
     
     def get_handler(self):
         """Получить CommandHandler для регистрации."""
