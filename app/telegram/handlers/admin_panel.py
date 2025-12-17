@@ -297,9 +297,7 @@ class AdminPanelHandler:
             f"🚫 Заблокировано: <b>{blocked_count}</b>\n"
             f"👑 Администраторов: <b>{admin_count}</b>\n"
             f"👥 Пользователей (без админов): <b>{regular_users}</b>\n\n"
-            f"Роли (approved):\n{roles_summary}\n\n"
-            f"Последние действия:\n"
-            f"<i>Скоро будет доступно</i>"
+            f"Роли (approved):\n{roles_summary}"
         )
         
         keyboard = [
@@ -717,14 +715,14 @@ class AdminPanelHandler:
         for role in ROLE_DISPLAY_ORDER:
             stats = breakdown.get(role, {})
             emoji = ROLE_EMOJI.get(role, "•")
-            display_name = stats.get("display") or role_display_name_from_name(role)
+            display_name = role_display_name_from_name(role) or stats.get("display") or role.title()
             approved = int(stats.get("approved") or 0)
             lines.append(f"{emoji} {display_name}: <b>{approved}</b>")
         # Выводим роли, которых нет в стандартном порядке, но присутствуют в БД
         for role_name, role_stats in breakdown.items():
             if role_name in ROLE_DISPLAY_ORDER:
                 continue
-            display_name = role_stats.get("display") or role_display_name_from_name(role_name)
+            display_name = role_display_name_from_name(role_name) or role_stats.get("display") or role_name.title()
             emoji = ROLE_EMOJI.get(role_name, "•")
             approved = int(role_stats.get("approved") or 0)
             lines.append(f"{emoji} {display_name}: <b>{approved}</b>")
