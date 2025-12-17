@@ -30,6 +30,7 @@ class CallAnalyticsSyncService:
         self.db = db_manager
         self._schema_checked: bool = False
         self._schema_valid: bool = False
+        self._history_timestamp_field: str = "ch.created_at"
     
     async def sync_all(self, batch_size: int = 1000) -> dict:
         """
@@ -156,7 +157,7 @@ class CallAnalyticsSyncService:
         
         try:
             # Синхронизировать только новые или обновленные
-            history_timestamp_field = "ch.created_at"
+            history_timestamp_field = self._history_timestamp_field
             call_date_expr = (
                 "COALESCE(ch.context_start_time_dt, FROM_UNIXTIME(ch.context_start_time), cs.call_date)"
             )
@@ -205,7 +206,17 @@ class CallAnalyticsSyncService:
                 ORDER BY {history_timestamp_field} ASC
                 LIMIT %s
             """
-            
+            db_info = await self.db.execute_with_retry("SELECT DATABASE() as db", fetchone=True)
+            logger.info(
+                "[ETL] Executing incremental sync in DB=%s using timestamp field %s",
+                (db_info or {}).get("db"),
+                history_timestamp_field,
+            )
+            logger.debug(
+                "[ETL] Incremental SQL: %s | params=%s",
+                " ".join(query.split()),
+                (history_since_point, batch_size),
+            )
             result = await self.db.execute_with_retry(
                 query,
                 params=(history_since_point, batch_size),
@@ -401,20 +412,39 @@ class CallAnalyticsSyncService:
 
         raw_found: Set[str] = {row.get('COLUMN_NAME', '') for row in rows} if rows else set()
         found_columns: Set[str] = {col.lower() for col in raw_found if col}
-        missing = {col for col in required_columns if col not in found_columns}
 
-        if missing:
+        mandatory = {'history_id'}
+        missing_mandatory = {col for col in mandatory if col not in found_columns}
+
+        if missing_mandatory:
             logger.error(
-                "[ETL] call_history schema mismatch. Missing columns: %s",
-                ", ".join(sorted(missing)),
+                "[ETL] call_history schema mismatch. Missing mandatory columns: %s",
+                ", ".join(sorted(missing_mandatory)),
             )
             self._schema_valid = False
-        else:
-            logger.info(
-                "[ETL] call_history schema verified. Columns: %s",
-                ", ".join(sorted(raw_found)),
+            self._schema_checked = True
+            return self._schema_valid
+
+        timestamp_candidates = [col for col in ('created_at', 'updated_at') if col in found_columns]
+
+        logger.info(
+            "[ETL] call_history schema verified. Columns: %s",
+            ", ".join(sorted(raw_found)),
+        )
+        self._schema_valid = True
+
+        if 'created_at' in timestamp_candidates:
+            self._history_timestamp_field = "ch.created_at"
+        elif 'updated_at' in timestamp_candidates:
+            self._history_timestamp_field = "ch.updated_at"
+            logger.warning(
+                "[ETL] call_history.created_at отсутствует, используем updated_at для инкрементальной синхронизации"
             )
-            self._schema_valid = True
+        else:
+            self._history_timestamp_field = "ch.history_id"
+            logger.warning(
+                "[ETL] Нет ни created_at, ни updated_at. Инкрементальная синхронизация будет опираться на history_id (менее точное сравнение)."
+            )
 
         self._schema_checked = True
         return self._schema_valid
