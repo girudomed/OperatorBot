@@ -15,6 +15,8 @@ from telegram.ext import (
     filters,
 )
 
+from app.telegram.utils.callback_data import AdminCB
+
 from app.db.repositories.admin import AdminRepository
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.services.notifications import NotificationService
@@ -109,23 +111,39 @@ class AdminUsersHandler:
         )
 
     def _parse_status_page(self, data: str) -> tuple[str, int]:
+        # Try new format
+        action, args = AdminCB.parse(data)
+        if action == AdminCB.USERS and args:
+            # args: [sub_action, status, page, ...]
+            # sub_action is LIST or DETAILS etc.
+            if len(args) > 1:
+                status = args[1]
+                page = int(args[2]) if len(args) > 2 and args[2].isdigit() else 0
+                return status, page
+                
+        # Fallback to legacy
         parts = data.split(':')
         status = parts[3] if len(parts) > 3 else self.default_filter
         page = 0
         if len(parts) > 4:
             try:
                 page = max(0, int(parts[4]))
-            except ValueError as exc:
-                logger.warning(
-                    "Некорректный номер страницы в callback '%s': %s",
-                    data,
-                    exc,
-                    exc_info=True,
-                )
+            except ValueError:
                 page = 0
         return status, page
 
     def _extract_user_id(self, data: str) -> int:
+        # Try new format
+        action, args = AdminCB.parse(data)
+        if action == AdminCB.USERS and args:
+            # Format: adm:usr:type:status:page:id
+            # id is usually last
+            try:
+                return int(args[-1])
+            except (ValueError, IndexError):
+                pass
+                
+        # Fallback
         try:
             return int(data.split(':')[-1])
         except (ValueError, IndexError) as exc:
@@ -138,7 +156,7 @@ class AdminUsersHandler:
             return 0
 
     def _build_list_callback(self, status: str, page: int = 0) -> str:
-        return f"admin:users:list:{status}:{page}"
+        return AdminCB.create(AdminCB.USERS, AdminCB.LIST, status, page)
     
     @log_async_exceptions
     async def show_users_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -185,7 +203,13 @@ class AdminUsersHandler:
                 keyboard.append([
                     InlineKeyboardButton(
                         user_text,
-                        callback_data=f"admin:users:details:{status_filter}:{page}:{user_id}"
+                        callback_data=AdminCB.create(
+                            AdminCB.USERS, 
+                            AdminCB.DETAILS, 
+                            status_filter, 
+                            page, 
+                            user_id
+                        )
                     )
                 ])
             nav_row = []
@@ -213,7 +237,8 @@ class AdminUsersHandler:
                 InlineKeyboardButton("🚫 Blocked", callback_data=self._build_list_callback('blocked'))
             ]
             keyboard.append(filters)
-            keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="admin:back")])
+            keyboard.append(filters)
+            keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))])
             logger.info(
                 "Админ %s просматривает %s пользователей (%s показано)",
                 describe_user(update.effective_user),
@@ -306,16 +331,16 @@ class AdminUsersHandler:
         
         if user.get('status') == 'pending':
             keyboard.append([
-                InlineKeyboardButton("✅ Approve", callback_data=f"admin:users:approve:{base_callback_suffix}"),
-                InlineKeyboardButton("❌ Decline", callback_data=f"admin:users:decline:{base_callback_suffix}")
+                InlineKeyboardButton("✅ Approve", callback_data=AdminCB.create(AdminCB.USERS, AdminCB.APPROVE, base_callback_suffix)),
+                InlineKeyboardButton("❌ Decline", callback_data=AdminCB.create(AdminCB.USERS, AdminCB.DECLINE, base_callback_suffix))
             ])
         elif user.get('status') == 'approved':
             keyboard.append([
-                InlineKeyboardButton("🚫 Block", callback_data=f"admin:users:block:{base_callback_suffix}")
+                InlineKeyboardButton("🚫 Block", callback_data=AdminCB.create(AdminCB.USERS, AdminCB.BLOCK, base_callback_suffix))
             ])
         elif user.get('status') == 'blocked':
             keyboard.append([
-                InlineKeyboardButton("🔓 Unblock", callback_data=f"admin:users:unblock:{base_callback_suffix}")
+                InlineKeyboardButton("🔓 Unblock", callback_data=AdminCB.create(AdminCB.USERS, AdminCB.UNBLOCK, base_callback_suffix))
             ])
 
         can_promote_admin = False
@@ -336,7 +361,7 @@ class AdminUsersHandler:
         keyboard.append([
             InlineKeyboardButton(
                 "🔄 Обновить",
-                callback_data=f"admin:users:details:{status_filter}:{page}:{user_id}"
+                callback_data=AdminCB.create(AdminCB.USERS, AdminCB.DETAILS, status_filter, page, user_id)
             )
         ])
         
@@ -347,7 +372,7 @@ class AdminUsersHandler:
             )
         ])
         keyboard.append([
-            InlineKeyboardButton("🏠 В панель", callback_data="admin:back")
+            InlineKeyboardButton("🏠 В панель", callback_data=AdminCB.create(AdminCB.BACK))
         ])
         
         await safe_edit_message(
@@ -598,26 +623,26 @@ def register_admin_users_handlers(
     
     # Список пользователей
     application.add_handler(
-        CallbackQueryHandler(handler.show_users_list, pattern=r"^admin:users:list")
+        CallbackQueryHandler(handler.show_users_list, pattern=r"^(admin:users:list|adm:usr:lst)")
     )
     
     # Детали пользователя
     application.add_handler(
-        CallbackQueryHandler(handler.show_user_details, pattern=r"^admin:users:details:")
+        CallbackQueryHandler(handler.show_user_details, pattern=r"^(admin:users:details:|adm:usr:det)")
     )
     
     # Действия
     application.add_handler(
-        CallbackQueryHandler(handler.handle_approve, pattern=r"^admin:users:approve:")
+        CallbackQueryHandler(handler.handle_approve, pattern=r"^(admin:users:approve:|adm:usr:apr)")
     )
     application.add_handler(
-        CallbackQueryHandler(handler.handle_decline, pattern=r"^admin:users:decline:")
+        CallbackQueryHandler(handler.handle_decline, pattern=r"^(admin:users:decline:|adm:usr:dcl)")
     )
     application.add_handler(
-        CallbackQueryHandler(handler.handle_block, pattern=r"^admin:users:block:")
+        CallbackQueryHandler(handler.handle_block, pattern=r"^(admin:users:block:|adm:usr:blk)")
     )
     application.add_handler(
-        CallbackQueryHandler(handler.handle_unblock, pattern=r"^admin:users:unblock:")
+        CallbackQueryHandler(handler.handle_unblock, pattern=r"^(admin:users:unblock:|adm:usr:unb)")
     )
 
     # Reply-кнопка «👥 Пользователи и роли»

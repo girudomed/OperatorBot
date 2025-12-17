@@ -14,6 +14,8 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, Application, CallbackQueryHandler
 
+from app.telegram.utils.callback_data import AdminCB
+
 from app.db.repositories.lm_repository import LMRepository
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.telegram.utils.messages import safe_edit_message
@@ -45,18 +47,18 @@ class AdminLMHandler:
         
         keyboard = [
             [
-                InlineKeyboardButton("⚡ Операционные", callback_data="admin:lm:operational"),
-                InlineKeyboardButton("💰 Конверсии", callback_data="admin:lm:conversion")
+                InlineKeyboardButton("⚡ Операционные", callback_data=AdminCB.create(AdminCB.LM_MENU, AdminCB.lm_OPS)),
+                InlineKeyboardButton("💰 Конверсии", callback_data=AdminCB.create(AdminCB.LM_MENU, AdminCB.lm_CONV))
             ],
             [
-                InlineKeyboardButton("⭐ Качество", callback_data="admin:lm:quality"),
-                InlineKeyboardButton("⚠️ Риски", callback_data="admin:lm:risk")
+                InlineKeyboardButton("⭐ Качество", callback_data=AdminCB.create(AdminCB.LM_MENU, AdminCB.lm_QUAL)),
+                InlineKeyboardButton("⚠️ Риски", callback_data=AdminCB.create(AdminCB.LM_MENU, AdminCB.lm_RISK))
             ],
             [
-                InlineKeyboardButton("🔮 Прогнозы", callback_data="admin:lm:forecast"),
-                InlineKeyboardButton("📊 Сводка", callback_data="admin:lm:summary")
+                InlineKeyboardButton("🔮 Прогнозы", callback_data=AdminCB.create(AdminCB.LM_MENU, AdminCB.lm_FCST)),
+                InlineKeyboardButton("📊 Сводка", callback_data=AdminCB.create(AdminCB.LM_MENU, AdminCB.lm_SUM))
             ],
-            [InlineKeyboardButton("◀️ Назад", callback_data="admin:back")]
+            [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]
         ]
         
         await safe_edit_message(
@@ -97,7 +99,7 @@ class AdminLMHandler:
             )
         
         keyboard = [
-            [InlineKeyboardButton("◀️ К категориям", callback_data="admin:lm:menu")]
+            [InlineKeyboardButton("◀️ К категориям", callback_data=AdminCB.create(AdminCB.LM_MENU))]
         ]
         
         await safe_edit_message(
@@ -136,7 +138,7 @@ class AdminLMHandler:
             )
         
         keyboard = [
-            [InlineKeyboardButton("◀️ К категориям", callback_data="admin:lm:menu")]
+            [InlineKeyboardButton("◀️ К категориям", callback_data=AdminCB.create(AdminCB.LM_MENU))]
         ]
         
         await safe_edit_message(
@@ -181,7 +183,7 @@ class AdminLMHandler:
             )
         
         keyboard = [
-            [InlineKeyboardButton("◀️ К категориям", callback_data="admin:lm:menu")]
+            [InlineKeyboardButton("◀️ К категориям", callback_data=AdminCB.create(AdminCB.LM_MENU))]
         ]
         
         await safe_edit_message(
@@ -224,8 +226,8 @@ class AdminLMHandler:
             )
         
         keyboard = [
-            [InlineKeyboardButton("🔍 Список фоллоу-апов", callback_data="admin:lm:followup_list")],
-            [InlineKeyboardButton("◀️ К категориям", callback_data="admin:lm:menu")]
+            [InlineKeyboardButton("🔍 Список фоллоу-апов", callback_data=AdminCB.create(AdminCB.LM_MENU, AdminCB.lm_FLW))],
+            [InlineKeyboardButton("◀️ К категориям", callback_data=AdminCB.create(AdminCB.LM_MENU))]
         ]
         
         await safe_edit_message(
@@ -240,6 +242,33 @@ class AdminLMHandler:
         query = update.callback_query
         data = query.data
         
+        # Try new format
+        action, args = AdminCB.parse(data)
+        if action == AdminCB.LM_MENU:
+            if not args:
+               await self.show_lm_menu(update, context)
+               return
+            
+            sub = args[0]
+            if sub == AdminCB.lm_OPS:
+                await self.show_operational_metrics(update, context)
+            elif sub == AdminCB.lm_CONV:
+                await self.show_conversion_metrics(update, context)
+            elif sub == AdminCB.lm_FCST:
+                await self.show_forecast_metrics(update, context)
+            elif sub == AdminCB.lm_RISK:
+                await self.show_risk_metrics(update, context)
+            elif sub == AdminCB.lm_QUAL:
+                await self.show_quality_metrics(update, context)
+            elif sub == AdminCB.lm_SUM:
+                await self.show_summary_metrics(update, context)
+            elif sub == AdminCB.lm_FLW:
+                await self.show_followup_list(update, context)
+            else:
+                await self.show_lm_menu(update, context)
+            return
+
+        # Legacy format
         if data == "admin:lm:menu":
             await self.show_lm_menu(update, context)
         elif data == "admin:lm:operational":
@@ -294,7 +323,7 @@ class AdminLMHandler:
             )
         
         keyboard = [
-            [InlineKeyboardButton("◀️ К категориям", callback_data="admin:lm:menu")]
+            [InlineKeyboardButton("◀️ К категориям", callback_data=AdminCB.create(AdminCB.LM_MENU))]
         ]
         
         await safe_edit_message(
@@ -340,8 +369,8 @@ class AdminLMHandler:
             )
         
         keyboard = [
-            [InlineKeyboardButton("🔄 Обновить", callback_data="admin:lm:summary")],
-            [InlineKeyboardButton("◀️ К категориям", callback_data="admin:lm:menu")]
+            [InlineKeyboardButton("🔄 Обновить", callback_data=AdminCB.create(AdminCB.LM_MENU, AdminCB.lm_SUM))],
+            [InlineKeyboardButton("◀️ К категориям", callback_data=AdminCB.create(AdminCB.LM_MENU))]
         ]
         
         await safe_edit_message(
@@ -384,8 +413,8 @@ class AdminLMHandler:
             )
         
         keyboard = [
-            [InlineKeyboardButton("🔄 Обновить", callback_data="admin:lm:followup_list")],
-            [InlineKeyboardButton("◀️ К рискам", callback_data="admin:lm:risk")]
+            [InlineKeyboardButton("🔄 Обновить", callback_data=AdminCB.create(AdminCB.LM_MENU, AdminCB.lm_FLW))],
+            [InlineKeyboardButton("◀️ К рискам", callback_data=AdminCB.create(AdminCB.LM_MENU, AdminCB.lm_RISK))]
         ]
         
         await safe_edit_message(
@@ -405,7 +434,7 @@ def register_admin_lm_handlers(
     handler = AdminLMHandler(lm_repo, permissions)
     
     application.add_handler(
-        CallbackQueryHandler(handler.handle_callback, pattern=r"^admin:lm:")
+        CallbackQueryHandler(handler.handle_callback, pattern=r"^(admin:lm:|adm:lm)")
     )
     
     logger.info("Admin LM handlers registered")

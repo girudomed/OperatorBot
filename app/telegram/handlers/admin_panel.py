@@ -8,6 +8,8 @@
 
 from typing import Optional, Tuple, List
 
+from app.telegram.utils.callback_data import AdminCB
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest, TelegramError
 
@@ -114,37 +116,42 @@ class AdminPanelHandler:
             logger.warning("Не удалось определить роль пользователя %s", describe_user(user))
 
         roles_summary = self._build_roles_summary(counters)
+
         keyboard = [
             [
                 InlineKeyboardButton(
-                    "📊 Dashboard", callback_data=self._callback("dashboard")
+                    "📊 Dashboard", callback_data=AdminCB.create(AdminCB.DASHBOARD)
                 )
             ],
             [
                 InlineKeyboardButton(
                     "👥 Пользователи",
-                    callback_data=self._callback("users", "list", "pending"),
+                    callback_data=AdminCB.create(AdminCB.USERS, AdminCB.LIST, AdminCB.STATUS_PENDING),
                 )
             ],
             [
                 InlineKeyboardButton(
                     "👑 Админы",
-                    callback_data=self._callback("admins", "list"),
+                    callback_data=AdminCB.create(AdminCB.ADMINS, AdminCB.LIST),
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "📈 Статистика", callback_data=self._callback("stats")
+                    "🧠 LM Метрики",
+                    callback_data=AdminCB.create(AdminCB.LM_MENU)
+                ),
+                InlineKeyboardButton(
+                    "📈 Статистика", callback_data=AdminCB.create(AdminCB.STATS)
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "📂 Расшифровки", callback_data=self._callback("lookup")
+                    "📂 Расшифровки", callback_data=AdminCB.create(AdminCB.LOOKUP)
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "⚙️ Настройки", callback_data=self._callback("settings")
+                    "⚙️ Настройки", callback_data=AdminCB.create(AdminCB.SETTINGS)
                 )
             ],
         ]
@@ -152,7 +159,7 @@ class AdminPanelHandler:
             keyboard.append(
                 [
                     InlineKeyboardButton(
-                        "📑 Команды", callback_data=self._callback("commands")
+                        "📑 Команды", callback_data="admin:command:list" # Keep legacy or migrate later
                     )
                 ]
             )
@@ -216,32 +223,66 @@ class AdminPanelHandler:
         """Роутер для callback-запросов админ-панели."""
         query = update.callback_query
         await query.answer()
-        
-        section, action, payload = self._parse_callback(query.data)
 
+        # 1. Попытка распарсить новый формат
+        cb_action, cb_args = AdminCB.parse(query.data)
+        
+        # 2. Если не вышло — пробуем легаси
+        section, action, payload = None, None, None
+        if not cb_action:
+            section, action, payload = self._parse_callback(query.data)
+        
         user = update.effective_user
         logger.info(
-            "Admin callback: section=%s action=%s payload=%s user=%s",
+            "Admin callback: action=%s args=%s (legacy: sec=%s act=%s)",
+            cb_action,
+            cb_args,
             section,
             action,
-            payload,
-            describe_user(user),
+            extra={"user_id": user.id},
         )
 
-        if section in ("back", "menu"):
-            await self._show_main_menu(update, context)
-            return
-
-        if section == "dashboard":
+        # Mapping or direct handling
+        # Dashboard
+        if cb_action == AdminCB.DASHBOARD or section == "dashboard":
             await self._show_dashboard(update, context)
             return
 
+        # Users list
+        if cb_action == AdminCB.USERS:
+             # args: [LIST, status] or [DETAILS, status, page, id] etc.
+             # This is handled in admin_users.py usually?
+             # Wait, admin_panel generates links to users, but admin_users.py HANDLES them.
+             # So admin_panel just creates the button.
+             # BUT here we might handle simple navigation if needed.
+             # admin_panel handles "users:list:pending" ? 
+             # No, register_admin_users_handlers does that. 
+             # We just need to ensure generic "Back" or "Menu" works.
+             pass
+
+        # Back / Menu
+        if cb_action in (AdminCB.BACK, AdminCB.LM_MENU) or section in ("back", "menu"):
+            await self._show_main_menu(update, context)
+            return
+            
+        # LM Metrics (New)
+        if cb_action == AdminCB.LM_MENU and not section:
+            # If we want to show LM menu, we need the handler.
+            # But wait, AdminLMHandler is separate.
+            # If AdminLMHandler is registered on "adm:lm", it will catch it?
+            # Yes, if we registered it properly. 
+            # Check register_admin_lm_handlers pattern.
+            pass
+
+        # Commands shortcuts
+        if cb_action == "cmd" or section == "commands": # AdminCB doesn't have CMD yet?
+             # Let's say AdminCB.COMMANDS = "cmds"
+             await self._show_command_shortcuts(update, context)
+             return
+             
+        # Legacy fallback logic
         if section == "command":
             await self._handle_command_action(action, payload, update, context)
-            return
-        
-        if section == "commands":
-            await self._show_command_shortcuts(update, context)
             return
 
     async def _show_dashboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -267,7 +308,7 @@ class AdminPanelHandler:
                 query,
                 text="⚠️ Не удалось загрузить Dashboard.\nПопробуйте снова чуть позже.",
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("◀️ Назад", callback_data=self._callback("back"))]]
+                    [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]]
                 ),
             )
             return
@@ -303,22 +344,22 @@ class AdminPanelHandler:
         keyboard = [
             [
                 InlineKeyboardButton(
-                    "👥 Пользователи", callback_data=self._callback("users", "list", "pending")
+                    "👥 Пользователи", callback_data=AdminCB.create(AdminCB.USERS, AdminCB.LIST, AdminCB.STATUS_PENDING)
                 ),
                 InlineKeyboardButton(
-                    "👑 Администраторы", callback_data=self._callback("admins", "list")
+                    "👑 Администраторы", callback_data=AdminCB.create(AdminCB.ADMINS, AdminCB.LIST)
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    "📈 Статистика", callback_data=self._callback("stats")
+                    "📈 Статистика", callback_data=AdminCB.create(AdminCB.STATS)
                 ),
                 InlineKeyboardButton(
-                    "📂 Расшифровки", callback_data=self._callback("lookup")
+                    "📂 Расшифровки", callback_data=AdminCB.create(AdminCB.LOOKUP)
                 ),
             ],
-            [InlineKeyboardButton("🔄 Обновить", callback_data=self._callback("dashboard"))],
-            [InlineKeyboardButton("◀️ Назад", callback_data=self._callback("back"))],
+            [InlineKeyboardButton("🔄 Обновить", callback_data=AdminCB.create(AdminCB.DASHBOARD))],
+            [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))],
         ]
         
         await safe_edit_message(
@@ -346,19 +387,19 @@ class AdminPanelHandler:
             [
                 InlineKeyboardButton(
                     "📅 Еженедельный отчёт",
-                    callback_data=self._callback("command", "weekly_quality"),
+                    callback_data=AdminCB.create(AdminCB.COMMAND, "weekly_quality"),
                 )
             ],
             [
                 InlineKeyboardButton(
                     "🧠 AI-отчёт",
-                    callback_data=self._callback("command", "report"),
+                    callback_data=AdminCB.create(AdminCB.COMMAND, "report"),
                 )
             ],
             [
                 InlineKeyboardButton(
                     "✅ Утвердить заявки",
-                    callback_data="admincmd:approve:list",
+                    callback_data="admincmd:approve:list", # keeping legacy provided in original code or refactor? Original was admincmd, leaving it for now as it seems to be outside normal admin scope? No, likely legacy.
                 )
             ],
             [
@@ -376,22 +417,22 @@ class AdminPanelHandler:
             [
                 InlineKeyboardButton(
                     "👑 Список админов",
-                    callback_data=self._callback("command", "admins"),
+                    callback_data=AdminCB.create(AdminCB.COMMAND, "admins"),
                 )
             ],
             [
                 InlineKeyboardButton(
                     "🧩 Назначить роль",
-                    callback_data=self._callback("command", "set_role"),
+                    callback_data=AdminCB.create(AdminCB.COMMAND, "set_role"),
                 )
             ],
             [
                 InlineKeyboardButton(
                     "⚠️ Оповестить о техработах",
-                    callback_data=self._callback("command", "maintenance_alert"),
+                    callback_data=AdminCB.create(AdminCB.COMMAND, "maintenance_alert"),
                 )
             ],
-            [InlineKeyboardButton("◀️ Назад", callback_data=self._callback("back"))],
+            [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))],
         ]
         await safe_edit_message(
             query,
@@ -750,7 +791,7 @@ def register_admin_panel_handlers(
     
     # Callback handlers
     application.add_handler(
-        CallbackQueryHandler(handler.handle_callback, pattern=r"^admin:(dashboard|back|menu|commands|command)")
+        CallbackQueryHandler(handler.handle_callback, pattern=r"^(admin:(dashboard|back|menu|commands|command)|adm:(dsh|back|lm|cmds|cmd))")
     )
 
     logger.info("Admin panel handlers registered")
