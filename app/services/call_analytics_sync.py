@@ -206,10 +206,8 @@ class CallAnalyticsSyncService:
                 ORDER BY {history_timestamp_field} ASC
                 LIMIT %s
             """
-            db_info = await self.db.execute_with_retry("SELECT DATABASE() as db", fetchone=True)
             logger.info(
-                "[ETL] Executing incremental sync in DB=%s using timestamp field %s",
-                (db_info or {}).get("db"),
+                "[ETL] Executing incremental sync using timestamp field %s",
                 history_timestamp_field,
             )
             logger.debug(
