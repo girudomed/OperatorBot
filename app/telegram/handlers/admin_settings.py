@@ -76,11 +76,14 @@ class AdminSettingsHandler:
         )
         keyboard = [
             [
-                InlineKeyboardButton("📄 Логи", callback_data="admin:settings:logs"),
+                InlineKeyboardButton(
+                    "📄 Логи", callback_data=AdminCB.create(AdminCB.SETTINGS, "logs")
+                ),
             ],
             [
                 InlineKeyboardButton(
-                    "🧹 Очистить кеш", callback_data="admin:settings:cleanup"
+                    "🧹 Очистить кеш",
+                    callback_data=AdminCB.create(AdminCB.SETTINGS, "cleanup"),
                 ),
             ],
             [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))],
@@ -112,16 +115,21 @@ class AdminSettingsHandler:
             )
             return
 
-        action = query.data.split(":", 2)[-1]
+        action, args = AdminCB.parse(query.data or "")
+        if action != AdminCB.SETTINGS:
+            return
+        sub_action = args[0] if args else "menu"
         logger.info(
             "Admin %s triggered settings action %s",
             describe_user(user),
-            action,
+            sub_action,
         )
 
-        if action == "logs":
+        if sub_action == "menu":
+            await self.show_settings_menu(update, context)
+        elif sub_action == "logs":
             await self._send_logs(query)
-        elif action == "cleanup":
+        elif sub_action == "cleanup":
             await self._cleanup_cache(query)
         else:
             await query.answer("Неизвестная команда", show_alert=True)
@@ -144,8 +152,13 @@ class AdminSettingsHandler:
         keyboard = InlineKeyboardMarkup(
             [
                 [
-                    InlineKeyboardButton("🔄 Обновить", callback_data="admin:settings:logs"),
-                    InlineKeyboardButton("◀️ Назад", callback_data="admin:settings"),
+                    InlineKeyboardButton(
+                        "🔄 Обновить",
+                        callback_data=AdminCB.create(AdminCB.SETTINGS, "logs"),
+                    ),
+                    InlineKeyboardButton(
+                        "◀️ Назад", callback_data=AdminCB.create(AdminCB.SETTINGS)
+                    ),
                 ]
             ]
         )
@@ -190,7 +203,7 @@ class AdminSettingsHandler:
             query,
             text=text,
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("◀️ Назад", callback_data="admin:settings")]]
+                [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.SETTINGS))]]
             ),
         )
 
@@ -218,9 +231,9 @@ def register_admin_settings_handlers(
 ) -> None:
     handler = AdminSettingsHandler(admin_repo, permissions)
     application.add_handler(
-        CallbackQueryHandler(handler.show_settings_menu, pattern=r"^(admin:settings|adm:set)$")
-    )
-    application.add_handler(
-        CallbackQueryHandler(handler.handle_settings_action, pattern=r"^(admin:settings:|adm:set:)")
+        CallbackQueryHandler(
+            handler.handle_settings_action,
+            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.SETTINGS}",
+        )
     )
     logger.info("Admin settings handlers registered")

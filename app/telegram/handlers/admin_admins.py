@@ -38,26 +38,25 @@ class AdminAdminsHandler:
         self._page_size = 10
 
     def _parse_list_page(self, data: str) -> int:
-        parts = data.split(":")
-        if len(parts) > 3:
+        _, args = AdminCB.parse(data or "")
+        if len(args) >= 2 and args[0] == AdminCB.LIST:
             try:
-                return max(0, int(parts[3]))
-            except ValueError as exc:
-                logger.warning("Некорректный номер страницы в callback '%s': %s", data, exc)
-                return 0
+                return max(0, int(args[1]))
+            except ValueError:
+                logger.warning("Некорректный номер страницы в callback '%s'", data)
         return 0
 
     def _parse_page_from_data(self, data: str) -> int:
-        parts = data.split(":")
-        if len(parts) > 4 and parts[-2].isdigit():
-            return max(0, int(parts[-2]))
+        _, args = AdminCB.parse(data or "")
+        if len(args) >= 2 and args[1].isdigit():
+            return max(0, int(args[1]))
         return 0
 
     def _build_list_callback(self, page: int = 0) -> str:
-        return f"admin:admins:list:{page}"
+        return AdminCB.create(AdminCB.ADMINS, AdminCB.LIST, page)
 
     def _build_details_callback(self, user_id: int, page: int = 0) -> str:
-        return f"admin:admins:details:{page}:{user_id}"
+        return AdminCB.create(AdminCB.ADMINS, AdminCB.DETAILS, page, user_id)
 
     @log_async_exceptions
     async def show_admins_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -120,7 +119,7 @@ class AdminAdminsHandler:
             [
                 InlineKeyboardButton(
                     "➕ Назначить администратора",
-                    callback_data="admin:admins:candidates",
+                    callback_data=AdminCB.create(AdminCB.ADMINS, "candidates"),
                 )
             ]
         )
@@ -152,8 +151,17 @@ class AdminAdminsHandler:
         if not candidates:
             message = "✅ Все утверждённые пользователи уже имеют роль администратора."
             keyboard = [
-                [InlineKeyboardButton("🔄 Обновить", callback_data="admin:admins:candidates")],
-                [InlineKeyboardButton("◀️ Назад", callback_data="admin:admins:list")]
+                [
+                    InlineKeyboardButton(
+                        "🔄 Обновить",
+                        callback_data=AdminCB.create(AdminCB.ADMINS, "candidates"),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "◀️ Назад", callback_data=self._build_list_callback(0)
+                    )
+                ],
             ]
         else:
             message = (
@@ -170,11 +178,16 @@ class AdminAdminsHandler:
                 for candidate in candidates
             ]
             keyboard.append(
-                [InlineKeyboardButton("🔄 Обновить", callback_data="admin:admins:candidates")]
+                [
+                    InlineKeyboardButton(
+                        "🔄 Обновить",
+                        callback_data=AdminCB.create(AdminCB.ADMINS, "candidates"),
+                    )
+                ]
             )
-            keyboard.append(
-                [InlineKeyboardButton("◀️ Назад", callback_data="admin:admins:list")]
-            )
+            keyboard.append([
+                InlineKeyboardButton("◀️ Назад", callback_data=self._build_list_callback(0))
+            ])
 
         await safe_edit_message(
             query,
@@ -422,7 +435,12 @@ class AdminAdminsHandler:
                     [
                         InlineKeyboardButton(
                             "⭐ Сделать супер-админом",
-                            callback_data=f"admin:admins:promote_super:{page}:{target['id']}",
+                            callback_data=AdminCB.create(
+                                AdminCB.ADMINS,
+                                "promote_super",
+                                page,
+                                target["id"],
+                            ),
                         )
                     ]
                 )
@@ -433,7 +451,12 @@ class AdminAdminsHandler:
                     [
                         InlineKeyboardButton(
                             "⬇️ В операторов",
-                            callback_data=f"admin:admins:demote_operator:{page}:{target['id']}",
+                            callback_data=AdminCB.create(
+                                AdminCB.ADMINS,
+                                "demote_operator",
+                                page,
+                                target["id"],
+                            ),
                         )
                     ]
                 )
@@ -445,7 +468,12 @@ class AdminAdminsHandler:
                     [
                         InlineKeyboardButton(
                             "⬇️ Понизить до admin",
-                            callback_data=f"admin:admins:demote_admin:{page}:{target['id']}",
+                            callback_data=AdminCB.create(
+                                AdminCB.ADMINS,
+                                "demote_admin",
+                                page,
+                                target["id"],
+                            ),
                         )
                     ]
                 )
@@ -458,7 +486,11 @@ class AdminAdminsHandler:
                     [
                         InlineKeyboardButton(
                             "⬆️ Назначить админом",
-                            callback_data=f"admin:admins:promote_admin:{target['id']}",
+                            callback_data=AdminCB.create(
+                                AdminCB.ADMINS,
+                                "promote_admin",
+                                target["id"],
+                            ),
                         )
                     ]
                 )
@@ -492,11 +524,12 @@ class AdminAdminsHandler:
             )
 
     def _extract_user_id(self, data: str) -> int:
-        try:
-            return int(data.split(":")[-1])
-        except (ValueError, IndexError) as exc:
-            logger.warning("Не удалось извлечь user_id из callback '%s': %s", data, exc)
-            return 0
+        _, args = AdminCB.parse(data or "")
+        for token in reversed(args):
+            if token.isdigit():
+                return int(token)
+        logger.warning("Не удалось извлечь user_id из callback '%s'", data)
+        return 0
 
 
 def register_admin_admins_handlers(
@@ -508,28 +541,45 @@ def register_admin_admins_handlers(
     handler = AdminAdminsHandler(admin_repo, permissions, notifications)
 
     application.add_handler(
-        CallbackQueryHandler(handler.show_admins_list, pattern=r"^admin:admins:list")
-    )
-    application.add_handler(
-        CallbackQueryHandler(handler.show_candidates, pattern=r"^admin:admins:candidates")
-    )
-    application.add_handler(
-        CallbackQueryHandler(handler.show_admin_details, pattern=r"^admin:admins:details:")
-    )
-    application.add_handler(
-        CallbackQueryHandler(handler.promote_to_admin, pattern=r"^admin:admins:promote_admin:")
-    )
-    application.add_handler(
         CallbackQueryHandler(
-            handler.promote_to_superadmin, pattern=r"^admin:admins:promote_super:"
+            handler.show_admins_list,
+            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.ADMINS}:{AdminCB.LIST}",
         )
     )
     application.add_handler(
-        CallbackQueryHandler(handler.demote_to_admin, pattern=r"^admin:admins:demote_admin:")
+        CallbackQueryHandler(
+            handler.show_candidates,
+            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.ADMINS}:candidates",
+        )
     )
     application.add_handler(
         CallbackQueryHandler(
-            handler.demote_to_operator, pattern=r"^admin:admins:demote_operator:"
+            handler.show_admin_details,
+            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.ADMINS}:{AdminCB.DETAILS}",
+        )
+    )
+    application.add_handler(
+        CallbackQueryHandler(
+            handler.promote_to_admin,
+            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.ADMINS}:promote_admin",
+        )
+    )
+    application.add_handler(
+        CallbackQueryHandler(
+            handler.promote_to_superadmin,
+            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.ADMINS}:promote_super",
+        )
+    )
+    application.add_handler(
+        CallbackQueryHandler(
+            handler.demote_to_admin,
+            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.ADMINS}:demote_admin",
+        )
+    )
+    application.add_handler(
+        CallbackQueryHandler(
+            handler.demote_to_operator,
+            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.ADMINS}:demote_operator",
         )
     )
 

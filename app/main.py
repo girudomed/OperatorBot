@@ -16,7 +16,7 @@ from typing import Optional
 
 from telegram import BotCommand, Update
 from telegram.error import TelegramError
-from telegram.ext import ApplicationBuilder, ContextTypes, TypeHandler
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, TypeHandler, filters
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -92,6 +92,13 @@ async def user_context_injector(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data["user_ctx"] = user_ctx
     else:
         context.user_data.pop("user_ctx", None)
+
+
+async def debug_incoming(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Логирует входящие текстовые сообщения для отладки Reply-клавиатуры."""
+    message = update.effective_message
+    if message and message.text:
+        logger.warning("[INCOMING TEXT] %r", message.text)
 
 
 async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -277,6 +284,14 @@ async def main():
         context_handler = TypeHandler(Update, user_context_injector)
         context_handler.block = False  # Не блокируем последующие MessageHandler-ы с reply-кнопок
         application.add_handler(context_handler, group=-2)
+        application.add_handler(
+            MessageHandler(
+                filters.TEXT & ~filters.COMMAND,
+                debug_incoming,
+                block=False,
+            ),
+            group=99,
+        )
         
         # Auth
         setup_auth_handlers(application, db_manager, permissions_manager)
@@ -308,6 +323,10 @@ async def main():
         register_admin_lookup_handlers(application, permissions_manager)
         register_admin_settings_handlers(application, admin_repo, permissions_manager)
         
+        # Legacy Adapter (перехват старых кнопок)
+        from app.telegram.handlers.legacy_adapter import LegacyCallbackAdapter
+        application.add_handler(LegacyCallbackAdapter.get_handler())
+        
         # LM Metrics
         from app.telegram.handlers.admin_lm import register_admin_lm_handlers
         register_admin_lm_handlers(application, lm_repo, permissions_manager)
@@ -329,6 +348,10 @@ async def main():
         # Системное меню и кнопка помощи
         register_system_handlers(application, db_manager, permissions_manager)
         register_manual_handlers(application)
+        
+        # Text Router (центральный обработчик текста)
+        from app.telegram.handlers.text_router import TextRouter
+        application.add_handler(TextRouter.get_handler())
 
         await set_bot_commands(application)
 

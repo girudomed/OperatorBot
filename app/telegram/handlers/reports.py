@@ -24,12 +24,13 @@ from app.db.repositories.operators import OperatorRepository
 from app.logging_config import get_watchdog_logger
 from app.telegram.utils.logging import describe_user
 from app.telegram.utils.messages import safe_edit_message
+from app.telegram.utils.callback_data import AdminCB
+from app.logging_config import get_watchdog_logger
 
 logger = get_watchdog_logger(__name__)
 DB_ERROR_MESSAGE = "Ошибка доступа к базе. Проверьте конфигурацию/схему БД."
 
 REPORT_COMMAND = "report"
-REPORT_CALLBACK_PREFIX = "reports"
 REPORT_PERMISSION = "report"
 OPERATORS_PAGE_SIZE = 8
 
@@ -45,14 +46,15 @@ def register_report_handlers(
     application.add_handler(
         CallbackQueryHandler(
             handler.handle_callback,
-            pattern=rf"^{REPORT_CALLBACK_PREFIX}:"
+            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.REPORTS}"
         )
     )
     application.bot_data["report_handler"] = handler
     application.add_handler(
         MessageHandler(
-            filters.Regex(r"^📊\\s*Отч[её]ты$"),
+            filters.Regex(r"(?i)^\s*(?:📊\s*)?отч[её]ты\s*$"),
             handler.handle_reports_button,
+            group=0,
         )
     )
 
@@ -154,24 +156,29 @@ class _ReportHandler:
             return
 
         await query.answer()
-        cb = unpack(query.data)
-        if cb.prefix != REPORT_CALLBACK_PREFIX:
+        
+        # Parse AdminCB: adm:rep:sub_action:args...
+        action_type, args = AdminCB.parse(query.data)
+        if action_type != AdminCB.REPORTS or not args:
             return
 
-        action = cb.parts[0] if cb.parts else None
-        if action == "page":
-            page = int(cb.parts[1]) if len(cb.parts) > 1 else 0
+        sub_action = args[0]
+        params = args[1:]
+        
+        if sub_action == "page":
+            page = int(params[0]) if params else 0
             await self._show_operator_keyboard(query, page=page, edit=True)
             return
 
-        if action == "select":
-            if len(cb.parts) < 2:
+        if sub_action == "select":
+            if len(params) < 2:
                 await query.answer("Некорректные данные", show_alert=True)
                 return
             try:
-                target_user_id = int(cb.parts[1])
-            except ValueError as exc:
-                logger.warning("Некорректный target_id в report callback '%s': %s", cb.parts, exc)
+                target_user_id = int(params[0])
+                extension = params[1]
+            except (ValueError, IndexError) as exc:
+                logger.warning("Некорректный target_id в report callback '%s': %s", params, exc)
                 await query.answer("Некорректный оператор", show_alert=True)
                 return
 
@@ -242,7 +249,7 @@ class _ReportHandler:
             keyboard.append([
                 InlineKeyboardButton(
                     label[:64],
-                    callback_data=f"{REPORT_CALLBACK_PREFIX}:select:{target_user_id}:{extension}",
+                    callback_data=AdminCB.create(AdminCB.REPORTS, "select", target_user_id, extension),
                 )
             ])
 
@@ -251,14 +258,14 @@ class _ReportHandler:
             nav_row.append(
                 InlineKeyboardButton(
                     "⬅️ Назад",
-                    callback_data=f"{REPORT_CALLBACK_PREFIX}:page:{page-1}",
+                    callback_data=AdminCB.create(AdminCB.REPORTS, "page", page-1),
                 )
             )
         if page < total_pages - 1:
             nav_row.append(
                 InlineKeyboardButton(
                     "➡️ Далее",
-                    callback_data=f"{REPORT_CALLBACK_PREFIX}:page:{page+1}",
+                    callback_data=AdminCB.create(AdminCB.REPORTS, "page", page+1),
                 )
             )
         if nav_row:

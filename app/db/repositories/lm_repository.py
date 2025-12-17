@@ -141,12 +141,28 @@ class LMRepository:
             return 0
         
         saved_count = 0
-        for value_data in values:
+        for idx, value_data in enumerate(values):
             try:
                 await self.save_lm_value(**value_data)
                 saved_count += 1
-            except Exception as e:
-                logger.error(f"Failed to save LM value: {e}", exc_info=True)
+            except (TypeError, ValueError, KeyError) as exc:
+                logger.warning(
+                    "Skipping LM payload #%s because of invalid input: %s",
+                    idx,
+                    exc,
+                )
+            except RuntimeError as exc:
+                logger.error(
+                    "Failed to persist LM payload #%s: %s",
+                    idx,
+                    exc,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Unexpected error while saving LM payload #%s",
+                    idx,
+                )
+                raise
         
         logger.info(f"Saved {saved_count}/{len(values)} LM values")
         return saved_count

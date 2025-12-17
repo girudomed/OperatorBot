@@ -13,6 +13,7 @@ from app.utils.error_handlers import log_async_exceptions
 from app.logging_config import get_watchdog_logger
 from app.telegram.utils.logging import describe_user
 from app.telegram.utils.messages import safe_edit_message
+from app.telegram.utils.callback_data import AdminCB
 
 logger = get_watchdog_logger(__name__)
 
@@ -32,6 +33,10 @@ class AdminLookupHandler:
             return
 
         await query.answer()
+
+        action, _ = AdminCB.parse(query.data or "")
+        if action and action != AdminCB.LOOKUP:
+            return
 
         try:
             user = update.effective_user
@@ -79,7 +84,7 @@ class AdminLookupHandler:
                         callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:monthly",
                     )
                 ],
-                [InlineKeyboardButton("◀️ Назад", callback_data="adm:back")],
+                [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))],
             ]
 
             await safe_edit_message(
@@ -94,7 +99,7 @@ class AdminLookupHandler:
                 query,
                 text="⚠️ Не удалось открыть раздел «Расшифровки». Попробуйте снова чуть позже.",
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("◀️ Назад", callback_data="adm:back")]]
+                    [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]]
                 ),
             )
 
@@ -105,6 +110,9 @@ def register_admin_lookup_handlers(
 ):
     handler = AdminLookupHandler(permissions)
     application.add_handler(
-        CallbackQueryHandler(handler.show_lookup_entry, pattern=r"^(admin:lookup|adm:lk)$")
+        CallbackQueryHandler(
+            handler.show_lookup_entry,
+            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.LOOKUP}",
+        )
     )
     logger.info("Admin lookup handlers registered")

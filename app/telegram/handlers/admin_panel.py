@@ -6,9 +6,11 @@
 Предоставляет точку входа /admin и основное меню.
 """
 
-from typing import Optional, Tuple, List
+from typing import Optional, List
+from datetime import datetime
 
 from app.telegram.utils.callback_data import AdminCB
+from app.telegram.utils.state import reset_feature_states
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest, TelegramError
@@ -29,29 +31,34 @@ from app.telegram.utils.logging import describe_user
 from app.telegram.utils.messages import safe_edit_message
 from app.utils.error_handlers import log_async_exceptions
 from app.utils.rate_limit import rate_limit_hit
-from app.core.roles import role_display_name_from_name, role_name_from_id
+from app.utils.job_guard import JobGuard
+from app.core.roles import role_name_from_id
+from app.telegram.ui.admin.screens import Screen
+from app.telegram.ui.admin.screens.menu import render_main_menu_screen
+from app.telegram.ui.admin.screens.dashboard import (
+    render_dashboard_screen,
+    render_dashboard_details_screen,
+)
+from app.telegram.ui.admin.screens.alerts import render_alerts_screen
+from app.telegram.ui.admin.screens.export import render_export_screen
+from app.telegram.ui.admin.screens.dangerous_ops import (
+    render_dangerous_ops_screen,
+    render_critical_confirmation,
+)
+from app.telegram.ui.admin.screens.approvals import (
+    render_approvals_list_screen,
+    render_empty_approvals_screen,
+    render_approval_detail_screen,
+)
+from app.telegram.ui.admin.screens.promotions import (
+    render_promotion_menu_screen,
+    render_promotion_list_screen,
+    render_empty_promotion_screen,
+    render_promotion_detail_screen,
+)
+from app.telegram.ui.admin import keyboards as admin_keyboards
 
 logger = get_watchdog_logger(__name__)
-ADMIN_PREFIX = "admin"
-ROLE_DISPLAY_ORDER = [
-    "founder",
-    "developer",
-    "superadmin",
-    "head_of_registry",
-    "admin",
-    "marketing_director",
-    "operator",
-]
-ROLE_EMOJI = {
-    "founder": "🛡️",
-    "developer": "👨‍💻",
-    "superadmin": "⭐",
-    "head_of_registry": "📋",
-    "admin": "👑",
-    "marketing_director": "📣",
-    "operator": "👷",
-}
-
 
 class AdminPanelHandler:
     """Основной хендлер админ-панели."""
@@ -63,6 +70,7 @@ class AdminPanelHandler:
     ):
         self.admin_repo = admin_repo
         self.permissions = permissions
+        self.approvals_page_size = 8
     
     @log_async_exceptions
     async def admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -84,25 +92,22 @@ class AdminPanelHandler:
                 "Требуется роль администратора."
             )
             return
+
+        # Сброс состояний других фич (чтобы не перехватывали ввод)
+        reset_feature_states(context, update.effective_chat.id if update.effective_chat else None)
         
         logger.info("Админ-панель открыта пользователем %s", describe_user(user))
-        # Показываем главное меню
-        await self._show_main_menu(update, context)
+        # Главный экран = дашборд
+        await self._show_dashboard(update, context)
     
     async def _show_main_menu(
         self,
         update: Update,
         context: ContextTypes.DEFAULT_TYPE,
-        message_text: Optional[str] = None,
     ):
-        """Отображает главное меню админ-панели."""
+        """Отображает компактное главное меню с навигацией по разделам."""
         user = update.effective_user
-        counters = None
         allow_commands = False
-        try:
-            counters = await self.admin_repo.get_users_counters()
-        except Exception as exc:
-            logger.error("Не удалось получить счётчики пользователей: %s", exc)
         try:
             allow_commands = await self.permissions.has_permission(
                 user.id,
@@ -112,108 +117,55 @@ class AdminPanelHandler:
         except Exception:
             logger.warning("Не удалось определить права пользователя %s", describe_user(user))
 
-        roles_summary = self._build_roles_summary(counters)
+        # Сброс состояний других фич
+        reset_feature_states(context, update.effective_chat.id if update.effective_chat else None)
 
-        keyboard = [
-            [
-                InlineKeyboardButton(
-                    "📊 Дашборд", callback_data=AdminCB.create(AdminCB.DASHBOARD)
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "👥 Пользователи",
-                    callback_data=AdminCB.create(AdminCB.USERS, AdminCB.LIST, AdminCB.STATUS_PENDING),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "👑 Админы",
-                    callback_data=AdminCB.create(AdminCB.ADMINS, AdminCB.LIST),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🧠 LM Метрики",
-                    callback_data=AdminCB.create(AdminCB.LM_MENU)
-                ),
-                InlineKeyboardButton(
-                    "📈 Статистика", callback_data="admin:stats"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "📂 Расшифровки", callback_data=AdminCB.create(AdminCB.LOOKUP)
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "⚙️ Настройки", callback_data=AdminCB.create(AdminCB.SETTINGS)
-                )
-            ],
-        ]
-        if allow_commands:
-            keyboard.append(
-                [
-                    InlineKeyboardButton(
-                        "📑 Команды", callback_data=AdminCB.create(AdminCB.COMMANDS)
-                    )
-                ]
-            )
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        if not message_text:
-            if counters:
-                regular_users = counters.get(
-                    'non_admin_approved',
-                    max(0, counters.get('approved_users', 0) - counters.get('admins', 0))
-                )
-                message_text = (
-                    "👑 <b>Админ-панель</b>\n"
-                    "Следите за ключевыми метриками и управляйте командой.\n\n"
-                    f"Всего пользователей: <b>{counters['total_users']}</b>\n"
-                    f"⏳ Pending: <b>{counters['pending_users']}</b>\n"
-                    f"✅ Approved: <b>{counters['approved_users']}</b>\n"
-                    f"👑 Админов: <b>{counters['admins']}</b>\n"
-                    f"👥 Пользователей (без админов): <b>{regular_users}</b>\n\n"
-                    f"<b>Роли:</b>\n{roles_summary}\n\n"
-                    "Выберите раздел:"
-                )
-            else:
-                message_text = (
-                    "👑 <b>Админ-панель</b>\n\n"
-                    "Выберите раздел для управления:"
-                )
-        
-        # Если это callback, редактируем сообщение
-        if update.callback_query:
-            try:
-                await update.callback_query.edit_message_text(
-                    text=message_text,
-                    reply_markup=reply_markup,
-                    parse_mode='HTML'
-                )
-            except (BadRequest, TelegramError) as exc:
-                logger.warning(
-                    "Не удалось обновить сообщение панели (%s), отправляем новое",
-                    exc,
-                )
-                await update.callback_query.message.reply_text(
-                    text=message_text,
-                    reply_markup=reply_markup,
-                    parse_mode='HTML'
-                )
-        else:
-            await update.message.reply_text(
-                text=message_text,
-                reply_markup=reply_markup,
-                parse_mode='HTML'
-            )
+        screen = render_main_menu_screen(allow_commands)
+        await self._render_screen(update, screen)
         logger.debug(
             "Показано главное меню админ-панели для %s",
             describe_user(user),
         )
+
+    async def _render_screen(
+        self,
+        update: Update,
+        screen: Screen,
+    ) -> None:
+        """Единая точка отрисовки экранов (редактирование/отправка)."""
+        markup = InlineKeyboardMarkup(screen.keyboard)
+        query = update.callback_query
+        if query:
+            try:
+                await safe_edit_message(
+                    query,
+                    text=screen.text,
+                    reply_markup=markup,
+                    parse_mode=screen.parse_mode,
+                )
+                return
+            except (BadRequest, TelegramError) as exc:
+                logger.warning("Не удалось отредактировать сообщение админки: %s", exc)
+                message = query.message
+                if message:
+                    await message.reply_text(
+                        text=screen.text,
+                        reply_markup=markup,
+                        parse_mode=screen.parse_mode,
+                    )
+                return
+        if update.message:
+            await update.message.reply_text(
+                text=screen.text,
+                reply_markup=markup,
+                parse_mode=screen.parse_mode,
+            )
+        elif update.effective_chat:
+            await update.effective_chat.send_message(
+                text=screen.text,
+                reply_markup=markup,
+                parse_mode=screen.parse_mode,
+            )
     
     @log_async_exceptions
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -235,17 +187,13 @@ class AdminPanelHandler:
             extra={"user_id": user.id if user else None},
         )
 
-        if cb_action:
-            handled = await self._handle_new_callback(cb_action, cb_args, update, context)
-            if not handled:
-                await self._handle_unknown_callback(query)
+        if not cb_action:
+            await self._handle_unknown_callback(query)
             return
 
-        handled = await self._handle_legacy_callback(data, update, context)
-        if handled:
-            return
-
-        await self._handle_unknown_callback(query)
+        handled = await self._handle_new_callback(cb_action, cb_args, update, context)
+        if not handled:
+            await self._handle_unknown_callback(query)
 
     async def _handle_new_callback(
         self,
@@ -257,11 +205,33 @@ class AdminPanelHandler:
         if action == AdminCB.DASHBOARD:
             await self._show_dashboard(update, context)
             return True
+        if action == AdminCB.DASHBOARD_DETAILS:
+            await self._show_dashboard_details(update, context)
+            return True
+        if action == AdminCB.ALERTS:
+            await self._show_alerts_screen(update)
+            return True
+        if action == AdminCB.EXPORT:
+            await self._show_export_screen(update)
+            return True
+        if action == AdminCB.CRITICAL:
+            target = args[0] if args else None
+            if target:
+                await self._show_critical_operation_confirmation(update, target)
+            else:
+                await self._show_dangerous_ops_screen(update)
+            return True
         if action == AdminCB.BACK:
             await self._show_main_menu(update, context)
             return True
         if action == AdminCB.COMMANDS:
             await self._show_command_shortcuts(update, context)
+            return True
+        if action == AdminCB.APPROVALS:
+            await self._handle_approvals_flow(args, update, context)
+            return True
+        if action == AdminCB.PROMOTION:
+            await self._handle_promotion_flow(args, update, context)
             return True
         if action == AdminCB.COMMAND:
             payload = args[1] if len(args) > 1 else None
@@ -269,28 +239,214 @@ class AdminPanelHandler:
             return True
         return False
 
-    async def _handle_legacy_callback(
+    async def _handle_approvals_flow(
         self,
-        data: str,
+        args: List[str],
         update: Update,
         context: ContextTypes.DEFAULT_TYPE,
-    ) -> bool:
-        section, action, payload = self._parse_callback(data)
-        if not section:
+    ) -> None:
+        query = update.callback_query
+        actor = update.effective_user
+        if not query or not actor:
+            return
+        if not await self._can_approve(actor.id, actor.username):
+            await query.answer("Недостаточно прав", show_alert=True)
+            return
+        sub_action = args[0] if args else AdminCB.LIST
+        if sub_action == AdminCB.DETAILS:
+            page = self._safe_int(args[1]) if len(args) > 1 else 0
+            user_id = self._safe_int(args[2]) if len(args) > 2 else 0
+            await self._show_approval_detail(update, page, user_id)
+            return
+        if sub_action == AdminCB.APPROVE:
+            user_id = self._safe_int(args[1]) if len(args) > 1 else 0
+            telegram_id = self._safe_int(args[2]) if len(args) > 2 else 0
+            page = self._safe_int(args[3]) if len(args) > 3 else 0
+            await self._approve_pending_user(update, context, user_id, telegram_id, page)
+            return
+        if sub_action == AdminCB.DECLINE:
+            telegram_id = self._safe_int(args[1]) if len(args) > 1 else 0
+            page = self._safe_int(args[2]) if len(args) > 2 else 0
+            await self._decline_pending_user(update, context, telegram_id, page)
+            return
+        page = self._safe_int(args[1]) if len(args) > 1 else 0
+        await self._show_approvals_list(update, page)
+
+    async def _handle_promotion_flow(
+        self,
+        args: List[str],
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> None:
+        query = update.callback_query
+        actor = update.effective_user
+        if not query or not actor:
+            return
+        sub_action = args[0] if args else "menu"
+        if sub_action == "menu":
+            await self._render_screen(update, render_promotion_menu_screen())
+            return
+        if sub_action == AdminCB.LIST:
+            role_slug = args[1] if len(args) > 1 else "admin"
+            await self._show_promotion_list(update, actor, role_slug)
+            return
+        if sub_action == AdminCB.DETAILS:
+            role_slug = args[1] if len(args) > 1 else "admin"
+            user_id = self._safe_int(args[2]) if len(args) > 2 else 0
+            await self._show_promotion_detail(update, actor, role_slug, user_id)
+            return
+        if sub_action == AdminCB.APPROVE:
+            role_slug = args[1] if len(args) > 1 else "admin"
+            telegram_id = self._safe_int(args[2]) if len(args) > 2 else 0
+            await self._promote_user(update, context, actor, role_slug, telegram_id)
+            return
+        await self._render_screen(update, render_promotion_menu_screen())
+
+    async def _show_approvals_list(self, update: Update, page: int) -> None:
+        page = max(0, page)
+        limit = self.approvals_page_size
+        offset = page * limit
+        users, total = await self.admin_repo.get_users_page("pending", limit, offset)
+        if not total:
+            await self._render_screen(update, render_empty_approvals_screen())
+            return
+        total_pages = max(1, (total + limit - 1) // limit)
+        if page >= total_pages:
+            page = total_pages - 1
+            offset = page * limit
+            users, _ = await self.admin_repo.get_users_page("pending", limit, offset)
+        await self._render_screen(
+            update,
+            render_approvals_list_screen(users, page, total_pages),
+        )
+
+    async def _show_approval_detail(self, update: Update, page: int, user_id: int) -> None:
+        if not user_id:
+            await self._show_approvals_list(update, page)
+            return
+        user = await self.admin_repo.get_user_by_id(user_id)
+        if not user:
+            await self._render_screen(
+                update,
+                Screen(
+                    text="❌ Пользователь не найден",
+                    keyboard=admin_keyboards.back_only_keyboard(),
+                ),
+            )
+            return
+        await self._render_screen(update, render_approval_detail_screen(user, page))
+
+    async def _approve_pending_user(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        user_id: int,
+        telegram_id: int,
+        page: int,
+    ) -> None:
+        query = update.callback_query
+        actor = update.effective_user
+        if not query or not actor or not user_id:
+            return
+        if await self._rate_limit(
+            query,
+            context,
+            "admin_approvals_action",
+            cooldown=1.5,
+            alert_text="Слишком часто выполняете действие. Подождите немного.",
+        ):
+            return
+        success = await self.admin_repo.approve_user(user_id, actor.id)
+        if success:
+            await query.answer("✅ Пользователь утверждён", show_alert=True)
+        else:
+            await query.answer("❌ Не удалось утвердить", show_alert=True)
+        await self._show_approvals_list(update, page)
+
+    async def _decline_pending_user(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        telegram_id: int,
+        page: int,
+    ) -> None:
+        query = update.callback_query
+        actor = update.effective_user
+        if not query or not actor or not telegram_id:
+            return
+        if await self._rate_limit(
+            query,
+            context,
+            "admin_decline_action",
+            cooldown=1.5,
+            alert_text="Слишком часто выполняете действие. Подождите немного.",
+        ):
+            return
+        success = await self.admin_repo.decline_user(telegram_id, actor.id)
+        if success:
+            await query.answer("🗑️ Заявка отклонена", show_alert=True)
+        else:
+            await query.answer("❌ Не удалось отклонить", show_alert=True)
+        await self._show_approvals_list(update, page)
+
+    async def _show_promotion_list(self, update: Update, actor, role_slug: str) -> None:
+        if not await self.permissions.can_promote(actor.id, role_slug, actor.username):
+            await update.callback_query.answer("Недостаточно прав", show_alert=True)
+            return
+        candidates = await self.admin_repo.get_users_for_promotion(target_role=role_slug)
+        if not candidates:
+            await self._render_screen(update, render_empty_promotion_screen(role_slug))
+            return
+        await self._render_screen(update, render_promotion_list_screen(candidates, role_slug))
+
+    async def _show_promotion_detail(self, update: Update, actor, role_slug: str, user_id: int) -> None:
+        if not user_id:
+            await self._show_promotion_list(update, actor, role_slug)
+            return
+        if not await self.permissions.can_promote(actor.id, role_slug, actor.username):
+            await update.callback_query.answer("Недостаточно прав", show_alert=True)
+            return
+        user = await self.admin_repo.get_user_by_id(user_id)
+        if not user:
+            await self._render_screen(update, render_empty_promotion_screen(role_slug))
+            return
+        await self._render_screen(update, render_promotion_detail_screen(user, role_slug))
+
+    async def _promote_user(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        actor,
+        role_slug: str,
+        telegram_id: int,
+    ) -> None:
+        query = update.callback_query
+        if not query or not telegram_id:
+            return
+        if not await self.permissions.can_promote(actor.id, role_slug, actor.username):
+            await query.answer("Недостаточно прав", show_alert=True)
+            return
+        if await self._rate_limit(
+            query,
+            context,
+            f"admin_promote_{role_slug}",
+            cooldown=2.5,
+            alert_text="Слишком часто выполняете повышение. Подождите немного.",
+        ):
+            return
+        success = await self.admin_repo.promote_user(telegram_id, role_slug, actor.id)
+        if success:
+            await query.answer("✅ Пользователь повышен", show_alert=True)
+        else:
+            await query.answer("❌ Не удалось повысить", show_alert=True)
+        await self._show_promotion_list(update, actor, role_slug)
+
+    async def _can_approve(self, user_id: int, username: Optional[str]) -> bool:
+        try:
+            return await self.permissions.can_approve(user_id, username)
+        except Exception:
+            logger.warning("Не удалось проверить право approve для %s", user_id)
             return False
-        if section == "dashboard":
-            await self._show_dashboard(update, context)
-            return True
-        if section in ("back", "menu"):
-            await self._show_main_menu(update, context)
-            return True
-        if section == "commands":
-            await self._show_command_shortcuts(update, context)
-            return True
-        if section == "command":
-            await self._handle_command_action(action, payload, update, context)
-            return True
-        return False
 
     async def _handle_unknown_callback(self, query) -> None:
         await query.answer("Неизвестная команда", show_alert=True)
@@ -307,9 +463,7 @@ class AdminPanelHandler:
         """Показывает dashboard с основными метриками."""
         query = update.callback_query
         user = update.effective_user
-        if not query:
-            return
-        if await self._rate_limit(
+        if query and await self._rate_limit(
             query,
             context,
             "admin_dashboard",
@@ -317,17 +471,16 @@ class AdminPanelHandler:
             alert_text="Слишком часто обновляете. Подождите пару секунд.",
         ):
             return
-        
-        # Получаем статистику
+
         try:
             counters = await self.admin_repo.get_users_counters()
         except Exception as exc:
             logger.error("Не удалось загрузить дашборд: %s", exc)
-            await safe_edit_message(
-                query,
-                text="⚠️ Не удалось загрузить дашборд.\nПопробуйте снова чуть позже.",
-                reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]]
+            await self._render_screen(
+                update,
+                Screen(
+                    text="⚠️ Не удалось загрузить дашборд. Попробуйте снова чуть позже.",
+                    keyboard=admin_keyboards.dashboard_error_keyboard(),
                 ),
             )
             return
@@ -340,7 +493,8 @@ class AdminPanelHandler:
         )
         blocked_count = counters.get('blocked_users', 0)
         total_users = counters.get('total_users', 0)
-        roles_summary = self._build_roles_summary(counters)
+
+        updated_at = datetime.now().strftime("%H:%M:%S")
 
         logger.info(
             "Дашборд открыт пользователем %s (pending=%s admins=%s)",
@@ -349,33 +503,57 @@ class AdminPanelHandler:
             admin_count,
         )
         
-        message = (
-            f"📊 <b>Дашборд</b>\n\n"
-            f"👥 Всего пользователей: <b>{total_users}</b>\n"
-            f"⏳ Pending: <b>{pending_count}</b>\n"
-            f"✅ Approved: <b>{approved_count}</b>\n"
-            f"🚫 Заблокировано: <b>{blocked_count}</b>\n"
-            f"👑 Администраторов: <b>{admin_count}</b>\n"
-            f"👥 Пользователей (без админов): <b>{regular_users}</b>\n\n"
-            f"Роли (approved):\n{roles_summary}"
-        )
-        
-        keyboard = [
-            [
-                InlineKeyboardButton(
-                    "📂 Расшифровки", callback_data=AdminCB.create(AdminCB.LOOKUP)
-                )
-            ],
-            [InlineKeyboardButton("🔄 Обновить", callback_data=AdminCB.create(AdminCB.DASHBOARD))],
-            [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))],
-        ]
-        
-        await safe_edit_message(
-            query,
-            text=message,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='HTML',
-        )
+        screen = render_dashboard_screen(counters, updated_at)
+        await self._render_screen(update, screen)
+
+    async def _show_dashboard_details(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> None:
+        query = update.callback_query
+        if query and await self._rate_limit(query, context, "admin_dashboard_details", 2.0):
+            return
+        try:
+            counters = await self.admin_repo.get_users_counters()
+        except Exception as exc:
+            logger.error("Не удалось загрузить детали дашборда: %s", exc)
+            await self._render_screen(
+                update,
+                Screen(
+                    text="⚠️ Не удалось получить данные. Попробуйте повторить позже.",
+                    keyboard=admin_keyboards.back_only_keyboard(),
+                ),
+            )
+            return
+        updated_at = datetime.now().strftime("%H:%M:%S")
+        screen = render_dashboard_details_screen(counters, updated_at)
+        await self._render_screen(update, screen)
+
+    async def _show_alerts_screen(self, update: Update) -> None:
+        await self._render_screen(update, render_alerts_screen())
+
+    async def _show_export_screen(self, update: Update) -> None:
+        await self._render_screen(update, render_export_screen())
+
+    async def _show_dangerous_ops_screen(self, update: Update) -> None:
+        await self._render_screen(update, render_dangerous_ops_screen())
+
+    async def _show_critical_operation_confirmation(
+        self,
+        update: Update,
+        action_key: str,
+    ) -> None:
+        action_texts = {
+            "weekly_quality": "Еженедельный контроль качества. Готовит тяжёлый CSV и отчёт.",
+            "report": "AI-отчёт по текущим звонкам. Потребляет LM-квоту.",
+            "maintenance_alert": "Рассылает всем пользователям предупреждение о техработах.",
+        }
+        description = action_texts.get(action_key)
+        if not description:
+            await self._show_dangerous_ops_screen(update)
+            return
+        await self._render_screen(update, render_critical_confirmation(action_key, description))
 
     async def _show_command_shortcuts(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -414,20 +592,14 @@ class AdminPanelHandler:
             ],
             [
                 InlineKeyboardButton(
-                    "✅ Утвердить заявки",
-                    callback_data="admincmd:approve:list", # keeping legacy provided in original code or refactor? Original was admincmd, leaving it for now as it seems to be outside normal admin scope? No, likely legacy.
+                    "⏳ Заявки",
+                    callback_data=AdminCB.create(AdminCB.APPROVALS, AdminCB.LIST, 0),
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "👤 Кандидаты в админы",
-                    callback_data="admincmd:promote:admin:list",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "⭐ Кандидаты в супер-админы",
-                    callback_data="admincmd:promote:superadmin:list",
+                    "⬆️ Повышения",
+                    callback_data=AdminCB.create(AdminCB.PROMOTION, "menu"),
                 )
             ],
             [
@@ -482,15 +654,30 @@ class AdminPanelHandler:
         if not await self._has_commands_access(user.id, user.username):
             await query.answer("Недостаточно прав", show_alert=True)
             return
+        job_guard = self._get_job_guard(context)
         if action == "weekly_quality":
             if await self._rate_limit(query, context, "admin_weekly_quality", 2.0):
                 return
-            await self._run_weekly_quality(query, context)
+            guard_key = "job:weekly_quality"
+            if not await job_guard.acquire(guard_key):
+                await query.answer("Задача уже выполняется. Подождите.", show_alert=True)
+                return
+            try:
+                await self._run_weekly_quality(query, context)
+            finally:
+                job_guard.release(guard_key)
             return
         if action == "report":
             if await self._rate_limit(query, context, "admin_ai_report", 2.0):
                 return
-            await self._open_report_flow(update, context)
+            guard_key = "job:ai_report"
+            if not await job_guard.acquire(guard_key):
+                await query.answer("Задача уже выполняется. Подождите.", show_alert=True)
+                return
+            try:
+                await self._open_report_flow(update, context)
+            finally:
+                job_guard.release(guard_key)
             return
         if action == "admins":
             if await self._rate_limit(query, context, "admin_list_admins", 1.5):
@@ -540,7 +727,14 @@ class AdminPanelHandler:
                 alert_text="Слишком часто отправляете оповещения. Сделайте паузу.",
             ):
                 return
-            await self._send_maintenance_alert(query, context)
+            guard_key = "job:maintenance_alert"
+            if not await job_guard.acquire(guard_key):
+                await query.answer("Рассылка уже выполняется.", show_alert=True)
+                return
+            try:
+                await self._send_maintenance_alert(query, context)
+            finally:
+                job_guard.release(guard_key)
             return
         await query.answer("Команда в разработке", show_alert=True)
 
@@ -807,37 +1001,21 @@ class AdminPanelHandler:
             await query.answer(alert_text, show_alert=True)
             return True
         return False
-
-    def _parse_callback(self, data: str) -> Tuple[str, Optional[str], Optional[str]]:
-        if not data.startswith(f"{ADMIN_PREFIX}:"):
-            return "", None, None
-        parts = data.split(":")
-        section = parts[1] if len(parts) > 1 else None
-        action = parts[2] if len(parts) > 2 else None
-        payload = parts[3] if len(parts) > 3 else None
-        return section or "", action, payload
-
-    def _build_roles_summary(self, counters: Optional[dict]) -> str:
-        """Формирует текстовый блок с разбивкой по ролям."""
-        if not counters:
-            return "—"
-        breakdown = counters.get("roles_breakdown") or {}
-        lines = []
-        for role in ROLE_DISPLAY_ORDER:
-            stats = breakdown.get(role, {})
-            emoji = ROLE_EMOJI.get(role, "•")
-            display_name = role_display_name_from_name(role) or stats.get("display") or role.title()
-            approved = int(stats.get("approved") or 0)
-            lines.append(f"{emoji} {display_name}: <b>{approved}</b>")
-        # Выводим роли, которых нет в стандартном порядке, но присутствуют в БД
-        for role_name, role_stats in breakdown.items():
-            if role_name in ROLE_DISPLAY_ORDER:
-                continue
-            display_name = role_display_name_from_name(role_name) or role_stats.get("display") or role_name.title()
-            emoji = ROLE_EMOJI.get(role_name, "•")
-            approved = int(role_stats.get("approved") or 0)
-            lines.append(f"{emoji} {display_name}: <b>{approved}</b>")
-        return "\n".join(lines) if lines else "—"
+    
+    @staticmethod
+    def _safe_int(value: Optional[str], default: int = 0) -> int:
+        try:
+            return int(value) if value is not None else default
+        except (TypeError, ValueError):
+            return default
+    
+    def _get_job_guard(self, context: ContextTypes.DEFAULT_TYPE) -> JobGuard:
+        guard = context.application.bot_data.get("job_guard")
+        if isinstance(guard, JobGuard):
+            return guard
+        guard = JobGuard()
+        context.application.bot_data["job_guard"] = guard
+        return guard
 
 
 def register_admin_panel_handlers(
@@ -851,8 +1029,9 @@ def register_admin_panel_handlers(
     # Команда /admin и reply-кнопка
     application.add_handler(
         MessageHandler(
-            filters.Regex(r"(?i)админ-панел"),
+            filters.Regex(r"(?i)^\s*(?:👑\s*)?админ-?панел[ья]\s*$"),
             handler.admin_command,
+            group=0,
             block=False,
         )
     )
@@ -861,7 +1040,7 @@ def register_admin_panel_handlers(
     
     # Callback handlers
     application.add_handler(
-        CallbackQueryHandler(handler.handle_callback, pattern=r"^(admin:(dashboard|back|menu|commands|command)|adm:(dsh|back|cmds|cmd))")
+        CallbackQueryHandler(handler.handle_callback, pattern=rf"^{AdminCB.PREFIX}:")
     )
 
     logger.info("Admin panel handlers registered")

@@ -13,6 +13,7 @@ from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, Mes
 from app.db.manager import DatabaseManager
 from app.db.repositories.admin import AdminRepository
 from app.telegram.middlewares.permissions import PermissionsManager
+from app.telegram.utils.callback_data import AdminCB
 from app.logging_config import get_watchdog_logger
 
 logger = get_watchdog_logger(__name__)
@@ -30,8 +31,7 @@ class DevMessagesHandler:
         self.db_manager = db_manager
         self.admin_repo = admin_repo or AdminRepository(db_manager)
         self.permissions = permissions
-        # Хранилище для отслеживания состояния ожидания сообщения
-        self.waiting_for_message = {}
+        self.state_namespace = "dev_messages"
     
     async def message_dev_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
@@ -47,8 +47,8 @@ class DevMessagesHandler:
             )
             return
         
-        # Устанавливаем флаг ожидания сообщения
-        self.waiting_for_message[user_id] = True
+        state = self._get_state(context)
+        state["awaiting_message"] = True
         
         await update.message.reply_text(
             "📨 <b>Отправка сообщения разработчику</b>\n\n"
@@ -60,13 +60,9 @@ class DevMessagesHandler:
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка сообщения от пользователя."""
         user_id = update.effective_user.id
-        
-        # Проверяем, ждем ли мы сообщение от этого пользователя
-        if user_id not in self.waiting_for_message:
+        state = self._get_state(context)
+        if not state.pop("awaiting_message", False):
             return
-        
-        # Убираем флаг ожидания
-        del self.waiting_for_message[user_id]
         
         message_text = update.message.text
         
@@ -79,6 +75,7 @@ class DevMessagesHandler:
         # Получаем информацию об отправителе
         sender_name = update.effective_user.full_name
         sender_username = update.effective_user.username
+        user_record = await self.admin_repo.get_user_by_telegram_id(user_id)
         operator_name = user_record.get('operator_name', 'Не указан') if user_record else 'Не указан'
         
         devs_and_admins = await self._get_debug_users()
@@ -114,7 +111,7 @@ class DevMessagesHandler:
                     keyboard = [[
                         InlineKeyboardButton(
                             "✉️ Ответить",
-                            callback_data=f"reply_to_{user_id}"
+                            callback_data=AdminCB.create(AdminCB.DEV_REPLY, user_id),
                         )
                     ]]
                     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -141,10 +138,13 @@ class DevMessagesHandler:
     
     async def cancel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Отмена отправки сообщения."""
-        user_id = update.effective_user.id
-        
-        if user_id in self.waiting_for_message:
-            del self.waiting_for_message[user_id]
+        state = self._get_state(context)
+        cancelled = False
+        if state.pop("awaiting_message", False):
+            cancelled = True
+        if state.pop("replying_to", None) is not None:
+            cancelled = True
+        if cancelled:
             await update.message.reply_text("❌ Отправка сообщения отменена.")
         else:
             await update.message.reply_text("Нечего отменять.")
@@ -154,20 +154,18 @@ class DevMessagesHandler:
         query = update.callback_query
         await query.answer()
         
-        # Извлекаем user_id из callback_data
-        data = query.data
-        if not data.startswith('reply_to_'):
+        action, args = AdminCB.parse(query.data or "")
+        if action != AdminCB.DEV_REPLY or not args:
             return
-        
         try:
-            target_user_id = int(data.replace('reply_to_', ''))
+            target_user_id = int(args[0])
         except ValueError as exc:
-            logger.warning("dev_messages: некорректный reply_to payload '%s': %s", data, exc)
+            logger.warning("dev_messages: некорректный reply payload '%s': %s", query.data, exc)
             await query.message.reply_text("❌ Ошибка: некорректный ID пользователя.")
             return
         
-        # Устанавливаем флаг ожидания ответа
-        context.user_data['replying_to'] = target_user_id
+        state = self._get_state(context)
+        state['replying_to'] = target_user_id
         
         await query.message.reply_text(
             f"✉️ <b>Ответ пользователю</b>\n\n"
@@ -180,11 +178,11 @@ class DevMessagesHandler:
         """Обработка ответа разработчика."""
         user_id = update.effective_user.id
         
-        # Проверяем, это ответ разработчика?
-        if 'replying_to' not in context.user_data:
+        state = self._get_state(context)
+        if 'replying_to' not in state:
             return
         
-        target_user_id = context.user_data.pop('replying_to')
+        target_user_id = state.pop('replying_to')
         reply_text = update.message.text
         
         if not reply_text or len(reply_text.strip()) < 3:
@@ -260,11 +258,15 @@ class DevMessagesHandler:
         return [
             CommandHandler('message_dev', self.message_dev_command),
             CommandHandler('cancel', self.cancel_command),
-            CallbackQueryHandler(self.reply_callback, pattern='^reply_to_'),
+            CallbackQueryHandler(
+                self.reply_callback,
+                pattern=rf"^{AdminCB.PREFIX}:{AdminCB.DEV_REPLY}",
+            ),
             # MessageHandler для перехвата текстовых сообщений (должен быть последним)
             MessageHandler(
                 filters.TEXT & ~filters.COMMAND,
                 self._combined_message_handler,
+                group=10,
                 block=False,
             )
         ]
@@ -274,12 +276,10 @@ class DevMessagesHandler:
         Комбинированный handler для текстовых сообщений.
         Обрабатывает как новые сообщения dev, так и ответы разработчиков.
         """
-        user_id = update.effective_user.id
-        
-        # Проверяем, ожидаем ли сообщение или это ответ
-        if 'replying_to' in context.user_data:
+        state = self._get_state(context)
+        if 'replying_to' in state:
             await self.handle_reply(update, context)
-        elif user_id in self.waiting_for_message:
+        elif state.get('awaiting_message'):
             await self.handle_message(update, context)
 
     async def _get_debug_users(self):
@@ -299,3 +299,10 @@ class DevMessagesHandler:
             ):
                 result.append(admin)
         return result
+
+    def _get_state(self, context: ContextTypes.DEFAULT_TYPE) -> dict:
+        state = context.user_data.get(self.state_namespace)
+        if not isinstance(state, dict):
+            state = {}
+            context.user_data[self.state_namespace] = state
+        return state

@@ -268,25 +268,7 @@ class AdminLMHandler:
                 await self.show_lm_menu(update, context)
             return
 
-        # Legacy format
-        if data == "admin:lm:menu":
-            await self.show_lm_menu(update, context)
-        elif data == "admin:lm:operational":
-            await self.show_operational_metrics(update, context)
-        elif data == "admin:lm:conversion":
-            await self.show_conversion_metrics(update, context)
-        elif data == "admin:lm:forecast":
-            await self.show_forecast_metrics(update, context)
-        elif data == "admin:lm:risk":
-            await self.show_risk_metrics(update, context)
-        elif data == "admin:lm:quality":
-            await self.show_quality_metrics(update, context)
-        elif data == "admin:lm:summary":
-            await self.show_summary_metrics(update, context)
-        elif data == "admin:lm:followup_list":
-            await self.show_followup_list(update, context)
-        else:
-            await query.answer("❌ Неизвестная команда")
+        await query.answer("❌ Неизвестная команда")
     
     async def show_quality_metrics(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показывает метрики качества."""
@@ -434,7 +416,10 @@ def register_admin_lm_handlers(
     handler = AdminLMHandler(lm_repo, permissions)
     
     application.add_handler(
-        CallbackQueryHandler(handler.handle_callback, pattern=r"^(admin:lm:|adm:lm)")
+        CallbackQueryHandler(
+            handler.handle_callback,
+            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.LM_MENU}",
+        )
     )
     
     logger.info("Admin LM handlers registered")

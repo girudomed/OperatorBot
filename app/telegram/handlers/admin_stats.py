@@ -67,7 +67,7 @@ class AdminStatsHandler:
         )
         
         keyboard = [
-            [InlineKeyboardButton("🔄 Обновить", callback_data="admin:stats")],
+            [InlineKeyboardButton("🔄 Обновить", callback_data=AdminCB.create(AdminCB.STATS))],
             [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]
         ]
         
@@ -133,7 +133,10 @@ def register_admin_stats_handlers(
     handler = AdminStatsHandler(admin_repo, metrics_service, permissions)
     
     application.add_handler(
-        CallbackQueryHandler(handler.show_stats, pattern=r"^admin:stats$")
+        CallbackQueryHandler(
+            handler.show_stats,
+            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.STATS}",
+        )
     )
     
     logger.info("Admin stats handlers registered")

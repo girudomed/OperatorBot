@@ -16,6 +16,10 @@ class AdminCB:
     # === ACTIONS (короткие алиасы) ===
     # Главное меню
     DASHBOARD = "dsh"
+    DASHBOARD_DETAILS = "dshdet"
+    ALERTS = "alrt"
+    EXPORT = "exprt"
+    CRITICAL = "crtl"
     USERS = "usr"
     ADMINS = "adms"
     STATS = "st"
@@ -23,6 +27,9 @@ class AdminCB:
     SETTINGS = "set"
     LM_MENU = "lm"
     BACK = "back"
+    APPROVALS = "aprv"
+    PROMOTION = "prm"
+    DEV_REPLY = "devr"
     
     # Команды
     COMMANDS = "cmds"
@@ -49,6 +56,13 @@ class AdminCB:
     lm_FCST = "fst"
     lm_SUM = "sum"
     lm_FLW = "flw"
+    
+    # Legacy Support
+    LEGACY_PREFIXES = ("admin", "admincmd")
+    
+    # Feature Modules
+    CALL_LOOKUP = "cl"
+    REPORTS = "rep"
     
     @classmethod
     def create(cls, action: str, *args) -> str:

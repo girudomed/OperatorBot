@@ -66,6 +66,13 @@ async def safe_edit_message(query, **kwargs: Any) -> None:
         return
     try:
         await query.edit_message_text(**kwargs)
+    except AttributeError:
+        logger.debug(
+            "Callback query %s не поддерживает edit_message_text, пересылаем reply.",
+            type(query).__name__,
+        )
+        if message:
+            await message.reply_text(**kwargs)
     except (BadRequest, TelegramError) as exc:
         logger.warning(
             "Не удалось отредактировать сообщение callback (%s), отправляем новое.",

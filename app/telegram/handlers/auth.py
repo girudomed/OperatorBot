@@ -412,12 +412,12 @@ def setup_auth_handlers(application, db_manager: DatabaseManager, permissions_ma
         )
     )
     application.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            partial(help_bug_message, permissions=permissions_manager),
-            block=False,
+        CallbackQueryHandler(
+            partial(help_bug_callback, permissions=permissions_manager),
+            pattern=r"^help_bug$",
         )
     )
+    # help_bug_message теперь обрабатывается через TextRouter
     logger.info("Хендлеры авторизации зарегистрированы.")
 
 

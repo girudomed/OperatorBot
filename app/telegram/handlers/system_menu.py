@@ -291,13 +291,16 @@ def register_system_handlers(
     application.add_handler(CommandHandler("last_errors", handler.handle_last_errors_command))
     application.add_handler(
         MessageHandler(
-            filters.Regex(r"(?i)система"), handler.handle_system_command
+            filters.Regex(r"(?i)^\s*(?:⚙️\s*)?система\s*$"),
+            handler.handle_system_command,
+            group=0,
         )
     )
     application.add_handler(
         MessageHandler(
-            filters.Regex(r"(?i)последние ошибки"),
+            filters.Regex(r"(?i)^\s*последние\s+ошибки\s*$"),
             handler.handle_last_errors_command,
+            group=0,
         )
     )
     application.add_handler(
@@ -306,7 +309,8 @@ def register_system_handlers(
     # Кнопка «ℹ️ Помощь» работает как /help
     application.add_handler(
         MessageHandler(
-            filters.Regex(r"(?i)помощ"),
+            filters.Regex(r"(?i)^\s*(?:ℹ️\s*)?помощ[ььи]\s*$"),
             partial(help_command, permissions=permissions_manager),
+            group=0,
         )
     )

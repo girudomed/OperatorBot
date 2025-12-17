@@ -866,15 +866,47 @@ class AdminRepository:
                 params=(telegram_id,),
                 fetchone=True
             )
-        except Exception as exc:  # pragma: no cover - зависит от БД
-            logger.exception(
-                "[ADMIN_REPO] Failed to get internal id for telegram_id=%s",
+        except (StopIteration, StopAsyncIteration):
+            logger.warning(
+                "[ADMIN_REPO] Cursor exhausted while resolving telegram_id=%s",
                 telegram_id,
             )
             return None
+        except Exception as exc:  # pragma: no cover - зависит от БД
+            logger.exception(
+                "[ADMIN_REPO] Unexpected DB error while resolving telegram_id=%s",
+                telegram_id,
+            )
+            raise RuntimeError(
+                f"Failed to load internal id for telegram_id={telegram_id}"
+            ) from exc
         if row:
             return row['id'] if isinstance(row, dict) else row[0]
         return None
+
+    @staticmethod
+    def _serialize_payload(payload: Optional[Dict[str, Any]]) -> Optional[str]:
+        """Безопасная сериализация payload в JSON."""
+        if not payload:
+            return None
+        try:
+            return json.dumps(payload)
+        except (TypeError, ValueError) as exc:
+            logger.warning(
+                "[ADMIN_REPO] Invalid payload for admin action, storing fallback: %s",
+                exc,
+            )
+            fallback_payload = {
+                "_payload_error": str(exc),
+            }
+            try:
+                return json.dumps(fallback_payload, ensure_ascii=False)
+            except Exception:  # pragma: no cover - двойной сбой сериализации
+                logger.debug(
+                    "[ADMIN_REPO] Failed to serialize fallback payload",
+                    exc_info=True,
+                )
+                return None
 
     @log_async_exceptions
     async def log_admin_action(
@@ -913,22 +945,32 @@ class AdminRepository:
                 (actor_id, target_id, action, payload_json, created_at)
                 VALUES (%s, %s, %s, %s, NOW())
             """
-            payload_json = json.dumps(payload) if payload else None
+            payload_json = self._serialize_payload(payload)
             
-            await self.db.execute_with_retry(
-                query,
-                params=(actor_id, target_id, action, payload_json),
-                commit=True
-            )
+            try:
+                await self.db.execute_with_retry(
+                    query,
+                    params=(actor_id, target_id, action, payload_json),
+                    commit=True
+                )
+            except (StopIteration, StopAsyncIteration):
+                logger.warning(
+                    "[ADMIN_REPO] DB cursor interrupted while logging action '%s'",
+                    action,
+                )
+                return False
             
             logger.info(f"[ADMIN_REPO] Action logged successfully")
             return True
-        except Exception as e:
-            logger.error(
-                f"[ADMIN_REPO] Error logging action: {e}\n{traceback.format_exc()}"
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "[ADMIN_REPO] Unexpected error logging action '%s'",
+                action,
             )
-            return False
-    
+            raise RuntimeError("Failed to log admin action") from exc
+
     @log_async_exceptions
     async def get_admin_action_logs(
         self,

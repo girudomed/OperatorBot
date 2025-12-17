@@ -26,13 +26,11 @@ from telegram.ext import (
 from app.services.call_lookup import CallLookupService
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.telegram.utils.messages import safe_edit_message
+from app.telegram.utils.callback_data import AdminCB
 from app.logging_config import get_watchdog_logger
-from app.telegram.utils.logging import describe_user
-from app.utils.error_handlers import log_async_exceptions
 
 CALL_LOOKUP_COMMAND = "call_lookup"
 CALL_LOOKUP_PERMISSION = "call_lookup"
-CALL_LOOKUP_CALLBACK_PREFIX = "cl"
 PERIOD_CHOICES = {
     "daily",
     "weekly",
@@ -55,6 +53,8 @@ def register_call_lookup_handlers(
     Регистрирует обработчики команды /call_lookup и её callback-кнопок.
     """
     handler = _CallLookupHandlers(service, permissions_manager)
+    application.bot_data["call_lookup_handler"] = handler
+    
     application.add_handler(
         CommandHandler(CALL_LOOKUP_COMMAND, handler.handle_command)
     )
@@ -62,25 +62,20 @@ def register_call_lookup_handlers(
         MessageHandler(
             filters.Regex(r"^@\S+\s+/call_lookup"),
             handler.handle_mention_command,
+            group=0,
         )
     )
     application.add_handler(
         MessageHandler(
-            filters.Regex(r"(?i)поиск\s+звонка"),
+            filters.Regex(r"(?i)^\s*(?:🔍\s*)?поиск\s+звонка\s*$"),
             handler.handle_menu_button,
+            group=0,
         )
     )
     application.add_handler(
         CallbackQueryHandler(
             handler.handle_callback,
-            pattern=rf"^{CALL_LOOKUP_CALLBACK_PREFIX}:",
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
-            handler.handle_phone_input,
-            block=False,
+            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.CALL_LOOKUP}",
         )
     )
 
@@ -147,7 +142,7 @@ class _CallLookupHandlers:
     def _remember_request(
         self, context: CallbackContext, chat_id: int, request: _LookupRequest
     ) -> None:
-        context.user_data[self._last_request_storage_key(chat_id)] = {
+        context.chat_data[self._last_request_storage_key(chat_id)] = {
             "phone": request.phone,
             "period": request.period,
             "limit": request.limit,
@@ -160,7 +155,7 @@ class _CallLookupHandlers:
         *,
         offset: int = 0,
     ) -> Optional[_LookupRequest]:
-        payload = context.user_data.get(self._last_request_storage_key(chat_id))
+        payload = context.chat_data.get(self._last_request_storage_key(chat_id))
         if not isinstance(payload, dict):
             return None
         phone = payload.get("phone")
@@ -221,7 +216,7 @@ class _CallLookupHandlers:
             return
 
         chat_id = message.chat_id
-        context.user_data.pop(self._pending_storage_key(chat_id), None)
+        context.chat_data.pop(self._pending_storage_key(chat_id), None)
 
         if not await self._is_allowed(user.id, user.username):
             logger.warning(
@@ -356,32 +351,35 @@ class _CallLookupHandlers:
         if not query or not user:
             return
 
-        parts = (query.data or "").split(":")
-        if len(parts) < 2 or parts[0] != CALL_LOOKUP_CALLBACK_PREFIX:
+        # Parse AdminCB: adm:cl:sub_action:args...
+        action_type, args = AdminCB.parse(query.data)
+        if action_type != AdminCB.CALL_LOOKUP or not args:
             return
 
         await query.answer()
 
-        action = parts[1]
+        sub_action = args[0]
+        params = args[1:]
+        
         chat_id = query.message.chat_id if query.message else user.id
 
         if not await self._is_allowed(user.id, user.username):
             await safe_edit_message(query, text="Доступ запрещён.")
             logger.warning(
-                "Call lookup callback отклонён для %s (action=%s)",
+                "Call lookup callback отклонён для %s (sub=%s)",
                 describe_user(user),
-                action,
+                sub_action,
             )
             return
         logger.info(
-            "Call lookup callback получен: action=%s user=%s",
-            action,
+            "Call lookup callback получен: sub=%s user=%s",
+            sub_action,
             describe_user(user),
         )
 
-        if action == "ask":
-            period = parts[2] if len(parts) > 2 else "monthly"
-            context.user_data[self._pending_storage_key(chat_id)] = {"period": period}
+        if sub_action == "ask":
+            period = params[0] if params else "monthly"
+            context.chat_data[self._pending_storage_key(chat_id)] = {"period": period}
             await self._safe_send_message(
                 context,
                 chat_id,
@@ -391,7 +389,7 @@ class _CallLookupHandlers:
                         [
                             InlineKeyboardButton(
                                 "⬅️ Назад",
-                                callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:cancel",
+                                callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "cancel"),
                             )
                         ]
                     ]
@@ -402,14 +400,11 @@ class _CallLookupHandlers:
                 period,
                 describe_user(user),
             )
-        elif action == "p":
-            if len(parts) < 3:
-                await query.answer("Некорректные данные", show_alert=True)
-                return
+        elif sub_action == "p":
             try:
-                offset_value = max(0, int(parts[2]))
+                offset_value = max(0, int(params[0])) if params else 0
             except ValueError as exc:
-                logger.warning("Некорректный offset '%s' в callback %s: %s", parts[2] if len(parts) > 2 else "?", query.data, exc)
+                logger.warning("Некорректный offset в callback %s: %s", query.data, exc)
                 await query.answer("Некорректный offset", show_alert=True)
                 return
             restored = self._restore_request(context, chat_id, offset=offset_value)
@@ -456,14 +451,11 @@ class _CallLookupHandlers:
                 markup=markup,
             )
             self._remember_request(context, chat_id, request)
-        elif action == "t":
-            if len(parts) < 3:
-                await query.answer("Некорректные данные", show_alert=True)
-                return
+        elif sub_action == "t":
             try:
-                history_id = int(parts[2])
+                history_id = int(params[0]) if params else 0
             except ValueError as exc:
-                logger.warning("Некорректный history_id '%s' (action=t): %s", parts[2] if len(parts) > 2 else "?", exc)
+                logger.warning("Некорректный history_id (action=t): %s", exc)
                 await query.answer("Некорректный ID", show_alert=True)
                 return
             try:
@@ -493,14 +485,11 @@ class _CallLookupHandlers:
                 describe_user(user),
                 history_id,
             )
-        elif action == "r":
-            if len(parts) < 3:
-                await query.answer("Некорректные данные", show_alert=True)
-                return
+        elif sub_action == "r":
             try:
-                history_id = int(parts[2])
+                history_id = int(params[0]) if params else 0
             except ValueError as exc:
-                logger.warning("Некорректный history_id '%s' (action=r): %s", parts[2] if len(parts) > 2 else "?", exc)
+                logger.warning("Некорректный history_id (action=r): %s", exc)
                 await query.answer("Некорректный ID", show_alert=True)
                 return
             try:
@@ -539,8 +528,8 @@ class _CallLookupHandlers:
                     chat_id,
                     "Запись недоступна для этого звонка.",
                 )
-        elif action == "cancel":
-            context.user_data.pop(self._pending_storage_key(chat_id), None)
+        elif sub_action == "cancel":
+            context.chat_data.pop(self._pending_storage_key(chat_id), None)
             await self._safe_send_message(
                 context,
                 chat_id,
@@ -559,8 +548,13 @@ class _CallLookupHandlers:
             return
 
         chat_id = message.chat_id
-        pending = context.user_data.get(self._pending_storage_key(chat_id))
+        pending = context.chat_data.get(self._pending_storage_key(chat_id))
         if not pending:
+            logger.debug(
+                "[CALL_LOOKUP] Игнорируем ввод номера %s — режим не активен (chat_id=%s)",
+                describe_user(user),
+                chat_id,
+            )
             return
 
         phone_text = (message.text or "").strip()
@@ -570,11 +564,23 @@ class _CallLookupHandlers:
                 "Введите номер телефона цифрами.",
             )
             return
+            
+        # ... validation ...
+        
+        # NOTE: This method is now called via TextRouter, so we assume pending check is done?
+        # TextRouter checks chat_data[call_lookup_pending]. So it IS pending.
+        # But we double check just in case.
 
         if not re.search(r"\d", phone_text):
             return
 
         period = pending.get("period", "monthly")
+        logger.info(
+            "[CALL_LOOKUP] Пользователь %s ввёл номер %s (period=%s)",
+            describe_user(user),
+            phone_text,
+            period,
+        )
         try:
             response = await self.service.lookup_calls(
                 phone=phone_text,
@@ -602,7 +608,7 @@ class _CallLookupHandlers:
                 message,
                 self._format_error_text(code),
             )
-            context.user_data.pop(self._pending_storage_key(chat_id), None)
+            context.chat_data.pop(self._pending_storage_key(chat_id), None)
             return
 
         request = _LookupRequest(
@@ -623,7 +629,7 @@ class _CallLookupHandlers:
             reply_markup=markup,
         )
         self._remember_request(context, chat_id, request)
-        context.user_data.pop(self._pending_storage_key(chat_id), None)
+        context.chat_data.pop(self._pending_storage_key(chat_id), None)
         await self._safe_reply_text(
             message,
             "Режим поиска звонков завершён.",
@@ -683,20 +689,14 @@ class _CallLookupHandlers:
             row = [
                 InlineKeyboardButton(
                     "Расшифровка",
-                    callback_data=self._limit_callback_data(
-                        f"{CALL_LOOKUP_CALLBACK_PREFIX}:t:{history_id}",
-                        f"{CALL_LOOKUP_CALLBACK_PREFIX}:t:{history_id}",
-                    ),
+                    callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "t", history_id)
                 )
             ]
             if item.get("record_url"):
                 row.append(
                     InlineKeyboardButton(
                         "Запись",
-                        callback_data=self._limit_callback_data(
-                            f"{CALL_LOOKUP_CALLBACK_PREFIX}:r:{history_id}",
-                            f"{CALL_LOOKUP_CALLBACK_PREFIX}:r:{history_id}",
-                        ),
+                        callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "r", history_id)
                     )
                 )
             keyboard.append(row)
@@ -707,22 +707,14 @@ class _CallLookupHandlers:
             pagination_row.append(
                 InlineKeyboardButton(
                     "⬅️ Назад",
-                    callback_data=self._limit_callback_data(
-                        self._encode_page_callback(offset=prev_offset),
-                        f"{CALL_LOOKUP_CALLBACK_PREFIX}:p:{prev_offset}",
-                    ),
+                    callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "p", prev_offset)
                 )
             )
         if response["count"] >= request.limit:
             pagination_row.append(
                 InlineKeyboardButton(
                     "➡️ Далее",
-                    callback_data=self._limit_callback_data(
-                        self._encode_page_callback(
-                            offset=request.offset + request.limit,
-                        ),
-                        f"{CALL_LOOKUP_CALLBACK_PREFIX}:p:{request.offset + request.limit}",
-                    ),
+                    callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "p", request.offset + request.limit)
                 )
             )
         if pagination_row:
@@ -762,31 +754,31 @@ class _CallLookupHandlers:
             [
                 InlineKeyboardButton(
                     "📅 За день",
-                    callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:daily",
+                    callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "ask", "daily"),
                 )
             ],
             [
                 InlineKeyboardButton(
                     "📆 За неделю",
-                    callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:weekly",
+                    callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "ask", "weekly"),
                 )
             ],
             [
                 InlineKeyboardButton(
                     "📊 За 2 недели",
-                    callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:biweekly",
+                    callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "ask", "biweekly"),
                 )
             ],
             [
                 InlineKeyboardButton(
                     "🗓 За месяц",
-                    callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:monthly",
+                    callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "ask", "monthly"),
                 )
             ],
             [
                 InlineKeyboardButton(
                     "◀️ Назад",
-                    callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:cancel",
+                    callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "cancel"),
                 )
             ],
         ]

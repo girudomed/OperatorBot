@@ -248,12 +248,12 @@ class AdminUsersHandler:
                 keyboard.append(nav_row)
             
             # Фильтры
-            filters = [
+            filter_buttons = [
                 InlineKeyboardButton("⏳ В ожидании", callback_data=self._build_list_callback('pending')),
                 InlineKeyboardButton("✅ Одобрены", callback_data=self._build_list_callback('approved')),
                 InlineKeyboardButton("🚫 Заблокированы", callback_data=self._build_list_callback('blocked'))
             ]
-            keyboard.append(filters)
+            keyboard.append(filter_buttons)
             keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))])
             logger.info(
                 "Админ %s просматривает %s пользователей (%s показано)",
@@ -699,33 +699,52 @@ def register_admin_users_handlers(
     
     # Список пользователей
     application.add_handler(
-        CallbackQueryHandler(handler.show_users_list, pattern=r"^(admin:users:list|adm:usr:lst)")
+        CallbackQueryHandler(
+            handler.show_users_list,
+            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.USERS}:{AdminCB.LIST}",
+        )
     )
-    
+
     # Детали пользователя
     application.add_handler(
-        CallbackQueryHandler(handler.show_user_details, pattern=r"^(admin:users:details:|adm:usr:det)")
+        CallbackQueryHandler(
+            handler.show_user_details,
+            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.USERS}:{AdminCB.DETAILS}",
+        )
     )
-    
+
     # Действия
     application.add_handler(
-        CallbackQueryHandler(handler.handle_approve, pattern=r"^(admin:users:approve:|adm:usr:apr)")
+        CallbackQueryHandler(
+            handler.handle_approve,
+            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.USERS}:{AdminCB.APPROVE}",
+        )
     )
     application.add_handler(
-        CallbackQueryHandler(handler.handle_decline, pattern=r"^(admin:users:decline:|adm:usr:dcl)")
+        CallbackQueryHandler(
+            handler.handle_decline,
+            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.USERS}:{AdminCB.DECLINE}",
+        )
     )
     application.add_handler(
-        CallbackQueryHandler(handler.handle_block, pattern=r"^(admin:users:block:|adm:usr:blk)")
+        CallbackQueryHandler(
+            handler.handle_block,
+            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.USERS}:{AdminCB.BLOCK}",
+        )
     )
     application.add_handler(
-        CallbackQueryHandler(handler.handle_unblock, pattern=r"^(admin:users:unblock:|adm:usr:unb)")
+        CallbackQueryHandler(
+            handler.handle_unblock,
+            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.USERS}:{AdminCB.UNBLOCK}",
+        )
     )
 
     # Reply-кнопка «👥 Пользователи и роли»
     application.add_handler(
         MessageHandler(
-            filters.Regex(r"(?i)пользовател.*рол"),
+            filters.Regex(r"(?i)^\s*(?:👥\s*)?пользовател[ьи]\s+и\s+рол[ьи]\s*$"),
             handler.open_from_keyboard,
+            group=0,
         )
     )
     
