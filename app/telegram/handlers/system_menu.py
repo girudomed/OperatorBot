@@ -148,6 +148,7 @@ class SystemMenuHandler:
             version = row.get("ver") if row else "—"
             lines.append(f"✅ Подключение к БД активно (MySQL {version})")
         except Exception as exc:
+            logger.error("Не удалось получить статус БД: %s", exc, exc_info=True)
             lines.append(f"❌ БД недоступна: {exc}")
 
         pool = getattr(self.db_manager, "pool", None)
@@ -238,6 +239,7 @@ class SystemMenuHandler:
                 )
                 lines.append(f"✅ {table}")
             except Exception as exc:
+                logger.error("Проверка таблицы %s завершилась ошибкой: %s", table, exc, exc_info=True)
                 lines.append(f"❌ {table}: {exc}")
         return "\n".join(lines)
 

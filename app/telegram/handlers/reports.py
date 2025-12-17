@@ -167,7 +167,12 @@ class _ReportHandler:
             try:
                 target_user_id = int(parts[2])
                 extension = parts[3]
-            except ValueError:
+            except ValueError as exc:
+                logger.warning(
+                    "report callback получил некорректные данные '%s': %s",
+                    parts,
+                    exc,
+                )
                 await query.answer("Некорректный оператор", show_alert=True)
                 return
 
@@ -346,5 +351,5 @@ class _ReportHandler:
         finally:
             try:
                 await status_message.delete()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Не удалось удалить статусное сообщение отчёта: %s", exc, exc_info=True)

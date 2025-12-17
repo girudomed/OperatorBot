@@ -20,7 +20,8 @@ from telegram.ext import (
 
 try:  # filters/MessageHandler появились не во всех версиях PTB
     from telegram.ext import MessageHandler, filters
-except ImportError:  # pragma: no cover - fallback для старых версий
+except ImportError as exc:  # pragma: no cover - fallback для старых версий
+    logger.debug("PTB MessageHandler/filters недоступны, fallback: %s", exc)
     MessageHandler = None
     filters = None
 
@@ -673,7 +674,8 @@ class AdminPanelHandler:
                 continue
             try:
                 chat_id = int(raw_id)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError) as exc:
+                logger.warning("Некорректный chat_id в рассылке тех. работ: %s (%s)", raw_id, exc)
                 continue
             try:
                 await bot.send_message(chat_id=chat_id, text=message, parse_mode="HTML")

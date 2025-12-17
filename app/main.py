@@ -392,7 +392,7 @@ async def main():
             try:
                 os.remove(LOCK_FILE)
             except FileNotFoundError:
-                pass
+                logger.debug("Lock файл %s уже отсутствует при завершении", LOCK_FILE)
             except OSError as exc:
                 logger.warning("Не удалось удалить lock файл %s: %s", LOCK_FILE, exc)
 

@@ -41,7 +41,8 @@ class AdminAdminsHandler:
         if len(parts) > 3:
             try:
                 return max(0, int(parts[3]))
-            except ValueError:
+            except ValueError as exc:
+                logger.warning("Некорректный номер страницы в callback '%s': %s", data, exc)
                 return 0
         return 0
 
@@ -492,7 +493,8 @@ class AdminAdminsHandler:
     def _extract_user_id(self, data: str) -> int:
         try:
             return int(data.split(":")[-1])
-        except (ValueError, IndexError):
+        except (ValueError, IndexError) as exc:
+            logger.warning("Не удалось извлечь user_id из callback '%s': %s", data, exc)
             return 0
 
 

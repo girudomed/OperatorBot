@@ -60,6 +60,12 @@ class _WeeklyQualityHandler:
                 end_date=custom_range[1] if custom_range else None,
             )
         except ValueError as exc:
+            logger.warning(
+                "weekly_quality: неверные аргументы %s от %s: %s",
+                context.args,
+                describe_user(user),
+                exc,
+            )
             await message.reply_text(f"Ошибка: {exc}")
             return
         except Exception:
@@ -110,7 +116,8 @@ class _WeeklyQualityHandler:
         for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y"):
             try:
                 return datetime.strptime(value, fmt)
-            except ValueError:
+            except ValueError as exc:
+                logger.debug("Формат даты %s не подошёл для '%s': %s", fmt, value, exc)
                 continue
         raise ValueError(
             f"Некорректная дата: {value}. Допустимые форматы: YYYY-MM-DD, DD.MM.YYYY, DD/MM/YYYY."

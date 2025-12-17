@@ -28,10 +28,13 @@ from telegram.ext import (
 
 try:  # PyTelegramBot v20+
     from telegram.ext import ApplicationHandlerStop as HandlerStop
-except ImportError:  # Legacy Dispatcher API
+except ImportError as exc:  # Legacy Dispatcher API
+    logger.debug("ApplicationHandlerStop недоступен: %s", exc)
     try:
         from telegram.ext import DispatcherHandlerStop as HandlerStop  # type: ignore
-    except ImportError:
+    except ImportError as legacy_exc:
+        logger.debug("DispatcherHandlerStop недоступен, используем fallback: %s", legacy_exc)
+
         class HandlerStop(Exception):
             """Fallback для совместимости, не блокирует обработчики PTB."""
             pass
@@ -604,7 +607,12 @@ async def help_bug_message(
             continue
         try:
             recipients.add(int(raw))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
+            logger.warning(
+                "Некорректный chat_id для баг-репорта (%s): %s",
+                raw,
+                exc,
+            )
             continue
 
     info = describe_user(user)

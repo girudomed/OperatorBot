@@ -34,7 +34,12 @@ class UserRepository:
         """
         try:
             candidate = int(role_id) if role_id is not None else DEFAULT_ROLE_ID
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
+            logger.warning(
+                "[USER_REPO] Некорректный role_id '%s', применяем DEFAULT_ROLE_ID: %s",
+                role_id,
+                exc,
+            )
             candidate = DEFAULT_ROLE_ID
         if candidate <= 0:
             candidate = DEFAULT_ROLE_ID

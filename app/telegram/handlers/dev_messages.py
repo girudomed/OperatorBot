@@ -161,7 +161,8 @@ class DevMessagesHandler:
         
         try:
             target_user_id = int(data.replace('reply_to_', ''))
-        except ValueError:
+        except ValueError as exc:
+            logger.warning("dev_messages: некорректный reply_to payload '%s': %s", data, exc)
             await query.message.reply_text("❌ Ошибка: некорректный ID пользователя.")
             return
         

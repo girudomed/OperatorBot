@@ -319,7 +319,8 @@ class ReportService:
             if date_range:
                 try:
                     dt = datetime.datetime.strptime(date_range, '%Y-%m-%d')
-                except ValueError:
+                except ValueError as exc:
+                    logger.debug("Дата '%s' не соответствует формату YYYY-MM-DD: %s", date_range, exc)
                     dt = datetime.datetime.strptime(date_range, '%d/%m/%Y')
                 return dt.replace(hour=0, minute=0, second=0), dt.replace(hour=23, minute=59, second=59)
             return now.replace(hour=0, minute=0, second=0), now.replace(hour=23, minute=59, second=59)

@@ -118,8 +118,8 @@ class _CallLookupHandlers:
         try:
             if len(data.encode("utf-8")) <= 64:
                 return data
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Не удалось оценить размер callback_data '%s': %s", data, exc, exc_info=True)
         logger.warning(
             "callback_data too long (%s bytes), fallback=%s",
             len(data.encode("utf-8")) if isinstance(data, str) else "?",
@@ -381,7 +381,8 @@ class _CallLookupHandlers:
                 return
             try:
                 offset_value = max(0, int(parts[2]))
-            except ValueError:
+            except ValueError as exc:
+                logger.warning("Некорректный offset '%s' в callback %s: %s", parts[2] if len(parts) > 2 else "?", data, exc)
                 await query.answer("Некорректный offset", show_alert=True)
                 return
             restored = self._restore_request(context, offset=offset_value)
@@ -433,7 +434,8 @@ class _CallLookupHandlers:
                 return
             try:
                 history_id = int(parts[2])
-            except ValueError:
+            except ValueError as exc:
+                logger.warning("Некорректный history_id '%s' (action=t): %s", parts[2] if len(parts) > 2 else "?", exc)
                 await query.answer("Некорректный ID", show_alert=True)
                 return
             try:
@@ -469,7 +471,8 @@ class _CallLookupHandlers:
                 return
             try:
                 history_id = int(parts[2])
-            except ValueError:
+            except ValueError as exc:
+                logger.warning("Некорректный history_id '%s' (action=r): %s", parts[2] if len(parts) > 2 else "?", exc)
                 await query.answer("Некорректный ID", show_alert=True)
                 return
             try:
@@ -550,6 +553,11 @@ class _CallLookupHandlers:
                 requesting_user_id=user.id,
             )
         except ValueError as exc:
+            logger.warning(
+                "Call lookup ввёл некорректные данные %s: %s",
+                describe_user(user),
+                exc,
+            )
             await self._safe_reply_text(message, str(exc))
             return
         except Exception:

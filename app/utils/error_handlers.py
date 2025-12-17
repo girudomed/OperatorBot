@@ -103,7 +103,12 @@ def install_loop_exception_handler(loop: Optional[asyncio.AbstractEventLoop] = N
     if target_loop is None:
         try:
             target_loop = asyncio.get_event_loop()
-        except RuntimeError:
+        except RuntimeError as exc:
+            logger.debug(
+                "Не удалось получить event loop для установки обработчика: %s",
+                exc,
+                exc_info=True,
+            )
             return
     target_loop.set_exception_handler(_loop_exception_handler)
 

@@ -54,7 +54,8 @@ class DatabaseManager:
             frame = inspect.stack()[3]
             module = frame.frame.f_globals.get("__name__", "")
             return f"{module}.{frame.function}"
-        except Exception:
+        except Exception as exc:
+            logger.debug("Не удалось определить имя запроса: %s", exc, exc_info=True)
             return "unknown_query"
 
     @staticmethod
@@ -206,6 +207,8 @@ class DatabaseManager:
                 except Exception as e:
                     if log_error:
                         self._log_db_error(e, query, params, query_name)
+                    else:
+                        logger.debug("DB error без логирования (log_error=False): %s", e, exc_info=True)
                     raise
 
     async def execute_with_retry(

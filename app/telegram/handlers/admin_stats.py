@@ -57,7 +57,13 @@ class AdminStatsHandler:
                 start_fmt = datetime.fromisoformat(start_label).strftime("%d.%m.%Y")
                 end_fmt = datetime.fromisoformat(end_label).strftime("%d.%m.%Y")
                 period_label = f" ({start_fmt} — {end_fmt})"
-            except ValueError:
+            except ValueError as exc:
+                logger.warning(
+                    "Неверный формат дат в quality_summary (%s — %s): %s",
+                    start_label,
+                    end_label,
+                    exc,
+                )
                 period_label = f" ({start_label} — {end_label})"
         
         message = (
