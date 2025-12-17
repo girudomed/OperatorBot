@@ -179,7 +179,7 @@ class CallAnalyticsSyncService:
                     ml_p_record,
                     ml_score_pred,
                     ml_p_complaint,
-                    created_at
+                    synced_at
                 )
                 SELECT
                     cs.id,
