@@ -14,6 +14,7 @@ from app.services.metrics_service import MetricsService
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.logging_config import get_watchdog_logger
 from app.utils.error_handlers import log_async_exceptions
+from app.utils.rate_limit import rate_limit_hit
 from app.telegram.utils.messages import safe_edit_message
 
 logger = get_watchdog_logger(__name__)
@@ -36,6 +37,16 @@ class AdminStatsHandler:
     async def show_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показывает общую статистику системы."""
         query = update.callback_query
+        user = update.effective_user
+        user_id = user.id if user else 0
+        if user_id and rate_limit_hit(
+            context.application.bot_data,
+            user_id,
+            "admin_stats",
+            cooldown_seconds=2.0,
+        ):
+            await query.answer("Слишком часто обновляете статистику. Подождите пару секунд.", show_alert=True)
+            return
         await query.answer()
         
         # Получаем базовую статистику

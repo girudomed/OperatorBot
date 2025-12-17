@@ -28,6 +28,7 @@ from app.telegram.middlewares.permissions import PermissionsManager
 from app.telegram.utils.messages import safe_edit_message
 from app.logging_config import get_watchdog_logger
 from app.telegram.utils.logging import describe_user
+from app.utils.error_handlers import log_async_exceptions
 
 CALL_LOOKUP_COMMAND = "call_lookup"
 CALL_LOOKUP_PERMISSION = "call_lookup"
@@ -195,6 +196,7 @@ class _CallLookupHandlers:
         except BadRequest as exc:
             logger.warning("Не удалось отправить сообщение: %s", exc, exc_info=True)
 
+    @log_async_exceptions
     async def handle_command(self, update: Update, context: CallbackContext) -> None:
         message = update.effective_message
         user = update.effective_user
@@ -287,6 +289,7 @@ class _CallLookupHandlers:
             response.get("count"),
         )
 
+    @log_async_exceptions
     async def handle_mention_command(
         self, update: Update, context: CallbackContext
     ) -> None:
@@ -306,6 +309,7 @@ class _CallLookupHandlers:
         context.args = tokens[command_index + 1 :]
         await self.handle_command(update, context)
 
+    @log_async_exceptions
     async def handle_menu_button(self, update: Update, context: CallbackContext) -> None:
         """Реакция на кнопку главного меню «Поиск звонка»."""
         message = update.effective_message
@@ -323,6 +327,7 @@ class _CallLookupHandlers:
 
         await self._send_usage_hint(message)
 
+    @log_async_exceptions
     async def handle_callback(self, update: Update, context: CallbackContext) -> None:
         query = update.callback_query
         user = update.effective_user
@@ -518,6 +523,7 @@ class _CallLookupHandlers:
                 chat_id,
                 "Режим поиска звонков закрыт.",
             )
+    @log_async_exceptions
     async def handle_phone_input(
         self,
         update: Update,

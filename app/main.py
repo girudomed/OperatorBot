@@ -36,6 +36,8 @@ from app.db.manager import DatabaseManager
 from app.db.repositories.lm_repository import LMRepository
 from app.db.utils_schema import validate_schema
 from app.telegram.middlewares.permissions import PermissionsManager
+from app.utils.rate_limit import RateLimiter
+from app.utils.action_guard import ActionGuard
 
 # Сервисы
 from app.services.call_lookup import CallLookupService
@@ -94,6 +96,7 @@ async def user_context_injector(update: Update, context: ContextTypes.DEFAULT_TY
 async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Глобально логируем необработанные ошибки PTB, чтобы не терять контекст."""
     error = context.error
+    already_logged = bool(getattr(error, "_already_logged", False)) if error else False
     update_obj: Optional[Update] = update if isinstance(update, Update) else None
     user = update_obj.effective_user if update_obj else None
     chat = update_obj.effective_chat if update_obj else None
@@ -114,21 +117,36 @@ async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_T
             tb = tb.tb_next
         handler_name = tb.tb_frame.f_code.co_name
 
-    logger.error(
-        "Unhandled exception в Telegram handler",
-        exc_info=(type(error), error, error.__traceback__) if error else None,
-        extra={
-            "source": "telegram.application",
-            "error_type": type(error).__name__ if error else None,
-            "handler_name": handler_name,
-            "update_type": update_type,
-            "update_id": update_obj.update_id if update_obj else None,
-            "user_id": user.id if user else None,
-            "username": user.username if user else None,
-            "chat_id": chat.id if chat else None,
-            "trace_id": get_trace_id(),
-        },
-    )
+    if already_logged:
+        logger.debug(
+            "Исключение уже залогировано в handler-е, пропускаем дубль",
+            extra={
+                "source": "telegram.application",
+                "handler_name": handler_name,
+                "update_type": update_type,
+                "update_id": update_obj.update_id if update_obj else None,
+                "user_id": user.id if user else None,
+                "username": user.username if user else None,
+                "chat_id": chat.id if chat else None,
+                "trace_id": get_trace_id(),
+            },
+        )
+    else:
+        logger.error(
+            "Unhandled exception в Telegram handler",
+            exc_info=(type(error), error, error.__traceback__) if error else None,
+            extra={
+                "source": "telegram.application",
+                "error_type": type(error).__name__ if error else None,
+                "handler_name": handler_name,
+                "update_type": update_type,
+                "update_id": update_obj.update_id if update_obj else None,
+                "user_id": user.id if user else None,
+                "username": user.username if user else None,
+                "chat_id": chat.id if chat else None,
+                "trace_id": get_trace_id(),
+            },
+        )
     if update_obj:
         try:
             if update_obj.callback_query:
@@ -142,8 +160,8 @@ async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_T
                 await update_obj.message.reply_text(USER_ERROR_MESSAGE)
         except Exception:
             logger.debug("Не удалось уведомить пользователя об ошибке", exc_info=True)
-    user_notified = False
-    if update_obj and update_obj.callback_query:
+    user_notified = bool(getattr(error, "_user_notified", False)) if error else False
+    if update_obj and update_obj.callback_query and not user_notified:
         try:
             await update_obj.callback_query.answer(
                 text="Команда временно недоступна. Попробуйте позже.",
@@ -227,6 +245,8 @@ async def main():
         call_lookup_service = CallLookupService(db_manager, lm_repo)
         weekly_quality_service = WeeklyQualityService(db_manager)
         report_service = ReportService(db_manager)
+        rate_limiter = RateLimiter()
+        action_guard = ActionGuard()
         
         # Admin panel components
         from app.db.repositories.admin import AdminRepository
@@ -247,6 +267,8 @@ async def main():
         application.bot_data["permissions_manager"] = permissions_manager
         application.bot_data["admin_repo"] = admin_repo
         application.bot_data["user_repository"] = user_repo
+        application.bot_data["rate_limiter"] = rate_limiter
+        application.bot_data["action_guard"] = action_guard
 
         # 4. Регистрация хендлеров
         logger.info("Регистрация хендлеров...")

@@ -187,16 +187,18 @@ def _classify_business_error(error: Exception) -> str:
     return "unexpected_error"
 
 
-async def _notify_user_about_error(update: Optional[Update], category: str) -> None:
+async def _notify_user_about_error(update: Optional[Update], category: str) -> bool:
     if not update:
-        return
+        return False
     default_message = "⚠️ Произошла ошибка. Повторите действие или обратитесь к разработчику."
     if category == "db_schema_error":
         default_message = "⚠️ Ошибка БД, обратитесь к разработчику."
+    notified = False
     try:
         if update.callback_query:
             try:
                 await update.callback_query.answer(default_message, show_alert=True)
+                notified = True
             except Exception as exc:
                 logger.debug(
                     "Не удалось отправить alert в callback_query: %s",
@@ -205,6 +207,7 @@ async def _notify_user_about_error(update: Optional[Update], category: str) -> N
                 )
             try:
                 await update.callback_query.message.reply_text(default_message)
+                notified = True
             except Exception as exc:
                 logger.debug(
                     "Не удалось отправить reply_text по callback_query: %s",
@@ -213,12 +216,14 @@ async def _notify_user_about_error(update: Optional[Update], category: str) -> N
                 )
         elif update.message:
             await update.message.reply_text(default_message)
+            notified = True
     except Exception as exc:
         logger.warning(
             "Не удалось отправить уведомление об ошибке пользователю: %s",
             exc,
             exc_info=True,
         )
+    return notified
 
 
 def log_exceptions(func: F) -> F:
@@ -257,6 +262,7 @@ def log_exceptions(func: F) -> F:
                     **context,
                 }
             )
+            setattr(e, "_already_logged", True)
             raise
         finally:
             reset_trace_id(token)
@@ -315,7 +321,10 @@ def log_async_exceptions(func: F) -> F:
                     **context,
                 }
             )
-            await _notify_user_about_error(update, error_category)
+            setattr(e, "_already_logged", True)
+            notified = await _notify_user_about_error(update, error_category)
+            if notified:
+                setattr(e, "_user_notified", True)
             raise
         finally:
             reset_trace_id(token)

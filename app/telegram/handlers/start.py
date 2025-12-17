@@ -16,6 +16,7 @@ from app.core.roles import role_name_from_id, role_display_name_from_name
 from app.telegram.utils.keyboard_builder import KeyboardBuilder
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.logging_config import get_watchdog_logger
+from app.utils.error_handlers import log_async_exceptions
 
 logger = get_watchdog_logger(__name__)
 DB_ERROR_MESSAGE = "Ошибка доступа к базе. Проверьте конфигурацию/схему БД."
@@ -31,6 +32,7 @@ class StartHandler:
         self.keyboard_builder = KeyboardBuilder(self.roles_repo)
         self.permissions = PermissionsManager(db_manager)
     
+    @log_async_exceptions
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
         Команда /start - приветствие с role-based клавиатурой.

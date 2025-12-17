@@ -43,6 +43,22 @@ class ReportService:
             # 1. Resolve Dates
             start_date, end_date = self._resolve_dates(period, date_range)
             logger.info(f"Генерация отчета для {user_id} за {start_date} - {end_date}")
+            normalized_period = self._normalize_period(period)
+            report_date_key = self._format_report_date(start_date)
+
+            existing_report = await self.report_repo.get_report(
+                user_id=user_id,
+                period=normalized_period,
+                report_date=report_date_key,
+            )
+            if existing_report and existing_report.get("report_text"):
+                logger.info(
+                    "Отчёт уже существует (user_id=%s, period=%s, date=%s) — возвращаем сохранённый результат",
+                    user_id,
+                    normalized_period,
+                    report_date_key,
+                )
+                return existing_report["report_text"]
 
             # 2. Get Operator Info
             resolved_extension = extension or await self.repo.get_extension_by_user_id(user_id)
@@ -112,6 +128,8 @@ class ReportService:
             # 8. Save to DB
             await self.report_repo.save_report_to_db(
                 user_id=user_id,
+                period=normalized_period,
+                report_date=report_date_key,
                 total_calls=metrics.get('total_calls', 0),
                 accepted_calls=metrics.get('accepted_calls', 0),
                 booked_services=metrics.get('booked_services', 0),
@@ -215,6 +233,30 @@ class ReportService:
         except Exception as e:
             logger.error(f"Ошибка fallback рекомендаций: {e}", exc_info=True)
             return "Рекомендации временно недоступны."
+
+    def _normalize_period(self, period: Optional[str]) -> str:
+        value = (period or "daily").strip().lower()
+        mapping = {
+            "day": "daily",
+            "daily": "daily",
+            "week": "weekly",
+            "weekly": "weekly",
+            "month": "monthly",
+            "monthly": "monthly",
+        }
+        return mapping.get(value, value)
+
+    def _format_report_date(self, start_date: Any) -> str:
+        base_date: Optional[datetime.date]
+        if isinstance(start_date, datetime.datetime):
+            base_date = start_date.date()
+        elif isinstance(start_date, datetime.date):
+            base_date = start_date
+        else:
+            base_date = None
+        if base_date:
+            return base_date.strftime("%Y-%m-%d")
+        return str(start_date)
 
     def _format_report_new(
         self, 

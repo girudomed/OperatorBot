@@ -21,6 +21,7 @@ from app.utils.error_handlers import log_async_exceptions
 from app.core.roles import role_name_from_id
 from app.telegram.utils.logging import describe_user
 from app.telegram.utils.messages import safe_edit_message
+from app.utils.action_guard import ActionGuard
 
 logger = get_watchdog_logger(__name__)
 
@@ -39,6 +40,7 @@ class AdminUsersHandler:
         self.notifications = notifications
         self.default_filter = "pending"
         self.page_size = 10
+        self.write_cooldown_seconds = 5.0
     
     @log_async_exceptions
     async def open_from_keyboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -362,6 +364,14 @@ class AdminUsersHandler:
         status_filter, page = self._parse_status_page(query.data)
         user_id = self._extract_user_id(query.data)
         actor_id = update.effective_user.id
+        guard = self._get_action_guard(context)
+        guard_key = f"approve:{user_id}"
+        guard_acquired = False
+        if guard:
+            guard_acquired = await guard.acquire(guard_key, cooldown_seconds=self.write_cooldown_seconds)
+            if not guard_acquired:
+                await query.answer("Операция уже выполняется. Подождите несколько секунд.", show_alert=True)
+                return
         
         # Проверяем права
         can_approve = await self.permissions.can_approve(actor_id, update.effective_user.username)
@@ -373,36 +383,42 @@ class AdminUsersHandler:
                 user_id,
                 extra={"action": "approve_user", "result": "permission_denied", "target_user_id": user_id},
             )
+            if guard and guard_acquired:
+                guard.release(guard_key, success=False)
             return
         
         # Утверждаем
-        success = await self.admin_repo.approve_user(user_id, actor_id)
-        
-        if success:
-            # Получаем данные пользователя для уведомления
-            user = await self.admin_repo.db.execute_with_retry(
-                "SELECT user_id AS telegram_id, username FROM UsersTelegaBot WHERE id = %s",
-                params=(user_id,), fetchone=True
-            )
-            
-            if user and hasattr(self.notifications, "notify_approval"):
-                await self.notifications.notify_approval(
-                    user['telegram_id'],
-                    update.effective_user.full_name
+        success = False
+        try:
+            success = await self.admin_repo.approve_user(user_id, actor_id)
+            if success:
+                # Получаем данные пользователя для уведомления
+                user = await self.admin_repo.db.execute_with_retry(
+                    "SELECT user_id AS telegram_id, username FROM UsersTelegaBot WHERE id = %s",
+                    params=(user_id,), fetchone=True
                 )
-            
-            await safe_edit_message(
-                query,
-                text="✅ Пользователь успешно одобрен. Теперь он может пользоваться ботом.",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton(
-                        "◀️ К списку",
-                        callback_data=self._build_list_callback(status_filter, page)
+                
+                if user and hasattr(self.notifications, "notify_approval"):
+                    await self.notifications.notify_approval(
+                        user['telegram_id'],
+                        update.effective_user.full_name
                     )
-                ]]),
-            )
-        else:
-            await query.answer("❌ Ошибка при утверждении", show_alert=True)
+                
+                await safe_edit_message(
+                    query,
+                    text="✅ Пользователь успешно одобрен. Теперь он может пользоваться ботом.",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton(
+                            "◀️ К списку",
+                            callback_data=self._build_list_callback(status_filter, page)
+                        )
+                    ]]),
+                )
+            else:
+                await query.answer("❌ Ошибка при утверждении", show_alert=True)
+        finally:
+            if guard and guard_acquired:
+                guard.release(guard_key, success=success)
         logger.info(
             "Админ %s утвердил пользователя id=%s (успех=%s)",
             describe_user(update.effective_user),
@@ -420,6 +436,14 @@ class AdminUsersHandler:
         status_filter, page = self._parse_status_page(query.data)
         user_id = self._extract_user_id(query.data)
         actor_id = update.effective_user.id
+        guard = self._get_action_guard(context)
+        guard_key = f"decline:{user_id}"
+        guard_acquired = False
+        if guard:
+            guard_acquired = await guard.acquire(guard_key, cooldown_seconds=self.write_cooldown_seconds)
+            if not guard_acquired:
+                await query.answer("Операция уже выполняется. Подождите несколько секунд.", show_alert=True)
+                return
         
         can_approve = await self.permissions.can_approve(actor_id, update.effective_user.username)
         if not can_approve:
@@ -430,23 +454,30 @@ class AdminUsersHandler:
                 user_id,
                 extra={"action": "decline_user", "result": "permission_denied", "target_user_id": user_id},
             )
+            if guard and guard_acquired:
+                guard.release(guard_key, success=False)
             return
         
-        success = await self.admin_repo.decline_user(user_id, actor_id)
+        success = False
+        try:
+            success = await self.admin_repo.decline_user(user_id, actor_id)
         
-        if success:
-            await safe_edit_message(
-                query,
-                text=f"❌ Заявка #{user_id} отклонена",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton(
-                        "◀️ К списку",
-                        callback_data=self._build_list_callback(status_filter, page)
-                    )
-                ]]),
-            )
-        else:
-            await query.answer("❌ Ошибка", show_alert=True)
+            if success:
+                await safe_edit_message(
+                    query,
+                    text=f"❌ Заявка #{user_id} отклонена",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton(
+                            "◀️ К списку",
+                            callback_data=self._build_list_callback(status_filter, page)
+                        )
+                    ]]),
+                )
+            else:
+                await query.answer("❌ Ошибка", show_alert=True)
+        finally:
+            if guard and guard_acquired:
+                guard.release(guard_key, success=success)
         logger.info(
             "Админ %s отклонил заявку пользователя id=%s (успех=%s)",
             describe_user(update.effective_user),
@@ -462,6 +493,14 @@ class AdminUsersHandler:
         status_filter, page = self._parse_status_page(query.data)
         user_id = self._extract_user_id(query.data)
         actor_id = update.effective_user.id
+        guard = self._get_action_guard(context)
+        guard_key = f"block:{user_id}"
+        guard_acquired = False
+        if guard:
+            guard_acquired = await guard.acquire(guard_key, cooldown_seconds=self.write_cooldown_seconds)
+            if not guard_acquired:
+                await query.answer("Операция уже выполняется. Подождите несколько секунд.", show_alert=True)
+                return
         
         can_exclude = await self.permissions.can_exclude_user(actor_id, update.effective_user.username)
         if not can_exclude:
@@ -472,15 +511,22 @@ class AdminUsersHandler:
                 user_id,
                 extra={"action": "block_user", "result": "permission_denied", "target_user_id": user_id},
             )
+            if guard and guard_acquired:
+                guard.release(guard_key, success=False)
             return
         
-        success = await self.admin_repo.block_user(user_id, actor_id)
+        success = False
+        try:
+            success = await self.admin_repo.block_user(user_id, actor_id)
         
-        if success:
-            await query.answer("🚫 Пользователь заблокирован. Он больше не сможет пользоваться ботом.", show_alert=True)
-            await self._render_user_details(query, update.effective_user, user_id, status_filter, page)
-        else:
-            await query.answer("❌ Ошибка", show_alert=True)
+            if success:
+                await query.answer("🚫 Пользователь заблокирован. Он больше не сможет пользоваться ботом.", show_alert=True)
+                await self._render_user_details(query, update.effective_user, user_id, status_filter, page)
+            else:
+                await query.answer("❌ Ошибка", show_alert=True)
+        finally:
+            if guard and guard_acquired:
+                guard.release(guard_key, success=success)
         logger.info(
             "Админ %s заблокировал пользователя id=%s (успех=%s)",
             describe_user(update.effective_user),
@@ -496,6 +542,14 @@ class AdminUsersHandler:
         status_filter, page = self._parse_status_page(query.data)
         user_id = self._extract_user_id(query.data)
         actor_id = update.effective_user.id
+        guard = self._get_action_guard(context)
+        guard_key = f"unblock:{user_id}"
+        guard_acquired = False
+        if guard:
+            guard_acquired = await guard.acquire(guard_key, cooldown_seconds=self.write_cooldown_seconds)
+            if not guard_acquired:
+                await query.answer("Операция уже выполняется. Подождите несколько секунд.", show_alert=True)
+                return
         
         can_exclude = await self.permissions.can_exclude_user(actor_id, update.effective_user.username)
         if not can_exclude:
@@ -506,15 +560,22 @@ class AdminUsersHandler:
                 user_id,
                 extra={"action": "unblock_user", "result": "permission_denied", "target_user_id": user_id},
             )
+            if guard and guard_acquired:
+                guard.release(guard_key, success=False)
             return
         
-        success = await self.admin_repo.unblock_user(user_id, actor_id)
+        success = False
+        try:
+            success = await self.admin_repo.unblock_user(user_id, actor_id)
         
-        if success:
-            await query.answer("✅ Пользователь разблокирован и снова активен.", show_alert=True)
-            await self._render_user_details(query, update.effective_user, user_id, status_filter, page)
-        else:
-            await query.answer("❌ Ошибка", show_alert=True)
+            if success:
+                await query.answer("✅ Пользователь разблокирован и снова активен.", show_alert=True)
+                await self._render_user_details(query, update.effective_user, user_id, status_filter, page)
+            else:
+                await query.answer("❌ Ошибка", show_alert=True)
+        finally:
+            if guard and guard_acquired:
+                guard.release(guard_key, success=success)
         logger.info(
             "Админ %s разблокировал пользователя id=%s (успех=%s)",
             describe_user(update.effective_user),
@@ -566,3 +627,6 @@ def register_admin_users_handlers(
     )
     
     logger.info("Admin users handlers registered")
+    def _get_action_guard(self, context: ContextTypes.DEFAULT_TYPE) -> Optional[ActionGuard]:
+        guard = context.application.bot_data.get("action_guard")
+        return guard if isinstance(guard, ActionGuard) else None

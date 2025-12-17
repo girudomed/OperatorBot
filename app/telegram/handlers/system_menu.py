@@ -31,6 +31,7 @@ from app.logging_config import get_watchdog_logger
 from app.services.admin_logger import AdminActionLogger
 from app.services.call_analytics_sync import CallAnalyticsSyncService
 from app.telegram.handlers.auth import help_command
+from app.utils.error_handlers import log_async_exceptions
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.telegram.utils.keyboard_builder import KeyboardBuilder
 
@@ -59,6 +60,7 @@ class SystemMenuHandler:
         self.analytics_service = CallAnalyticsSyncService(db_manager)
         self.action_logger = AdminActionLogger(db_manager)
 
+    @log_async_exceptions
     async def handle_system_command(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
@@ -82,6 +84,7 @@ class SystemMenuHandler:
             reply_markup=self.keyboard_builder.build_system_menu(include_cache_reset),
         )
 
+    @log_async_exceptions
     async def handle_system_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
@@ -197,6 +200,7 @@ class SystemMenuHandler:
                 logger.warning("Не удалось прочитать лог %s: %s", path, exc)
         return bucket
 
+    @log_async_exceptions
     async def handle_last_errors_command(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:

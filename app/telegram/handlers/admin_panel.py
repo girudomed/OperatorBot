@@ -31,6 +31,7 @@ from app.logging_config import get_watchdog_logger
 from app.telegram.utils.logging import describe_user
 from app.telegram.utils.messages import safe_edit_message
 from app.utils.error_handlers import log_async_exceptions
+from app.utils.rate_limit import rate_limit_hit
 from app.core.roles import role_display_name_from_name, role_name_from_id
 
 logger = get_watchdog_logger(__name__)
@@ -246,6 +247,16 @@ class AdminPanelHandler:
     async def _show_dashboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показывает dashboard с основными метриками."""
         query = update.callback_query
+        user = update.effective_user
+        user_id = user.id if user else 0
+        if user_id and rate_limit_hit(
+            context.application.bot_data,
+            user_id,
+            "admin_dashboard",
+            cooldown_seconds=2.0,
+        ):
+            await query.answer("Слишком часто обновляете. Подождите пару секунд.", show_alert=True)
+            return
         
         # Получаем статистику
         try:
@@ -273,7 +284,7 @@ class AdminPanelHandler:
 
         logger.info(
             "Dashboard открыт пользователем %s (pending=%s admins=%s)",
-            describe_user(update.effective_user),
+            describe_user(user),
             pending_count,
             admin_count,
         )

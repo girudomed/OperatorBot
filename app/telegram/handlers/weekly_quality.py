@@ -13,6 +13,7 @@ from telegram.ext import Application, CallbackContext, CommandHandler
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.services.weekly_quality import WeeklyQualityService
 from app.logging_config import get_watchdog_logger
+from app.utils.error_handlers import log_async_exceptions
 
 logger = get_watchdog_logger(__name__)
 DB_ERROR_MESSAGE = "Ошибка доступа к базе. Проверьте конфигурацию/схему БД."
@@ -39,6 +40,7 @@ class _WeeklyQualityHandler:
         self.service = service
         self.permissions_manager = permissions_manager
 
+    @log_async_exceptions
     async def handle_command(self, update: Update, context: CallbackContext) -> None:
         message = update.effective_message
         user = update.effective_user
