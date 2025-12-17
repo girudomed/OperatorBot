@@ -47,10 +47,11 @@ class TestAdminStatsHandler:
         update = MagicMock()
         update.callback_query = query
         context = MagicMock()
+        context.application.bot_data = {}
 
         await handler.show_stats(update, context)
 
         mock_admin_repo.get_pending_users.assert_awaited_once()
         mock_admin_repo.get_admins.assert_awaited_once()
-        mock_metrics_service.calculate_quality_summary.assert_awaited_once()
+        assert mock_metrics_service.calculate_quality_summary.await_count == 5
         query.answer.assert_awaited_once()

@@ -4,7 +4,7 @@
 Хендлер статистики для админ-панели.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackQueryHandler, ContextTypes, Application
@@ -53,44 +53,16 @@ class AdminStatsHandler:
         pending_users = await self.admin_repo.get_pending_users()
         all_admins = await self.admin_repo.get_admins()
         
-        # Получаем метрики качества
-        try:
-            quality_summary = await self.metrics.calculate_quality_summary(period='weekly')
-        except Exception as e:
-            logger.error(f"Failed to get quality summary: {e}")
-            quality_summary = {}
-        
-        period_label = ""
-        start_label = quality_summary.get("start_date")
-        end_label = quality_summary.get("end_date")
-        if start_label and end_label:
-            try:
-                start_fmt = datetime.fromisoformat(start_label).strftime("%d.%m.%Y")
-                end_fmt = datetime.fromisoformat(end_label).strftime("%d.%m.%Y")
-                period_label = f" ({start_fmt} — {end_fmt})"
-            except ValueError as exc:
-                logger.warning(
-                    "Неверный формат дат в quality_summary (%s — %s): %s",
-                    start_label,
-                    end_label,
-                    exc,
-                )
-                period_label = f" ({start_label} — {end_label})"
+        # Получаем метрики качества по нескольким окнам
+        quality_lines = await self._collect_quality_lines()
         
         message = (
             f"📈 <b>Статистика системы</b>\n\n"
             f"<b>Пользователи:</b>\n"
             f"⏳ Ожидают утверждения: {len(pending_users)}\n"
             f"👑 Администраторов: {len(all_admins)}\n\n"
-            f"<b>Качество (неделя{period_label}):</b>\n"
-            f"📞 Всего звонков: {quality_summary.get('total_calls', 0)}\n"
-            f"❌ Пропущено: {quality_summary.get('missed_calls', 0)} "
-            f"({quality_summary.get('missed_rate', 0):.1f}%)\n"
-            f"⭐ Средний скор: {quality_summary.get('avg_score', 0):.1f}\n"
-            f"🎯 Лиды / Записи: {quality_summary.get('booked_leads', 0)}\n"
-            f"🟡 Лиды без записи: {quality_summary.get('leads_no_record', 0)}\n"
-            f"✅ Конверсия: {quality_summary.get('lead_conversion', 0):.1f}%\n"
-            f"♻️ Отмен: {quality_summary.get('cancellations', 0)}"
+            f"<b>Качество по периодам:</b>\n"
+            f"{quality_lines}"
         )
         
         keyboard = [
@@ -104,6 +76,50 @@ class AdminStatsHandler:
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='HTML'
         )
+
+    async def _collect_quality_lines(self) -> str:
+        today = datetime.now().date()
+        period_configs = [
+            ("За последние 24 часа", 1),
+            ("За 7 дней", 7),
+            ("За 14 дней", 14),
+            ("За 30 дней", 30),
+            ("За 180 дней", 180),
+        ]
+        blocks = []
+        for label, days in period_configs:
+            try:
+                start_date = today if days == 1 else today - timedelta(days=days - 1)
+                summary = await self.metrics.calculate_quality_summary(
+                    start_date=start_date.isoformat(),
+                    end_date=today.isoformat(),
+                )
+                blocks.append(self._format_quality_summary(label, summary))
+            except Exception as exc:
+                logger.error("Failed to calculate quality summary for %s: %s", label, exc)
+                blocks.append(f"{label}: данные временно недоступны.")
+        return "\n\n".join(blocks)
+
+    def _format_quality_summary(self, label: str, summary: dict) -> str:
+        start_label = summary.get("start_date")
+        end_label = summary.get("end_date")
+        try:
+            start_fmt = datetime.fromisoformat(start_label).strftime("%d.%m.%Y") if start_label else "?"
+            end_fmt = datetime.fromisoformat(end_label).strftime("%d.%m.%Y") if end_label else "?"
+        except ValueError:
+            start_fmt = start_label or "?"
+            end_fmt = end_label or "?"
+        lines = [
+            f"{label} ({start_fmt} — {end_fmt}):",
+            f"📞 Всего звонков: {summary.get('total_calls', 0)}",
+            f"❌ Пропущено: {summary.get('missed_calls', 0)} ({summary.get('missed_rate', 0):.1f}%)",
+            f"⭐ Средний скор: {summary.get('avg_score', 0):.1f}",
+            f"🎯 Лиды / Записи: {summary.get('booked_leads', 0)}",
+            f"🟡 Лиды без записи: {summary.get('leads_no_record', 0)}",
+            f"✅ Конверсия: {summary.get('lead_conversion', 0):.1f}%",
+            f"♻️ Отмен: {summary.get('cancellations', 0)}",
+        ]
+        return "\n".join(lines)
 
 
 def register_admin_stats_handlers(
