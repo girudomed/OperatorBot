@@ -4,6 +4,8 @@
 Хендлеры для управления пользователями (approve/decline/block).
 """
 
+from typing import Optional
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
