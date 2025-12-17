@@ -22,3 +22,20 @@ async def test_sync_new_uses_call_history_created_at():
     assert "call_history ch" in query
     assert "ch.created_at" in query
     assert "cs.history_id" in query
+
+
+@pytest.mark.asyncio
+async def test_sync_new_uses_null_for_missing_ml_columns():
+    fake_db = AsyncMock()
+    fake_db.execute_with_retry = AsyncMock(return_value=0)
+
+    service = CallAnalyticsSyncService(fake_db)
+    service._schema_checked = True
+    service._schema_valid = True
+
+    await service.sync_new(since_date=date(2025, 1, 1), batch_size=10)
+
+    query = fake_db.execute_with_retry.await_args.kwargs.get("query") or fake_db.execute_with_retry.await_args.args[0]
+    assert "NULL AS ml_p_record" in query
+    assert "NULL AS ml_score_pred" in query
+    assert "NULL AS ml_p_complaint" in query
