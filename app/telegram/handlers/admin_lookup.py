@@ -8,12 +8,11 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
 from app.telegram.middlewares.permissions import PermissionsManager
-from app.telegram.handlers.call_lookup import CALL_LOOKUP_CALLBACK_PREFIX
+from app.telegram.utils.callback_data import AdminCB
 from app.utils.error_handlers import log_async_exceptions
 from app.logging_config import get_watchdog_logger
 from app.telegram.utils.logging import describe_user
 from app.telegram.utils.messages import safe_edit_message
-from app.telegram.utils.callback_data import AdminCB
 
 logger = get_watchdog_logger(__name__)
 
@@ -63,25 +62,25 @@ class AdminLookupHandler:
                 [
                     InlineKeyboardButton(
                         "📅 За день",
-                        callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:daily",
+                        callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "ask", "daily"),
                     )
                 ],
                 [
                     InlineKeyboardButton(
                         "📆 За неделю",
-                        callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:weekly",
+                        callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "ask", "weekly"),
                     )
                 ],
                 [
                     InlineKeyboardButton(
                         "📊 За 2 недели",
-                        callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:biweekly",
+                        callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "ask", "biweekly"),
                     )
                 ],
                 [
                     InlineKeyboardButton(
                         "🗓 За месяц",
-                        callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:monthly",
+                        callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "ask", "monthly"),
                     )
                 ],
                 [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))],
