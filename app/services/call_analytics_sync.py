@@ -165,6 +165,9 @@ class CallAnalyticsSyncService:
             operator_name_expr = (
                 "COALESCE(cs.called_info, ch.answered_extension, 'Unknown')"
             )
+            ml_p_record_expr = "NULL AS ml_p_record"
+            ml_score_pred_expr = "NULL AS ml_score_pred"
+            ml_p_complaint_expr = "NULL AS ml_p_complaint"
             query = f"""
                 INSERT INTO call_analytics (
                     call_scores_id,
@@ -193,9 +196,9 @@ class CallAnalyticsSyncService:
                     cs.call_category,
                     cs.call_score,
                     COALESCE(cs.talk_duration, ch.talk_duration) AS talk_duration,
-                    cs.ml_p_record,
-                    cs.ml_score_pred,
-                    cs.ml_p_complaint,
+                    {ml_p_record_expr},
+                    {ml_score_pred_expr},
+                    {ml_p_complaint_expr},
                     NOW()
                 FROM mangoapi_db.call_history ch
                 INNER JOIN mangoapi_db.call_scores cs ON cs.history_id = ch.history_id
