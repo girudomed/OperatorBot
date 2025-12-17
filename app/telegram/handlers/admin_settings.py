@@ -23,6 +23,7 @@ from app.logging_config import get_watchdog_logger
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.telegram.utils.messages import safe_edit_message, MAX_MESSAGE_CHUNK
 from app.telegram.utils.logging import describe_user
+from app.telegram.utils.callback_data import AdminCB
 from app.utils.error_handlers import log_async_exceptions
 from app.workers.task_worker import start_workers, stop_workers
 
@@ -82,7 +83,7 @@ class AdminSettingsHandler:
                     "🧹 Очистить кеш", callback_data="admin:settings:cleanup"
                 ),
             ],
-            [InlineKeyboardButton("◀️ Назад", callback_data="admin:back")],
+            [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))],
         ]
 
         await safe_edit_message(

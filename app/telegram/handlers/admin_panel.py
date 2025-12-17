@@ -138,7 +138,7 @@ class AdminPanelHandler:
                     callback_data=AdminCB.create(AdminCB.LM_MENU)
                 ),
                 InlineKeyboardButton(
-                    "📈 Статистика", callback_data=AdminCB.create(AdminCB.STATS)
+                    "📈 Статистика", callback_data="admin:stats"
                 )
             ],
             [
@@ -363,19 +363,8 @@ class AdminPanelHandler:
         keyboard = [
             [
                 InlineKeyboardButton(
-                    "👥 Пользователи", callback_data=AdminCB.create(AdminCB.USERS, AdminCB.LIST, AdminCB.STATUS_PENDING)
-                ),
-                InlineKeyboardButton(
-                    "👑 Администраторы", callback_data=AdminCB.create(AdminCB.ADMINS, AdminCB.LIST)
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    "📈 Статистика", callback_data=AdminCB.create(AdminCB.STATS)
-                ),
-                InlineKeyboardButton(
                     "📂 Расшифровки", callback_data=AdminCB.create(AdminCB.LOOKUP)
-                ),
+                )
             ],
             [InlineKeyboardButton("🔄 Обновить", callback_data=AdminCB.create(AdminCB.DASHBOARD))],
             [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))],

@@ -751,11 +751,12 @@ class AdminRepository:
                     slug = self._normalize_role_slug(display_name_db)
                 if not slug:
                     slug = f"role_{role_id}" if role_id is not None else "role_unknown"
+                normalized_slug = slug or self._normalize_role_slug(display_name_db or "")
                 display_name = role_display_name_from_name(
-                    display_name_db or slug or ""
+                    normalized_slug or ""
                 )
                 if not display_name:
-                    display_name = f"Роль {role_id}" if role_id is not None else "Без роли"
+                    display_name = display_name_db or (f"Роль {role_id}" if role_id is not None else "Без роли")
                 role_breakdown[slug] = {
                     'display': display_name,
                     'total': int(role_row.get('total_count') or 0),

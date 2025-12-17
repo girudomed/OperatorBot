@@ -17,6 +17,7 @@ from app.utils.error_handlers import log_async_exceptions
 from app.core.roles import role_name_from_id, resolve_role_slug_display
 from app.telegram.utils.logging import describe_user
 from app.telegram.utils.messages import safe_edit_message
+from app.telegram.utils.callback_data import AdminCB
 
 logger = get_watchdog_logger(__name__)
 
@@ -124,7 +125,7 @@ class AdminAdminsHandler:
             ]
         )
         keyboard.append(
-            [InlineKeyboardButton("◀️ Назад", callback_data="admin:back")]
+            [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]
         )
 
         await safe_edit_message(
@@ -392,7 +393,7 @@ class AdminAdminsHandler:
         keyboard.append(
             [InlineKeyboardButton("◀️ К списку", callback_data=self._build_list_callback(page))]
         )
-        keyboard.append([InlineKeyboardButton("🏠 В панель", callback_data="admin:back")])
+        keyboard.append([InlineKeyboardButton("🏠 В панель", callback_data=AdminCB.create(AdminCB.BACK))])
 
         await safe_edit_message(
             query,

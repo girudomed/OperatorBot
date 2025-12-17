@@ -545,6 +545,7 @@ class _CallLookupHandlers:
                 context,
                 chat_id,
                 "Режим поиска звонков закрыт.",
+                reply_markup=self._lookup_menu_keyboard(user.id, user.username),
             )
     @log_async_exceptions
     async def handle_phone_input(
@@ -623,7 +624,11 @@ class _CallLookupHandlers:
         )
         self._remember_request(context, chat_id, request)
         context.user_data.pop(self._pending_storage_key(chat_id), None)
-        await self._safe_reply_text(message, "Режим поиска звонков завершён.")
+        await self._safe_reply_text(
+            message,
+            "Режим поиска звонков завершён.",
+            reply_markup=self._lookup_menu_keyboard(user.id, user.username),
+        )
 
     async def _is_allowed(self, user_id: int, username: Optional[str] = None) -> bool:
         # Supremes/devs всегда имеют доступ
@@ -752,28 +757,29 @@ class _CallLookupHandlers:
 
         return phone, (period or "monthly")
 
-    async def _send_usage_hint(self, message: Message) -> None:
-        text = (
-            "📂 <b>Расшифровки</b>\n\n"
-            "Выберите период, после чего введите номер телефона — бот покажет расшифровки "
-            "по нужному пациенту. Если нужно выйти из режима, нажмите кнопку «Назад»."
-        )
-        keyboard = [
+    def _lookup_menu_keyboard(self, *_: Any, **__: Any) -> InlineKeyboardMarkup:
+        buttons = [
             [
                 InlineKeyboardButton(
-                    "Daily",
+                    "📅 За день",
                     callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:daily",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "Weekly",
+                    "📆 За неделю",
                     callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:weekly",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "Monthly",
+                    "📊 За 2 недели",
+                    callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:biweekly",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🗓 За месяц",
                     callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:monthly",
                 )
             ],
@@ -784,10 +790,18 @@ class _CallLookupHandlers:
                 )
             ],
         ]
+        return InlineKeyboardMarkup(buttons)
+
+    async def _send_usage_hint(self, message: Message) -> None:
+        text = (
+            "📂 <b>Расшифровки</b>\n\n"
+            "Выберите период, после чего введите номер телефона — бот покажет расшифровки "
+            "по нужному пациенту. Если нужно выйти из режима, нажмите кнопку «Назад»."
+        )
         await self._safe_reply_text(
             message,
             text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            reply_markup=self._lookup_menu_keyboard(),
             parse_mode="HTML",
         )
 

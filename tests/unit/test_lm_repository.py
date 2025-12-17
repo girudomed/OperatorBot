@@ -291,6 +291,26 @@ class TestLMRepository:
         assert results[0]['avg_value'] == 72.5
 
     @pytest.mark.asyncio
+    async def test_get_group_metrics(self, lm_repo, mock_db_manager):
+        """Test aggregated metrics by group shortcut."""
+        mock_rows = [
+            {
+                'metric_code': 'conversion_score',
+                'avg_value': 75,
+                'min_value': 50,
+                'max_value': 90,
+                'count_value': 10,
+            }
+        ]
+        mock_db_manager.execute_with_retry.return_value = mock_rows
+
+        result = await lm_repo.get_group_metrics('conversion', days=3)
+
+        assert 'conversion_score' in result
+        assert result['conversion_score']['avg'] == 75.0
+        assert result['conversion_score']['count'] == 10
+
+    @pytest.mark.asyncio
     async def test_delete_lm_values_by_call(self, lm_repo, mock_db_manager):
         """Test deleting LM values for a call."""
         mock_db_manager.execute_with_retry.return_value = 5  # 5 records deleted

@@ -151,7 +151,7 @@ class LMRepository:
         logger.info(f"Saved {saved_count}/{len(values)} LM values")
         return saved_count
     
-    async def get_aggregated_metrics(
+    async def get_group_metrics(
         self,
         metric_group: str,
         days: int = 7

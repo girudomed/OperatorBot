@@ -47,6 +47,25 @@ class TestPermissionsManager:
         
         role = await permissions.get_user_role(123)
         assert role is None
+
+    @pytest.mark.asyncio
+    async def test_get_effective_role_prefers_db_role(self, permissions, mock_db, monkeypatch):
+        """Даже для bootstrap админа используется роль из БД."""
+        monkeypatch.setattr('app.telegram.middlewares.permissions.SUPREME_ADMIN_ID', '123')
+        mock_db.execute_with_retry.return_value = {
+            'role_id': 4,
+            'status': 'approved'
+        }
+        role = await permissions.get_effective_role(123, username="founder_dev")
+        assert role == 'developer'
+
+    @pytest.mark.asyncio
+    async def test_get_effective_role_fallbacks_without_db(self, permissions, mock_db, monkeypatch):
+        """Если пользователя нет в БД, используется роль bootstrap."""
+        monkeypatch.setattr('app.telegram.middlewares.permissions.SUPREME_ADMIN_ID', '123')
+        mock_db.execute_with_retry.return_value = None
+        role = await permissions.get_effective_role(123, username="founder_dev")
+        assert role == 'founder'
     
     def test_is_supreme_admin_by_id(self, permissions, monkeypatch):
         """Тест проверки supreme admin по ID."""
@@ -88,6 +107,18 @@ class TestPermissionsManager:
         """Pending не допускается в /admin."""
         mock_db.execute_with_retry.return_value = {'role_id': 2, 'status': 'pending'}
         assert await permissions.can_access_admin_panel(123) is False
+    
+    @pytest.mark.asyncio
+    async def test_can_manage_users_for_admin(self, permissions, mock_db):
+        """Admin может управлять пользователями."""
+        mock_db.execute_with_retry.return_value = {'role_id': 2, 'status': 'approved'}
+        assert await permissions.can_manage_users(123) is True
+
+    @pytest.mark.asyncio
+    async def test_can_manage_users_denied_for_operator(self, permissions, mock_db):
+        """Оператор не может управлять пользователями."""
+        mock_db.execute_with_retry.return_value = {'role_id': 1, 'status': 'approved'}
+        assert await permissions.can_manage_users(123) is False
 
     @pytest.mark.asyncio
     async def test_can_access_call_lookup_operator(self, permissions, mock_db):

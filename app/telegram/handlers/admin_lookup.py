@@ -57,23 +57,29 @@ class AdminLookupHandler:
             keyboard = [
                 [
                     InlineKeyboardButton(
-                        "Daily",
+                        "📅 За день",
                         callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:daily",
                     )
                 ],
                 [
                     InlineKeyboardButton(
-                        "Weekly",
+                        "📆 За неделю",
                         callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:weekly",
                     )
                 ],
                 [
                     InlineKeyboardButton(
-                        "Monthly",
+                        "📊 За 2 недели",
+                        callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:biweekly",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🗓 За месяц",
                         callback_data=f"{CALL_LOOKUP_CALLBACK_PREFIX}:ask:monthly",
                     )
                 ],
-                [InlineKeyboardButton("◀️ Назад", callback_data="admin:back")],
+                [InlineKeyboardButton("◀️ Назад", callback_data="adm:back")],
             ]
 
             await safe_edit_message(
@@ -88,7 +94,7 @@ class AdminLookupHandler:
                 query,
                 text="⚠️ Не удалось открыть раздел «Расшифровки». Попробуйте снова чуть позже.",
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("◀️ Назад", callback_data="admin:back")]]
+                    [[InlineKeyboardButton("◀️ Назад", callback_data="adm:back")]]
                 ),
             )
 
@@ -99,6 +105,6 @@ def register_admin_lookup_handlers(
 ):
     handler = AdminLookupHandler(permissions)
     application.add_handler(
-        CallbackQueryHandler(handler.show_lookup_entry, pattern=r"^admin:lookup")
+        CallbackQueryHandler(handler.show_lookup_entry, pattern=r"^(admin:lookup|adm:lk)$")
     )
     logger.info("Admin lookup handlers registered")

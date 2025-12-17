@@ -16,6 +16,7 @@ from app.logging_config import get_watchdog_logger
 from app.utils.error_handlers import log_async_exceptions
 from app.utils.rate_limit import rate_limit_hit
 from app.telegram.utils.messages import safe_edit_message
+from app.telegram.utils.callback_data import AdminCB
 
 logger = get_watchdog_logger(__name__)
 
@@ -67,7 +68,7 @@ class AdminStatsHandler:
         
         keyboard = [
             [InlineKeyboardButton("🔄 Обновить", callback_data="admin:stats")],
-            [InlineKeyboardButton("◀️ Назад", callback_data="admin:back")]
+            [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]
         ]
         
         await safe_edit_message(

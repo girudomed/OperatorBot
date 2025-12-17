@@ -75,7 +75,7 @@ class AdminLMHandler:
         
         try:
             # Получаем агрегированные данные
-            metrics = await self.lm_repo.get_aggregated_metrics(
+            metrics = await self.lm_repo.get_group_metrics(
                 metric_group='operational',
                 days=7
             )
@@ -115,7 +115,7 @@ class AdminLMHandler:
         await query.answer()
         
         try:
-            metrics = await self.lm_repo.get_aggregated_metrics(
+            metrics = await self.lm_repo.get_group_metrics(
                 metric_group='conversion',
                 days=7
             )
@@ -154,7 +154,7 @@ class AdminLMHandler:
         await query.answer()
         
         try:
-            metrics = await self.lm_repo.get_aggregated_metrics(
+            metrics = await self.lm_repo.get_group_metrics(
                 metric_group='forecast',
                 days=7
             )
@@ -294,7 +294,7 @@ class AdminLMHandler:
         await query.answer()
         
         try:
-            metrics = await self.lm_repo.get_aggregated_metrics(
+            metrics = await self.lm_repo.get_group_metrics(
                 metric_group='quality',
                 days=7
             )
@@ -340,8 +340,8 @@ class AdminLMHandler:
         
         try:
             # Получаем метрики по всем группам
-            operational = await self.lm_repo.get_aggregated_metrics('operational', 7)
-            conversion = await self.lm_repo.get_aggregated_metrics('conversion', 7)
+            operational = await self.lm_repo.get_group_metrics('operational', 7)
+            conversion = await self.lm_repo.get_group_metrics('conversion', 7)
             risks = await self.lm_repo.get_risk_summary(7)
             
             resp_speed = operational.get('response_speed_score', {}).get('avg', 0)

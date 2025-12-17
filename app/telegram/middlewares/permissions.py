@@ -568,6 +568,16 @@ class PermissionsManager:
         Требуется role >= admin.
         """
         return await self.is_admin(user_id, username)
+
+    async def can_manage_users(self, user_id: int, username: Optional[str] = None) -> bool:
+        """
+        Проверяет, может ли пользователь управлять учетками (approve/decline/block).
+        """
+        if self.is_supreme_admin(user_id, username) or self.is_dev_admin(user_id, username):
+            return True
+        await self._ensure_roles_loaded()
+        role = await self.get_user_role(user_id)
+        return role in self._admin_roles
     
     async def can_view_all_operators(self, user_id: int, username: Optional[str] = None) -> bool:
         """
@@ -604,13 +614,14 @@ class PermissionsManager:
         """
         Получает эффективную роль с учетом bootstrap админов.
         """
+        role = await self.get_user_role(user_id)
+        if role:
+            return role
         if self.is_supreme_admin(user_id, username):
             return 'founder'
         if self.is_dev_admin(user_id, username):
             return 'developer'
-        
-        role = await self.get_user_role(user_id)
-        return role if role else 'operator'
+        return 'operator'
 
     async def check_permission(self, role_name: Role, required_permission: str) -> bool:
         """
