@@ -33,6 +33,7 @@ from app.utils.error_handlers import (
 )
 
 from app.db.manager import DatabaseManager
+from app.db.repositories.lm_repository import LMRepository
 from app.db.utils_schema import validate_schema
 from app.telegram.middlewares.permissions import PermissionsManager
 
