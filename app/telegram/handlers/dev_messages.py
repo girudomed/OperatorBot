@@ -264,7 +264,8 @@ class DevMessagesHandler:
             # MessageHandler для перехвата текстовых сообщений (должен быть последним)
             MessageHandler(
                 filters.TEXT & ~filters.COMMAND,
-                self._combined_message_handler
+                self._combined_message_handler,
+                block=False,
             )
         ]
     
