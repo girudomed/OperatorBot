@@ -32,7 +32,6 @@ REPORT_COMMAND = "report"
 REPORT_CALLBACK_PREFIX = "reports"
 REPORT_PERMISSION = "report"
 OPERATORS_PAGE_SIZE = 8
-ADMIN_REPORT_ROLES = {"admin", "head_of_registry", "superadmin", "developer", "founder", "marketing_director"}
 
 
 def register_report_handlers(
@@ -52,7 +51,7 @@ def register_report_handlers(
     application.bot_data["report_handler"] = handler
     application.add_handler(
         MessageHandler(
-            filters.Regex(r"(?i)отч[её]ты"),
+            filters.Regex(r"^📊\\s*Отч[её]ты$"),
             handler.handle_reports_button,
         )
     )
@@ -109,17 +108,15 @@ class _ReportHandler:
         }
 
         try:
-            role = await self.permissions_manager.get_effective_role(
-                user.id, user.username
-            )
+            can_manage = await self.permissions_manager.can_manage_users(user.id, user.username)
         except Exception:
             logger.exception(
-                "report: не удалось определить роль пользователя",
+                "report: не удалось определить права пользователя",
                 extra={"user_id": user.id, "username": user.username},
             )
             await message.reply_text(DB_ERROR_MESSAGE)
             return
-        if role in ADMIN_REPORT_ROLES:
+        if can_manage:
             logger.info(
                 "Админ %s запрашивает отчёт (period=%s, date_range=%s)",
                 describe_user(user),
@@ -129,7 +126,10 @@ class _ReportHandler:
             await self._show_operator_keyboard(message, page=0)
             return
 
-        is_allowed = await self.permissions_manager.check_permission(role, REPORT_PERMISSION)
+        is_allowed = await self.permissions_manager.check_permission(
+            await self.permissions_manager.get_effective_role(user.id, user.username),
+            REPORT_PERMISSION,
+        )
         if not is_allowed:
             await message.reply_text("У вас нет прав для генерации отчёта.")
             logger.warning(
@@ -154,29 +154,24 @@ class _ReportHandler:
             return
 
         await query.answer()
-        parts = query.data.split(":")
-        if len(parts) < 2:
+        cb = unpack(query.data)
+        if cb.prefix != REPORT_CALLBACK_PREFIX:
             return
 
-        action = parts[1]
+        action = cb.parts[0] if cb.parts else None
         if action == "page":
-            page = int(parts[2]) if len(parts) > 2 else 0
+            page = int(cb.parts[1]) if len(cb.parts) > 1 else 0
             await self._show_operator_keyboard(query, page=page, edit=True)
             return
 
         if action == "select":
-            if len(parts) < 4:
+            if len(cb.parts) < 2:
                 await query.answer("Некорректные данные", show_alert=True)
                 return
             try:
-                target_user_id = int(parts[2])
-                extension = parts[3]
+                target_user_id = int(cb.parts[1])
             except ValueError as exc:
-                logger.warning(
-                    "report callback получил некорректные данные '%s': %s",
-                    parts,
-                    exc,
-                )
+                logger.warning("Некорректный target_id в report callback '%s': %s", cb.parts, exc)
                 await query.answer("Некорректный оператор", show_alert=True)
                 return
 
@@ -196,7 +191,6 @@ class _ReportHandler:
                 header="Генерация отчёта…",
                 period=period,
                 date_range=date_range,
-                extension=extension,
             )
 
     async def _show_operator_keyboard(self, target, page: int = 0, edit: bool = False):

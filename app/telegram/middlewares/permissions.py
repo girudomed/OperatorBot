@@ -36,12 +36,12 @@ Status = Literal['pending', 'approved', 'blocked']
 # Настройка прав приложения по умолчанию (fallback, если не удалось загрузить из БД)
 DEFAULT_APP_PERMISSIONS: Dict[str, Set[str]] = {
     'operator': {'call_lookup', 'weekly_quality', 'report'},
-    'admin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'report', 'all_stats'},
-    'head_of_registry': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats'},
-    'marketing_director': {'call_lookup', 'weekly_quality', 'report', 'all_stats'},
-    'superadmin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats', 'debug'},
-    'developer': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats', 'debug'},
-    'founder': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats', 'debug'},
+    'admin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'report', 'all_stats', 'commands'},
+    'head_of_registry': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats', 'commands'},
+    'marketing_director': {'call_lookup', 'weekly_quality', 'report', 'all_stats', 'commands'},
+    'superadmin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats', 'debug', 'commands'},
+    'developer': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats', 'debug', 'commands'},
+    'founder': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats', 'debug', 'commands'},
 }
 
 DEFAULT_ROLE_MATRIX: Dict[int, Dict[str, Any]] = {

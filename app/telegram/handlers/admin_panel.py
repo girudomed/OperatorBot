@@ -98,24 +98,26 @@ class AdminPanelHandler:
         """Отображает главное меню админ-панели."""
         user = update.effective_user
         counters = None
-        role_slug: Optional[str] = None
         allow_commands = False
         try:
             counters = await self.admin_repo.get_users_counters()
         except Exception as exc:
             logger.error("Не удалось получить счётчики пользователей: %s", exc)
         try:
-            role_slug = await self.permissions.get_effective_role(user.id, user.username)
-            allow_commands = role_slug not in {"operator", "admin"}
+            allow_commands = await self.permissions.has_permission(
+                user.id,
+                "commands",
+                user.username,
+            )
         except Exception:
-            logger.warning("Не удалось определить роль пользователя %s", describe_user(user))
+            logger.warning("Не удалось определить права пользователя %s", describe_user(user))
 
         roles_summary = self._build_roles_summary(counters)
 
         keyboard = [
             [
                 InlineKeyboardButton(
-                    "📊 Dashboard", callback_data=AdminCB.create(AdminCB.DASHBOARD)
+                    "📊 Дашборд", callback_data=AdminCB.create(AdminCB.DASHBOARD)
                 )
             ],
             [
@@ -154,7 +156,7 @@ class AdminPanelHandler:
             keyboard.append(
                 [
                     InlineKeyboardButton(
-                        "📑 Команды", callback_data="admin:command:list" # Keep legacy or migrate later
+                        "📑 Команды", callback_data=AdminCB.create(AdminCB.COMMANDS)
                     )
                 ]
             )
@@ -217,91 +219,113 @@ class AdminPanelHandler:
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Роутер для callback-запросов админ-панели."""
         query = update.callback_query
+        if not query:
+            return
         await query.answer()
 
-        # 1. Попытка распарсить новый формат
-        cb_action, cb_args = AdminCB.parse(query.data)
-        
-        # 2. Если не вышло — пробуем легаси
-        section, action, payload = None, None, None
-        if not cb_action:
-            section, action, payload = self._parse_callback(query.data)
-        
+        data = query.data or ""
+        cb_action, cb_args = AdminCB.parse(data)
+
         user = update.effective_user
         logger.info(
-            "Admin callback: action=%s args=%s (legacy: sec=%s act=%s)",
+            "Admin callback: action=%s args=%s data=%s",
             cb_action,
             cb_args,
-            section,
-            action,
-            extra={"user_id": user.id},
+            data,
+            extra={"user_id": user.id if user else None},
         )
 
-        # Mapping or direct handling
-        # Dashboard
-        if cb_action == AdminCB.DASHBOARD or section == "dashboard":
+        if cb_action:
+            handled = await self._handle_new_callback(cb_action, cb_args, update, context)
+            if not handled:
+                await self._handle_unknown_callback(query)
+            return
+
+        handled = await self._handle_legacy_callback(data, update, context)
+        if handled:
+            return
+
+        await self._handle_unknown_callback(query)
+
+    async def _handle_new_callback(
+        self,
+        action: str,
+        args: List[str],
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> bool:
+        if action == AdminCB.DASHBOARD:
             await self._show_dashboard(update, context)
-            return
-
-        # Users list
-        if cb_action == AdminCB.USERS:
-             # args: [LIST, status] or [DETAILS, status, page, id] etc.
-             # This is handled in admin_users.py usually?
-             # Wait, admin_panel generates links to users, but admin_users.py HANDLES them.
-             # So admin_panel just creates the button.
-             # BUT here we might handle simple navigation if needed.
-             # admin_panel handles "users:list:pending" ? 
-             # No, register_admin_users_handlers does that. 
-             # We just need to ensure generic "Back" or "Menu" works.
-             pass
-
-        # Back / Menu
-        if cb_action in (AdminCB.BACK, AdminCB.LM_MENU) or section in ("back", "menu"):
+            return True
+        if action == AdminCB.BACK:
             await self._show_main_menu(update, context)
-            return
-            
-        # LM Metrics (New)
-        if cb_action == AdminCB.LM_MENU and not section:
-            # If we want to show LM menu, we need the handler.
-            # But wait, AdminLMHandler is separate.
-            # If AdminLMHandler is registered on "adm:lm", it will catch it?
-            # Yes, if we registered it properly. 
-            # Check register_admin_lm_handlers pattern.
-            pass
+            return True
+        if action == AdminCB.COMMANDS:
+            await self._show_command_shortcuts(update, context)
+            return True
+        if action == AdminCB.COMMAND:
+            payload = args[1] if len(args) > 1 else None
+            await self._handle_command_action(args[0] if args else None, payload, update, context)
+            return True
+        return False
 
-        # Commands shortcuts
-        if cb_action == "cmd" or section == "commands": # AdminCB doesn't have CMD yet?
-             # Let's say AdminCB.COMMANDS = "cmds"
-             await self._show_command_shortcuts(update, context)
-             return
-             
-        # Legacy fallback logic
+    async def _handle_legacy_callback(
+        self,
+        data: str,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> bool:
+        section, action, payload = self._parse_callback(data)
+        if not section:
+            return False
+        if section == "dashboard":
+            await self._show_dashboard(update, context)
+            return True
+        if section in ("back", "menu"):
+            await self._show_main_menu(update, context)
+            return True
+        if section == "commands":
+            await self._show_command_shortcuts(update, context)
+            return True
         if section == "command":
             await self._handle_command_action(action, payload, update, context)
-            return
+            return True
+        return False
+
+    async def _handle_unknown_callback(self, query) -> None:
+        await query.answer("Неизвестная команда", show_alert=True)
+        await safe_edit_message(
+            query,
+            text="❓ Команда не поддерживается. Вернитесь в меню.",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("🏠 В меню", callback_data=AdminCB.create(AdminCB.BACK))]]
+            ),
+            parse_mode="HTML",
+        )
 
     async def _show_dashboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показывает dashboard с основными метриками."""
         query = update.callback_query
         user = update.effective_user
-        user_id = user.id if user else 0
-        if user_id and rate_limit_hit(
-            context.application.bot_data,
-            user_id,
+        if not query:
+            return
+        if await self._rate_limit(
+            query,
+            context,
             "admin_dashboard",
-            cooldown_seconds=2.0,
+            cooldown=2.0,
+            alert_text="Слишком часто обновляете. Подождите пару секунд.",
         ):
-            await query.answer("Слишком часто обновляете. Подождите пару секунд.", show_alert=True)
             return
         
         # Получаем статистику
         try:
             counters = await self.admin_repo.get_users_counters()
         except Exception as exc:
-            logger.error("Не удалось загрузить Dashboard: %s", exc)
+            logger.error("Не удалось загрузить дашборд: %s", exc)
             await safe_edit_message(
                 query,
-                text="⚠️ Не удалось загрузить Dashboard.\nПопробуйте снова чуть позже.",
+                text="⚠️ Не удалось загрузить дашборд.\nПопробуйте снова чуть позже.",
                 reply_markup=InlineKeyboardMarkup(
                     [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]]
                 ),
@@ -319,14 +343,14 @@ class AdminPanelHandler:
         roles_summary = self._build_roles_summary(counters)
 
         logger.info(
-            "Dashboard открыт пользователем %s (pending=%s admins=%s)",
+            "Дашборд открыт пользователем %s (pending=%s admins=%s)",
             describe_user(user),
             pending_count,
             admin_count,
         )
         
         message = (
-            f"📊 <b>Dashboard</b>\n\n"
+            f"📊 <b>Дашборд</b>\n\n"
             f"👥 Всего пользователей: <b>{total_users}</b>\n"
             f"⏳ Pending: <b>{pending_count}</b>\n"
             f"✅ Approved: <b>{approved_count}</b>\n"
@@ -373,6 +397,14 @@ class AdminPanelHandler:
             return
         if not await self._has_commands_access(user.id, user.username):
             await query.answer("Недостаточно прав", show_alert=True)
+            return
+        if await self._rate_limit(
+            query,
+            context,
+            "admin_commands_menu",
+            cooldown=1.5,
+            alert_text="Слишком часто открываете меню. Подождите немного.",
+        ):
             return
         text = (
             "📑 <b>Команды бота</b>\n"
@@ -437,8 +469,15 @@ class AdminPanelHandler:
         )
 
     async def _has_commands_access(self, user_id: int, username: Optional[str]) -> bool:
-        role_slug = await self.permissions.get_effective_role(user_id, username)
-        return role_slug not in {"operator", "admin"}
+        try:
+            return await self.permissions.has_permission(
+                user_id,
+                "commands",
+                username,
+            )
+        except Exception:
+            logger.warning("Не удалось проверить доступ к командам для %s", user_id)
+            return False
 
     async def _handle_command_action(
         self,
@@ -455,24 +494,36 @@ class AdminPanelHandler:
             await query.answer("Недостаточно прав", show_alert=True)
             return
         if action == "weekly_quality":
+            if await self._rate_limit(query, context, "admin_weekly_quality", 2.0):
+                return
             await self._run_weekly_quality(query, context)
             return
         if action == "report":
+            if await self._rate_limit(query, context, "admin_ai_report", 2.0):
+                return
             await self._open_report_flow(update, context)
             return
         if action == "admins":
+            if await self._rate_limit(query, context, "admin_list_admins", 1.5):
+                return
             await self._show_admins_list(query)
             return
         if action == "set_role":
+            if await self._rate_limit(query, context, "admin_set_role_list", 1.5):
+                return
             await self._show_set_role_users(query, 0)
             return
         if action == "set_role_page":
             page = int(payload or "0")
+            if await self._rate_limit(query, context, "admin_set_role_page", 1.0):
+                return
             await self._show_set_role_users(query, page)
             return
         if action == "set_role_select":
             if not payload:
                 await query.answer("Некорректный пользователь", show_alert=True)
+                return
+            if await self._rate_limit(query, context, "admin_set_role_detail", 1.0):
                 return
             await self._show_set_role_detail(query, int(payload))
             return
@@ -480,26 +531,29 @@ class AdminPanelHandler:
             if not payload:
                 await query.answer("Нет данных", show_alert=True)
                 return
+            if await self._rate_limit(
+                query,
+                context,
+                "admin_set_role_assign",
+                cooldown=6.0,
+                alert_text="Недавно изменяли роли. Подождите несколько секунд.",
+            ):
+                return
             user_part, role_part = payload.split("|", 1)
             await self._assign_role_from_panel(query, int(user_part), role_part)
             return
         if action == "maintenance_alert":
+            if await self._rate_limit(
+                query,
+                context,
+                "admin_maintenance_alert",
+                cooldown=8.0,
+                alert_text="Слишком часто отправляете оповещения. Сделайте паузу.",
+            ):
+                return
             await self._send_maintenance_alert(query, context)
             return
         await query.answer("Команда в разработке", show_alert=True)
-
-    def _callback(
-        self,
-        section: str,
-        action: Optional[str] = None,
-        payload: Optional[str] = None,
-    ) -> str:
-        parts = [ADMIN_PREFIX, section]
-        if action:
-            parts.append(action)
-        if payload:
-            parts.append(str(payload))
-        return ":".join(parts)
 
     async def _run_weekly_quality(self, query, context: ContextTypes.DEFAULT_TYPE) -> None:
         service = context.application.bot_data.get("weekly_quality_service")
@@ -514,7 +568,7 @@ class AdminPanelHandler:
                 query,
                 text="❌ Не удалось построить отчёт качества.",
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("◀️ Назад", callback_data=self._callback("commands"))]]
+                    [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.COMMANDS))]]
                 ),
             )
             return
@@ -522,10 +576,10 @@ class AdminPanelHandler:
             [
                 [
                     InlineKeyboardButton(
-                        "🔄 Обновить", callback_data=self._callback("command", "weekly_quality")
+                        "🔄 Обновить", callback_data=AdminCB.create(AdminCB.COMMAND, "weekly_quality")
                     )
                 ],
-                [InlineKeyboardButton("◀️ Назад", callback_data=self._callback("commands"))],
+                [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.COMMANDS))],
             ]
         )
         await safe_edit_message(
@@ -550,7 +604,7 @@ class AdminPanelHandler:
                 query,
                 text="👑 Нет администраторов в системе.",
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("◀️ Назад", callback_data=self._callback("commands"))]]
+                    [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.COMMANDS))]]
                 ),
             )
             return
@@ -567,35 +621,46 @@ class AdminPanelHandler:
             query,
             text=text,
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("◀️ Назад", callback_data=self._callback("commands"))]]
+                [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.COMMANDS))]]
             ),
             parse_mode="HTML",
         )
 
     async def _show_set_role_users(self, query, page: int) -> None:
-        users = await self.admin_repo.get_all_users(status_filter="approved")
-        if not users:
+        page_size = 8
+        page = max(0, page)
+        offset = page * page_size
+        users, total = await self.admin_repo.get_users_page(
+            status_filter="approved",
+            limit=page_size,
+            offset=offset,
+        )
+        total_pages = max(1, (total + page_size - 1) // page_size) if total else 1
+        if total and not users and page > 0:
+            page = total_pages - 1
+            offset = page * page_size
+            users, total = await self.admin_repo.get_users_page(
+                status_filter="approved",
+                limit=page_size,
+                offset=offset,
+            )
+        if total == 0:
             await safe_edit_message(
                 query,
                 text="Нет утверждённых пользователей.",
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("◀️ Назад", callback_data=self._callback("commands"))]]
+                    [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.COMMANDS))]]
                 ),
             )
             return
-        page_size = 8
-        total_pages = max(1, (len(users) + page_size - 1) // page_size)
-        page = max(0, min(page, total_pages - 1))
-        start = page * page_size
-        end = start + page_size
         keyboard: List[List[InlineKeyboardButton]] = []
-        for user in users[start:end]:
+        for user in users:
             keyboard.append(
                 [
                     InlineKeyboardButton(
                         user.get("full_name") or f"#{user.get('id')}",
-                        callback_data=self._callback(
-                            "command", "set_role_select", str(user.get("id"))
+                        callback_data=AdminCB.create(
+                            AdminCB.COMMAND, "set_role_select", str(user.get("id"))
                         ),
                     )
                 ]
@@ -604,18 +669,18 @@ class AdminPanelHandler:
         if page > 0:
             nav_row.append(
                 InlineKeyboardButton(
-                    "⬅️", callback_data=self._callback("command", "set_role_page", str(page - 1))
+                    "⬅️", callback_data=AdminCB.create(AdminCB.COMMAND, "set_role_page", str(page - 1))
                 )
             )
         if page < total_pages - 1:
             nav_row.append(
                 InlineKeyboardButton(
-                    "➡️", callback_data=self._callback("command", "set_role_page", str(page + 1))
+                    "➡️", callback_data=AdminCB.create(AdminCB.COMMAND, "set_role_page", str(page + 1))
                 )
             )
         if nav_row:
             keyboard.append(nav_row)
-        keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data=self._callback("commands"))])
+        keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.COMMANDS))])
         await safe_edit_message(
             query,
             text="🧩 <b>Выберите пользователя для смены роли</b>",
@@ -650,8 +715,8 @@ class AdminPanelHandler:
                 [
                     InlineKeyboardButton(
                         display,
-                        callback_data=self._callback(
-                            "command", "set_role_assign", f"{user_id}|{slug}"
+                        callback_data=AdminCB.create(
+                            AdminCB.COMMAND, "set_role_assign", f"{user_id}|{slug}"
                         ),
                     )
                 ]
@@ -664,7 +729,7 @@ class AdminPanelHandler:
             [
                 InlineKeyboardButton(
                     "◀️ Назад к списку",
-                    callback_data=self._callback("command", "set_role"),
+                    callback_data=AdminCB.create(AdminCB.COMMAND, "set_role"),
                 )
             ]
         )
@@ -733,9 +798,30 @@ class AdminPanelHandler:
                 )
         await query.answer(f"Сообщение отправлено ({sent})", show_alert=True)
 
+    async def _rate_limit(
+        self,
+        query,
+        context: ContextTypes.DEFAULT_TYPE,
+        key: str,
+        cooldown: float,
+        alert_text: str = "Слишком часто выполняете действие. Попробуйте позже.",
+    ) -> bool:
+        user = query.from_user if query else None
+        if not user:
+            return False
+        if rate_limit_hit(
+            context.application.bot_data,
+            user.id,
+            key,
+            cooldown_seconds=cooldown,
+        ):
+            await query.answer(alert_text, show_alert=True)
+            return True
+        return False
+
     def _parse_callback(self, data: str) -> Tuple[str, Optional[str], Optional[str]]:
         if not data.startswith(f"{ADMIN_PREFIX}:"):
-            return data, None, None
+            return "", None, None
         parts = data.split(":")
         section = parts[1] if len(parts) > 1 else None
         action = parts[2] if len(parts) > 2 else None
@@ -786,7 +872,7 @@ def register_admin_panel_handlers(
     
     # Callback handlers
     application.add_handler(
-        CallbackQueryHandler(handler.handle_callback, pattern=r"^(admin:(dashboard|back|menu|commands|command)|adm:(dsh|back|lm|cmds|cmd))")
+        CallbackQueryHandler(handler.handle_callback, pattern=r"^(admin:(dashboard|back|menu|commands|command)|adm:(dsh|back|cmds|cmd))")
     )
 
     logger.info("Admin panel handlers registered")

@@ -11,7 +11,7 @@
 import asyncio
 import json
 import traceback
-from typing import List, Optional, Dict, Any, Set
+from typing import List, Optional, Dict, Any, Set, Tuple
 from datetime import datetime
 
 from app.db.manager import DatabaseManager
@@ -635,6 +635,56 @@ class AdminRepository:
             return []
     
     @log_async_exceptions
+    async def get_users_page(
+        self,
+        status_filter: Optional[str],
+        limit: int,
+        offset: int,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        Возвращает страницу пользователей с общим количеством.
+        """
+        logger.info(
+            "[ADMIN_REPO] Getting users page (status=%s, limit=%s, offset=%s)",
+            status_filter,
+            limit,
+            offset,
+        )
+        try:
+            normalized = (status_filter or "").strip().lower() or None
+            where_clause = "WHERE LOWER(u.status) = %s" if normalized else ""
+            filter_params: List[Any] = [normalized] if normalized else []
+            data_query = """
+                {base}
+                {where}
+                ORDER BY u.id DESC
+                LIMIT %s OFFSET %s
+            """.format(base=self.USER_FIELDS_BASE, where=where_clause)
+            data_params = tuple(filter_params + [max(1, limit), max(0, offset)])
+            count_query = f"SELECT COUNT(*) AS total FROM UsersTelegaBot u {where_clause}"
+            count_params = tuple(filter_params) if filter_params else None
+            
+            rows = await self.db.execute_with_retry(
+                data_query,
+                params=data_params,
+                fetchall=True,
+            ) or []
+            total_row = await self.db.execute_with_retry(
+                count_query,
+                params=count_params,
+                fetchone=True,
+            ) or {}
+            total = int(total_row.get("total") or 0)
+            return self._attach_role_names(rows), total
+        except Exception as exc:  # pragma: no cover - БД ошибки логируем
+            logger.error(
+                "[ADMIN_REPO] Error getting users page: %s\n%s",
+                exc,
+                traceback.format_exc(),
+            )
+            return [], 0
+    
+    @log_async_exceptions
     async def get_users_counters(self) -> Dict[str, Any]:
         """
         Возвращает счётчики пользователей для Dashboard.
@@ -809,11 +859,18 @@ class AdminRepository:
         """Получает внутренний ID пользователя по Telegram ID."""
         if not telegram_id:
             return None
-        row = await self.db.execute_with_retry(
-            "SELECT id FROM UsersTelegaBot WHERE user_id = %s",
-            params=(telegram_id,),
-            fetchone=True
-        )
+        try:
+            row = await self.db.execute_with_retry(
+                "SELECT id FROM UsersTelegaBot WHERE user_id = %s",
+                params=(telegram_id,),
+                fetchone=True
+            )
+        except Exception as exc:  # pragma: no cover - зависит от БД
+            logger.exception(
+                "[ADMIN_REPO] Failed to get internal id for telegram_id=%s",
+                telegram_id,
+            )
+            return None
         if row:
             return row['id'] if isinstance(row, dict) else row[0]
         return None

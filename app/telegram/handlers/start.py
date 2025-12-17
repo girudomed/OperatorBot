@@ -6,6 +6,8 @@
 Короткие сообщения, role-based клавиатуры, БЕЗ списков команд.
 """
 
+import html
+from typing import Dict
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler
 
@@ -13,7 +15,8 @@ from app.db.manager import DatabaseManager
 from app.db.repositories.users import UserRepository
 from app.db.repositories.roles import RolesRepository
 from app.core.roles import role_name_from_id, role_display_name_from_name
-from app.telegram.utils.keyboard_builder import KeyboardBuilder
+from app.telegram.keyboards.reply_main import ReplyMainKeyboardBuilder
+from app.telegram.keyboards.exceptions import KeyboardPermissionsError
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.logging_config import get_watchdog_logger
 from app.utils.error_handlers import log_async_exceptions
@@ -29,7 +32,7 @@ class StartHandler:
         self.db_manager = db_manager
         self.user_repo = UserRepository(db_manager)
         self.roles_repo = RolesRepository(db_manager)
-        self.keyboard_builder = KeyboardBuilder(self.roles_repo)
+        self.keyboard_builder = ReplyMainKeyboardBuilder(self.roles_repo)
         self.permissions = PermissionsManager(db_manager)
     
     @log_async_exceptions
@@ -47,122 +50,154 @@ class StartHandler:
         is_supreme = self.permissions.is_supreme_admin(user_id, username)
         is_dev = self.permissions.is_dev_admin(user_id, username)
         
-        user_ctx = context.user_data.get("user_ctx")
-        if not user_ctx:
-            try:
-                user_ctx = await self.user_repo.get_user_context_by_telegram_id(user_id)
-                if user_ctx:
-                    context.user_data["user_ctx"] = user_ctx
-            except Exception:
-                logger.exception(
-                    "[START] Ошибка чтения пользователя",
-                    extra={"user_id": user_id, "username": username},
-                )
-                await update.message.reply_text(DB_ERROR_MESSAGE)
-                return
-        
-        if not user_ctx:
-            await update.message.reply_text(
-                f"👋 Добро пожаловать, {user_name}!\n\n"
-                "Вы не зарегистрированы в системе.\n"
-                "Используйте /register для регистрации."
+        try:
+            user_ctx = await self.user_repo.get_user_context_by_telegram_id(user_id)
+        except Exception:
+            logger.exception(
+                "[START] Ошибка чтения пользователя",
+                extra={"user_id": user_id, "username": username},
             )
+            await update.message.reply_text(DB_ERROR_MESSAGE)
+            return
+        
+        effective_message = update.effective_message
+        safe_user_name = html.escape(user_name or "пользователь")
+
+        if not user_ctx:
+            if effective_message:
+                await effective_message.reply_text(
+                    f"👋 Добро пожаловать, <b>{safe_user_name}</b>!\n\n"
+                    "Вы не зарегистрированы в системе.\n"
+                    "Используйте /register для регистрации.",
+                    parse_mode="HTML",
+                )
             return
         
         status = (user_ctx.get('status') or '').lower()
         
         if status == 'pending':
-            await update.message.reply_text(
-                f"👋 Здравствуйте, {user_name}!\n\n"
-                "⏳ Ваша заявка ожидает одобрения администратором.\n\n"
-                "Вы получите уведомление когда доступ будет предоставлен."
-            )
+            if effective_message:
+                await effective_message.reply_text(
+                    f"👋 Здравствуйте, <b>{safe_user_name}</b>!\n\n"
+                    "⏳ Ваша заявка ожидает одобрения администратором.\n\n"
+                    "Вы получите уведомление когда доступ будет предоставлен.",
+                    parse_mode="HTML",
+                )
             return
         
         if status == 'blocked':
-            await update.message.reply_text(
-                "❌ Ваш доступ к боту заблокирован.\n\n"
-                "Для разъяснений обратитесь к администратору."
-            )
+            if effective_message:
+                await effective_message.reply_text(
+                    "❌ Ваш доступ к боту заблокирован.\n\n"
+                    "Для разъяснений обратитесь к администратору.",
+                    parse_mode="HTML",
+                )
             return
         
         # Approved пользователь
         role_id = int(user_ctx.get('role_id') or 1)
         role_slug = (user_ctx.get('role_name') or role_name_from_id(role_id)).lower()
+        perms: Dict[str, bool] = {}
         try:
-            role_name = role_display_name_from_name(role_slug)
-            perms = {
-                'can_view_own_stats': bool(user_ctx.get('can_view_own_stats')),
-                'can_view_all_stats': bool(user_ctx.get('can_view_all_stats')),
-                'can_manage_users': bool(user_ctx.get('can_manage_users')),
-                'can_debug': bool(user_ctx.get('can_debug')),
-            }
+            role_display = role_display_name_from_name(role_slug)
+            perms = self._build_effective_permissions(user_ctx, is_supreme, is_dev)
             keyboard = await self.keyboard_builder.build_main_keyboard(
-                role_id, is_supreme, is_dev, perms_override=perms
+                role_id, perms_override=perms
             )
+        except KeyboardPermissionsError as exc:
+            if effective_message:
+                await effective_message.reply_text(
+                    "❌ Временная ошибка доступа. Попробуйте позже.",
+                    parse_mode="HTML",
+                    reply_markup=exc.fallback_keyboard,
+                )
+            return
         except Exception:
             logger.exception(
                 "[START] Ошибка получения данных роли",
                 extra={"user_id": user_id, "role_id": role_id},
             )
-            await update.message.reply_text(DB_ERROR_MESSAGE)
+            if effective_message:
+                await effective_message.reply_text(DB_ERROR_MESSAGE, parse_mode="HTML")
             return
         
-        # Сообщение в зависимости от роли
+        safe_role_name = html.escape(role_display)
+        message = self._build_role_message(safe_user_name, safe_role_name, perms)
+
+        if effective_message:
+            await effective_message.reply_text(
+                message,
+                parse_mode='HTML',
+                reply_markup=keyboard
+            )
+        
+        logger.info(f"[START] Sent welcome for {user_id}, role={role_slug}")
+    
+    def _build_effective_permissions(
+        self,
+        user_ctx: Dict[str, bool],
+        is_supreme: bool,
+        is_dev: bool,
+    ) -> Dict[str, bool]:
+        perms = {
+            'can_view_own_stats': bool(user_ctx.get('can_view_own_stats')),
+            'can_view_all_stats': bool(user_ctx.get('can_view_all_stats')),
+            'can_manage_users': bool(user_ctx.get('can_manage_users')),
+            'can_debug': bool(user_ctx.get('can_debug')),
+        }
         if is_supreme or is_dev:
-            message = (
-                f"👋 Добро пожаловать, **{user_name}**!\n\n"
-                f"🔱 Вы авторизованы как **{'Founder' if is_supreme else 'Developer'}**.\n\n"
-                "Доступен **полный контроль** всех функций системы.\n\n"
+            perms.update({
+                'can_view_own_stats': True,
+                'can_view_all_stats': True,
+                'can_manage_users': True,
+                'can_debug': True,
+            })
+        return perms
+    
+    @staticmethod
+    def _build_role_message(
+        safe_user_name: str,
+        safe_role_name: str,
+        perms: Dict[str, bool],
+    ) -> str:
+        if perms.get('can_debug'):
+            return (
+                f"👋 Добро пожаловать, <b>{safe_user_name}</b>!\n\n"
+                f"🔧 Вы авторизованы как <b>{safe_role_name}</b>.\n\n"
+                "Доступны:\n"
+                "• ⚙️ Системные функции\n"
+                "• 👥 Управление пользователями\n"
+                "• 📊 Отчёты по всем операторам\n"
+                "• 🔍 Поиск звонков\n\n"
                 "⚠️ Опасные операции требуют подтверждения."
             )
-        elif role_slug in ('founder', 'developer', 'superadmin'):
-            message = (
-                f"👋 Добро пожаловать, **{user_name}**!\n\n"
-                f"👑 Вы авторизованы как **{role_name}**.\n\n"
-                "Доступны:\n"
-                "• 📊 Отчёты по всем операторам\n"
-                "• 🔍 Поиск звонков\n"
-                "• 👥 Управление пользователями и ролями\n"
-                "• ⚙️ Системные функции\n\n"
-                "Используйте кнопки ниже для навигации."
-            )
-        elif perms.get('can_manage_users'):  # Админские роли
-            message = (
-                f"👋 Добро пожаловать, **{user_name}**!\n\n"
-                f"🛡️ Вы авторизованы как **{role_name}**.\n\n"
+        if perms.get('can_manage_users'):
+            return (
+                f"👋 Добро пожаловать, <b>{safe_user_name}</b>!\n\n"
+                f"🛡️ Вы авторизованы как <b>{safe_role_name}</b>.\n\n"
                 "Доступны:\n"
                 "• 📊 Отчёты и статистика\n"
                 "• 🔍 Поиск звонков\n"
                 "• 👥 Управление пользователями\n\n"
-                "Для настройки доступов → «Пользователи и роли»."
+                "Для настройки доступов откройте «Пользователи и роли»."
             )
-        elif perms.get('can_view_all_stats'):  # Руководство/маркетинг
-            message = (
-                f"👋 Добро пожаловать, **{user_name}**!\n\n"
-                f"📊 Вы авторизованы как **{role_name}**.\n\n"
+        if perms.get('can_view_all_stats'):
+            return (
+                f"👋 Добро пожаловать, <b>{safe_user_name}</b>!\n\n"
+                f"📊 Вы авторизованы как <b>{safe_role_name}</b>.\n\n"
                 "Доступны:\n"
                 "• 📊 Отчёты по всем операторам\n"
                 "• 🔍 Поиск звонков\n\n"
                 "Начните с раздела «Отчёты» или «Поиск звонка»."
             )
-        else:  # Оператор
-            message = (
-                f"👋 Добро пожаловать, **{user_name}**!\n\n"
-                f"👤 Вы авторизованы как **{role_name}**.\n\n"
-                "Доступны:\n"
-                "• 📊 Моя статистика\n"
-                "• 🔍 Мои звонки\n\n"
-                "Используйте кнопки ниже."
-            )
-        
-        await update.message.reply_text(
-            message,
-            parse_mode='Markdown',
-            reply_markup=keyboard
+        return (
+            f"👋 Добро пожаловать, <b>{safe_user_name}</b>!\n\n"
+            f"👤 Вы авторизованы как <b>{safe_role_name}</b>.\n\n"
+            "Доступны:\n"
+            "• 📊 Моя статистика\n"
+            "• 🔍 Мои звонки\n\n"
+            "Используйте кнопки ниже."
         )
-        
-        logger.info(f"[START] Sent welcome for {user_id}, role={role_slug}")
     
     def get_handler(self):
         """Получить CommandHandler для регистрации."""

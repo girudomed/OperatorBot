@@ -217,9 +217,9 @@ def register_admin_settings_handlers(
 ) -> None:
     handler = AdminSettingsHandler(admin_repo, permissions)
     application.add_handler(
-        CallbackQueryHandler(handler.show_settings_menu, pattern=r"^admin:settings$")
+        CallbackQueryHandler(handler.show_settings_menu, pattern=r"^(admin:settings|adm:set)$")
     )
     application.add_handler(
-        CallbackQueryHandler(handler.handle_settings_action, pattern=r"^admin:settings:")
+        CallbackQueryHandler(handler.handle_settings_action, pattern=r"^(admin:settings:|adm:set:)")
     )
     logger.info("Admin settings handlers registered")

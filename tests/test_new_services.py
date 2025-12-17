@@ -407,39 +407,56 @@ class ServiceTester:
         logger.info("=" * 70)
         
         try:
-            from app.telegram.utils.keyboard_builder import KeyboardBuilder
             from app.db.repositories.roles import RolesRepository
-            
-            roles_repo = RolesRepository(self.db_manager)
-            builder = KeyboardBuilder(roles_repo)
-            
-            # 8.1: Build main keyboard
-            try:
-                keyboard = await builder.build_main_keyboard(role_id=1)
-                assert keyboard is not None
-                self.log_test("KeyboardBuilder.build_main_keyboard", True)
-            except Exception as e:
-                self.log_test("KeyboardBuilder.build_main_keyboard", False, str(e))
-            
-            # 8.2: Build reports menu
-            try:
-                menu = builder.build_reports_menu(can_view_all=True)
-                assert menu is not None
-                self.log_test("KeyboardBuilder.build_reports_menu", True)
-            except Exception as e:
-                self.log_test("KeyboardBuilder.build_reports_menu", False, str(e))
-            
-            # 8.3: Build other menus
-            try:
-                builder.build_call_lookup_menu()
-                builder.build_users_management_menu()
-                builder.build_system_menu()
-                self.log_test("KeyboardBuilder.other_menus", True)
-            except Exception as e:
-                self.log_test("KeyboardBuilder.other_menus", False, str(e))
-            
+            from app.telegram.keyboards.reply_main import ReplyMainKeyboardBuilder
+            from app.telegram.keyboards.inline_reports import (
+                build_reports_menu,
+                build_call_lookup_menu,
+            )
+            from app.telegram.keyboards.inline_users import (
+                build_users_management_menu,
+                build_approval_buttons,
+                build_confirmation_buttons,
+            )
+            from app.telegram.keyboards.inline_system import build_system_menu
         except ImportError as e:
             self.log_test("KeyboardBuilder IMPORT", False, str(e))
+            return
+        
+        roles_repo = RolesRepository(self.db_manager)
+        builder = ReplyMainKeyboardBuilder(roles_repo)
+        
+        # 8.1: Build main keyboard
+        try:
+            keyboard = await builder.build_main_keyboard(role_id=1, perms_override={
+                'can_view_own_stats': True,
+                'can_view_all_stats': False,
+                'can_manage_users': False,
+                'can_debug': False,
+            })
+            assert keyboard is not None
+            self.log_test("KeyboardBuilder.build_main_keyboard", True)
+        except Exception as e:
+            self.log_test("KeyboardBuilder.build_main_keyboard", False, str(e))
+        
+        # 8.2: Build reports menu
+        try:
+            menu = build_reports_menu(can_view_all=True)
+            assert menu is not None
+            build_call_lookup_menu()
+            self.log_test("KeyboardBuilder.build_reports_menu", True)
+        except Exception as e:
+            self.log_test("KeyboardBuilder.build_reports_menu", False, str(e))
+        
+        # 8.3: Build other menus
+        try:
+            build_users_management_menu()
+            build_approval_buttons(user_id=1)
+            build_confirmation_buttons(action="test", target_id=1)
+            build_system_menu()
+            self.log_test("KeyboardBuilder.other_menus", True)
+        except Exception as e:
+            self.log_test("KeyboardBuilder.other_menus", False, str(e))
     
     # ========================================================================
     # MAIN TEST RUNNER

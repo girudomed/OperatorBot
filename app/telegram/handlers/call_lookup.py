@@ -78,7 +78,7 @@ def register_call_lookup_handlers(
     )
     application.add_handler(
         MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
+            filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
             handler.handle_phone_input,
             block=False,
         )
@@ -128,10 +128,26 @@ class _CallLookupHandlers:
         )
         return fallback
 
+    @staticmethod
+    def _mask_phone(value: Optional[str]) -> str:
+        digits = re.sub(r"\D", "", value or "")
+        if not digits:
+            return "—"
+        masked = "*" * max(0, len(digits) - 4) + digits[-4:]
+        if value and value.strip().startswith("+"):
+            masked = "+" + masked.lstrip("*")
+        return masked
+
+    def _pending_storage_key(self, chat_id: int) -> str:
+        return f"{self._pending_key}:{chat_id}"
+
+    def _last_request_storage_key(self, chat_id: int) -> str:
+        return f"{self._last_request_key}:{chat_id}"
+
     def _remember_request(
-        self, context: CallbackContext, request: _LookupRequest
+        self, context: CallbackContext, chat_id: int, request: _LookupRequest
     ) -> None:
-        context.user_data[self._last_request_key] = {
+        context.user_data[self._last_request_storage_key(chat_id)] = {
             "phone": request.phone,
             "period": request.period,
             "limit": request.limit,
@@ -140,10 +156,11 @@ class _CallLookupHandlers:
     def _restore_request(
         self,
         context: CallbackContext,
+        chat_id: int,
         *,
         offset: int = 0,
     ) -> Optional[_LookupRequest]:
-        payload = context.user_data.get(self._last_request_key)
+        payload = context.user_data.get(self._last_request_storage_key(chat_id))
         if not isinstance(payload, dict):
             return None
         phone = payload.get("phone")
@@ -203,7 +220,8 @@ class _CallLookupHandlers:
         if not message or not user:
             return
 
-        context.user_data.pop(self._pending_key, None)
+        chat_id = message.chat_id
+        context.user_data.pop(self._pending_storage_key(chat_id), None)
 
         if not await self._is_allowed(user.id, user.username):
             logger.warning(
@@ -237,7 +255,7 @@ class _CallLookupHandlers:
         logger.info(
             "Пользователь %s выполняет /call_lookup (phone=%s, period=%s)",
             describe_user(user),
-            phone,
+            self._mask_phone(phone),
             period,
         )
         try:
@@ -282,7 +300,7 @@ class _CallLookupHandlers:
         )
 
         await self._safe_reply_text(message, text, reply_markup=markup)
-        self._remember_request(context, request)
+        self._remember_request(context, message.chat_id, request)
         logger.info(
             "Пользователь %s получил %s звонков по запросу /call_lookup",
             describe_user(user),
@@ -363,7 +381,7 @@ class _CallLookupHandlers:
 
         if action == "ask":
             period = parts[2] if len(parts) > 2 else "monthly"
-            context.user_data[self._pending_key] = {"period": period}
+            context.user_data[self._pending_storage_key(chat_id)] = {"period": period}
             await self._safe_send_message(
                 context,
                 chat_id,
@@ -391,17 +409,18 @@ class _CallLookupHandlers:
             try:
                 offset_value = max(0, int(parts[2]))
             except ValueError as exc:
-                logger.warning("Некорректный offset '%s' в callback %s: %s", parts[2] if len(parts) > 2 else "?", data, exc)
+                logger.warning("Некорректный offset '%s' в callback %s: %s", parts[2] if len(parts) > 2 else "?", query.data, exc)
                 await query.answer("Некорректный offset", show_alert=True)
                 return
-            restored = self._restore_request(context, offset=offset_value)
+            restored = self._restore_request(context, chat_id, offset=offset_value)
             if not restored:
                 await query.answer("Запрос устарел, выполните поиск заново", show_alert=True)
                 return
             request = restored
             logger.info(
-                "Call lookup пагинация (%s) пользователем %s",
-                request,
+                "Call lookup пагинация (period=%s, offset=%s) пользователем %s",
+                request.period,
+                request.offset,
                 describe_user(user),
             )
             try:
@@ -436,7 +455,7 @@ class _CallLookupHandlers:
                 text=text,
                 markup=markup,
             )
-            self._remember_request(context, request)
+            self._remember_request(context, chat_id, request)
         elif action == "t":
             if len(parts) < 3:
                 await query.answer("Некорректные данные", show_alert=True)
@@ -521,7 +540,7 @@ class _CallLookupHandlers:
                     "Запись недоступна для этого звонка.",
                 )
         elif action == "cancel":
-            context.user_data.pop(self._pending_key, None)
+            context.user_data.pop(self._pending_storage_key(chat_id), None)
             await self._safe_send_message(
                 context,
                 chat_id,
@@ -538,7 +557,8 @@ class _CallLookupHandlers:
         if not message or not user:
             return
 
-        pending = context.user_data.get(self._pending_key)
+        chat_id = message.chat_id
+        pending = context.user_data.get(self._pending_storage_key(chat_id))
         if not pending:
             return
 
@@ -581,7 +601,7 @@ class _CallLookupHandlers:
                 message,
                 self._format_error_text(code),
             )
-            context.user_data.pop(self._pending_key, None)
+            context.user_data.pop(self._pending_storage_key(chat_id), None)
             return
 
         request = _LookupRequest(
@@ -597,12 +617,12 @@ class _CallLookupHandlers:
         )
         await self._safe_send_message(
             context,
-            message.chat_id,
+            chat_id,
             text,
             reply_markup=markup,
         )
-        self._remember_request(context, request)
-        context.user_data.pop(self._pending_key, None)
+        self._remember_request(context, chat_id, request)
+        context.user_data.pop(self._pending_storage_key(chat_id), None)
         await self._safe_reply_text(message, "Режим поиска звонков завершён.")
 
     async def _is_allowed(self, user_id: int, username: Optional[str] = None) -> bool:
@@ -626,7 +646,7 @@ class _CallLookupHandlers:
         period: str,
         request: _LookupRequest,
     ) -> Tuple[str, Optional[InlineKeyboardMarkup]]:
-        normalized_phone = response["normalized_phone"]
+        normalized_phone = self._mask_phone(response.get("normalized_phone"))
         items: List[Dict[str, Any]] = response.get("items", [])
         lines = [
             f"Поиск по номеру: {normalized_phone}",
@@ -641,7 +661,7 @@ class _CallLookupHandlers:
             timestamp = self._format_datetime(item.get("call_time"))
             duration = self._format_duration(item.get("talk_duration"))
             info = f"{item.get('caller_info') or '-'} → {item.get('called_info') or '-'}"
-            patient = item.get("caller_number") or "—"
+            patient = self._mask_phone(item.get("caller_number"))
             piece = (
                 f"{idx}. {timestamp} | {info}\n"
                 f"   Пациент: {patient}\n"

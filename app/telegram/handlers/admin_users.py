@@ -26,6 +26,7 @@ from app.core.roles import role_name_from_id
 from app.telegram.utils.logging import describe_user
 from app.telegram.utils.messages import safe_edit_message
 from app.utils.action_guard import ActionGuard
+from app.utils.rate_limit import rate_limit_hit
 
 logger = get_watchdog_logger(__name__)
 
@@ -45,6 +46,7 @@ class AdminUsersHandler:
         self.default_filter = "pending"
         self.page_size = 10
         self.write_cooldown_seconds = 5.0
+        self.read_cooldown_seconds = 1.5
     
     @log_async_exceptions
     async def open_from_keyboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -88,16 +90,16 @@ class AdminUsersHandler:
         summary = (
             "👥 <b>Пользователи и роли</b>\n\n"
             f"Всего: <b>{total}</b>\n"
-            f"⏳ Pending: <b>{pending}</b>\n"
-            f"✅ Approved: <b>{approved}</b>\n"
-            f"🚫 Blocked: <b>{blocked}</b>\n\n"
+            f"⏳ В ожидании: <b>{pending}</b>\n"
+            f"✅ Одобрены: <b>{approved}</b>\n"
+            f"🚫 Заблокированы: <b>{blocked}</b>\n\n"
             "Выберите раздел:"
         )
         keyboard = [
             [InlineKeyboardButton(f"⏳ Ожидают ({pending})", callback_data=self._build_list_callback("pending"))],
             [InlineKeyboardButton(f"✅ Одобренные ({approved})", callback_data=self._build_list_callback("approved"))],
             [InlineKeyboardButton(f"🚫 Заблокированные ({blocked})", callback_data=self._build_list_callback("blocked"))],
-            [InlineKeyboardButton("◀️ К админ-панели", callback_data="admin:back")],
+            [InlineKeyboardButton("◀️ К админ-панели", callback_data=AdminCB.create(AdminCB.BACK))],
         ]
         
         await message.reply_text(
@@ -162,9 +164,20 @@ class AdminUsersHandler:
     async def show_users_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показывает список пользователей."""
         query = update.callback_query
+        if not query:
+            return
         await query.answer()
+        if await self._rate_limit(
+            query,
+            context,
+            "admin_users_list",
+            self.read_cooldown_seconds,
+            "Слишком часто обновляете список. Подождите немного.",
+        ):
+            return
         
         status_filter, page = self._parse_status_page(query.data)
+        status_label = self._status_label(status_filter)
         logger.info(
             "Админ %s открыл список пользователей (%s)",
             describe_user(update.effective_user),
@@ -172,17 +185,19 @@ class AdminUsersHandler:
             extra={"action": "list_users", "result": "success", "status": status_filter},
         )
         
-        users = await self.admin_repo.get_all_users(status_filter)
-        total = len(users)
-        max_page = max(0, (total - 1) // self.page_size) if total else 0
-        page = min(page, max_page)
-        start = page * self.page_size
-        end = start + self.page_size
-        page_slice = users[start:end]
+        page = max(0, page)
+        limit = self.page_size
+        offset = page * limit
+        page_slice, total = await self.admin_repo.get_users_page(status_filter, limit, offset)
+        max_page = max(0, (total - 1) // limit) if total else 0
+        if total and page > max_page:
+            page = max_page
+            offset = page * limit
+            page_slice, total = await self.admin_repo.get_users_page(status_filter, limit, offset)
         
-        if not users:
-            message = f"📋 Нет пользователей со статусом: {status_filter}"
-            keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="admin:back")]]
+        if total == 0:
+            message = f"📋 Нет пользователей со статусом: {status_label}"
+            keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]]
             logger.info(
                 "Админ %s открыл пустой список пользователей (%s)",
                 describe_user(update.effective_user),
@@ -190,8 +205,10 @@ class AdminUsersHandler:
                 extra={"action": "list_users", "result": "empty", "status": status_filter},
             )
         else:
+            start = page * limit
+            end = start + len(page_slice)
             message = (
-                f"👥 <b>Пользователи ({status_filter})</b>\n"
+                f"👥 <b>Пользователи ({status_label})</b>\n"
                 f"Показано {start + 1}-{min(end, total)} из {total}\n"
             )
             
@@ -232,11 +249,10 @@ class AdminUsersHandler:
             
             # Фильтры
             filters = [
-                InlineKeyboardButton("⏳ Pending", callback_data=self._build_list_callback('pending')),
-                InlineKeyboardButton("✅ Approved", callback_data=self._build_list_callback('approved')),
-                InlineKeyboardButton("🚫 Blocked", callback_data=self._build_list_callback('blocked'))
+                InlineKeyboardButton("⏳ В ожидании", callback_data=self._build_list_callback('pending')),
+                InlineKeyboardButton("✅ Одобрены", callback_data=self._build_list_callback('approved')),
+                InlineKeyboardButton("🚫 Заблокированы", callback_data=self._build_list_callback('blocked'))
             ]
-            keyboard.append(filters)
             keyboard.append(filters)
             keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))])
             logger.info(
@@ -263,12 +279,22 @@ class AdminUsersHandler:
     async def show_user_details(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показывает детали пользователя с кнопками действий."""
         query = update.callback_query
+        if not query:
+            return
         await query.answer()
         
         status_filter, page = self._parse_status_page(query.data)
         user_id = self._extract_user_id(query.data)
         if not user_id:
             await query.answer("❌ Пользователь не найден", show_alert=True)
+            return
+        if await self._rate_limit(
+            query,
+            context,
+            f"admin_user_details:{user_id}",
+            self.read_cooldown_seconds,
+            "Слишком часто открываете карточку. Подождите немного.",
+        ):
             return
 
         logger.info(
@@ -299,14 +325,11 @@ class AdminUsersHandler:
             return
         
         role_info = user.get('role') or {}
-        role_slug = role_info.get('slug') if isinstance(role_info, dict) else None
         role_name = None
         if isinstance(role_info, dict):
             role_name = role_info.get('name') or role_info.get('slug')
         if not role_name:
             role_name = role_name_from_id(user.get('role_id'))
-        if not role_slug:
-            role_slug = role_name_from_id(user.get('role_id')).lower()
         username = user.get('username')
         username_line = f"@{username}" if username else "—"
         extension = user.get('extension') or "—"
@@ -327,34 +350,54 @@ class AdminUsersHandler:
         )
         
         keyboard = []
-        base_callback_suffix = f"{status_filter}:{page}:{user_id}"
         
         if user.get('status') == 'pending':
             keyboard.append([
-                InlineKeyboardButton("✅ Approve", callback_data=AdminCB.create(AdminCB.USERS, AdminCB.APPROVE, base_callback_suffix)),
-                InlineKeyboardButton("❌ Decline", callback_data=AdminCB.create(AdminCB.USERS, AdminCB.DECLINE, base_callback_suffix))
+                InlineKeyboardButton(
+                    "✅ Одобрить",
+                    callback_data=AdminCB.create(
+                        AdminCB.USERS,
+                        AdminCB.APPROVE,
+                        status_filter,
+                        page,
+                        user_id,
+                    ),
+                ),
+                InlineKeyboardButton(
+                    "❌ Отклонить",
+                    callback_data=AdminCB.create(
+                        AdminCB.USERS,
+                        AdminCB.DECLINE,
+                        status_filter,
+                        page,
+                        user_id,
+                    ),
+                ),
             ])
         elif user.get('status') == 'approved':
             keyboard.append([
-                InlineKeyboardButton("🚫 Block", callback_data=AdminCB.create(AdminCB.USERS, AdminCB.BLOCK, base_callback_suffix))
+                InlineKeyboardButton(
+                    "🚫 Заблокировать",
+                    callback_data=AdminCB.create(
+                        AdminCB.USERS,
+                        AdminCB.BLOCK,
+                        status_filter,
+                        page,
+                        user_id,
+                    ),
+                )
             ])
         elif user.get('status') == 'blocked':
             keyboard.append([
-                InlineKeyboardButton("🔓 Unblock", callback_data=AdminCB.create(AdminCB.USERS, AdminCB.UNBLOCK, base_callback_suffix))
-            ])
-
-        can_promote_admin = False
-        if actor and user.get('status') == 'approved' and role_slug == 'operator':
-            can_promote_admin = await self.permissions.can_promote(
-                actor.id,
-                'admin',
-                actor.username,
-            )
-        if can_promote_admin:
-            keyboard.append([
                 InlineKeyboardButton(
-                    "⬆️ Назначить админом",
-                    callback_data=f"admin:admins:promote_admin:{user_id}"
+                    "🔓 Разблокировать",
+                    callback_data=AdminCB.create(
+                        AdminCB.USERS,
+                        AdminCB.UNBLOCK,
+                        status_filter,
+                        page,
+                        user_id,
+                    ),
                 )
             ])
 
@@ -610,6 +653,39 @@ class AdminUsersHandler:
             success,
             extra={"action": "unblock_user", "result": "success" if success else "error", "target_user_id": user_id},
         )
+    
+    def _status_label(self, slug: str) -> str:
+        mapping = {
+            "pending": "ожидают",
+            "approved": "одобрены",
+            "blocked": "заблокированы",
+        }
+        return mapping.get((slug or "").lower(), slug or "—")
+    
+    async def _rate_limit(
+        self,
+        query,
+        context: ContextTypes.DEFAULT_TYPE,
+        key: str,
+        cooldown: float,
+        alert_text: str,
+    ) -> bool:
+        user = query.from_user if query else None
+        if not user:
+            return False
+        if rate_limit_hit(
+            context.application.bot_data,
+            user.id,
+            key,
+            cooldown_seconds=cooldown,
+        ):
+            await query.answer(alert_text, show_alert=True)
+            return True
+        return False
+    
+    def _get_action_guard(self, context: ContextTypes.DEFAULT_TYPE) -> Optional[ActionGuard]:
+        guard = context.application.bot_data.get("action_guard")
+        return guard if isinstance(guard, ActionGuard) else None
 
 
 def register_admin_users_handlers(
@@ -654,6 +730,3 @@ def register_admin_users_handlers(
     )
     
     logger.info("Admin users handlers registered")
-    def _get_action_guard(self, context: ContextTypes.DEFAULT_TYPE) -> Optional[ActionGuard]:
-        guard = context.application.bot_data.get("action_guard")
-        return guard if isinstance(guard, ActionGuard) else None

@@ -84,7 +84,17 @@ class LMRepository:
             lm_version, calc_method, calc_source
         )
         
-        result = await self.db_manager.execute_with_retry(query, params)
+        try:
+            result = await self.db_manager.execute_with_retry(query, params)
+        except Exception as exc:  # pragma: no cover - зависимость от БД
+            logger.exception(
+                "Failed to execute INSERT for LM value %s (history_id=%s)",
+                metric_code,
+                history_id,
+            )
+            raise RuntimeError(
+                f"Database error while saving LM value {metric_code}"
+            ) from exc
         
         # Get the inserted/updated ID
         if result:
@@ -93,11 +103,21 @@ class LMRepository:
             SELECT id FROM lm_value 
             WHERE history_id = %s AND metric_code = %s
             """
-            row = await self.db_manager.execute_with_retry(
-                fetch_query, 
-                (history_id, metric_code), 
-                fetchone=True
-            )
+            try:
+                row = await self.db_manager.execute_with_retry(
+                    fetch_query, 
+                    (history_id, metric_code), 
+                    fetchone=True
+                )
+            except Exception as exc:  # pragma: no cover - зависимость от БД
+                logger.exception(
+                    "Failed to fetch LM value ID for %s (history_id=%s)",
+                    metric_code,
+                    history_id,
+                )
+                raise RuntimeError(
+                    f"Database error while confirming LM value {metric_code}"
+                ) from exc
             if row:
                 logger.debug(f"Saved LM value: {metric_code} for history_id={history_id}")
                 return row['id']
@@ -489,4 +509,3 @@ class LMRepository:
         ) or []
         
         return [dict(row) for row in rows]
-

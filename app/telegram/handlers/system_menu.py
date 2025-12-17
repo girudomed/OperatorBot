@@ -31,9 +31,10 @@ from app.logging_config import get_watchdog_logger
 from app.services.admin_logger import AdminActionLogger
 from app.services.call_analytics_sync import CallAnalyticsSyncService
 from app.telegram.handlers.auth import help_command
+from app.telegram.utils.logging import describe_user
 from app.utils.error_handlers import log_async_exceptions
 from app.telegram.middlewares.permissions import PermissionsManager
-from app.telegram.utils.keyboard_builder import KeyboardBuilder
+from app.telegram.keyboards.inline_system import build_system_menu
 
 logger = get_watchdog_logger(__name__)
 
@@ -56,7 +57,6 @@ class SystemMenuHandler:
         self.db_manager = db_manager
         self.permissions = permissions
         self.roles_repo = RolesRepository(db_manager)
-        self.keyboard_builder = KeyboardBuilder(self.roles_repo)
         self.analytics_service = CallAnalyticsSyncService(db_manager)
         self.action_logger = AdminActionLogger(db_manager)
 
@@ -85,7 +85,7 @@ class SystemMenuHandler:
         await message.reply_text(
             "⚙️ <b>Системные функции</b>\nВыберите действие:",
             parse_mode="HTML",
-            reply_markup=self.keyboard_builder.build_system_menu(include_cache_reset),
+            reply_markup=build_system_menu(include_cache_reset),
         )
 
     @log_async_exceptions
@@ -132,7 +132,7 @@ class SystemMenuHandler:
             await query.edit_message_text(
                 text=text,
                 parse_mode="HTML",
-                reply_markup=self.keyboard_builder.build_system_menu(include_cache_reset),
+                reply_markup=build_system_menu(include_cache_reset),
             )
         except Exception:
             logger.debug("Не удалось обновить сообщение системного меню", exc_info=True)
@@ -170,7 +170,7 @@ class SystemMenuHandler:
 
     async def _collect_recent_errors(self) -> str:
         errors = self._grep_logs(
-            paths=[Path("logs/app.log")],
+            paths=self.LOG_PATHS,
             limit=10,
         )
         if not errors:
@@ -214,11 +214,11 @@ class SystemMenuHandler:
         if not message or not user:
             return
 
-        if not await self._can_use_system(user.id, user.username):
-            await message.reply_text("❌ Доступ запрещён.")
+        if not (self.permissions.is_supreme_admin(user.id, user.username) or self.permissions.is_dev_admin(user.id, user.username)):
+            await message.reply_text("❌ Команда доступна только разработчикам/основателям.")
             return
 
-        errors = self._grep_logs(self.LOG_PATHS, limit=80)
+        errors = self._grep_logs(self.LOG_PATHS, limit=40)
         if not errors:
             await message.reply_text("✅ В логах нет сообщений уровней ERROR/Traceback.")
             return

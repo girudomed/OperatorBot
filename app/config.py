@@ -137,7 +137,12 @@ DEV_ADMIN_ID = os.getenv("DEV_ADMIN_ID")
 DEV_ADMIN_USERNAME = os.getenv("DEV_ADMIN_USERNAME")
 
 # Manual link
-MANUAL_URL = os.getenv(
+_manual_url = os.getenv(
     "MANUAL_URL",
     "https://docs.google.com/document/d/1g2cpa4Pzv6NhZ7hL6bLvo26TF0--KxWlqVnoxvDvpss/edit?usp=sharing",
 )
+MANUAL_URL = (_manual_url or "").strip()
+if not MANUAL_URL:
+    raise RuntimeError(
+        "MANUAL_URL is not configured. Set MANUAL_URL env var with ссылка на мануал."
+    )
