@@ -31,6 +31,7 @@ class CallAnalyticsSyncService:
         self._schema_checked: bool = False
         self._schema_valid: bool = False
         self._history_timestamp_field: str = "ch.created_at"
+        self._current_db_name: Optional[str] = None
     
     async def sync_all(self, batch_size: int = 1000) -> dict:
         """
@@ -207,7 +208,8 @@ class CallAnalyticsSyncService:
                 LIMIT %s
             """
             logger.info(
-                "[ETL] Executing incremental sync using timestamp field %s",
+                "[ETL] Executing incremental sync in DB=%s using timestamp field %s",
+                self._current_db_name or "UNKNOWN",
                 history_timestamp_field,
             )
             logger.debug(
@@ -391,7 +393,8 @@ class CallAnalyticsSyncService:
             fetchone=True,
         )
         current_db = (db_info or {}).get('db')
-        logger.info("[ETL] Schema check for call_history in DB=%s", current_db or "UNKNOWN")
+        self._current_db_name = current_db or "UNKNOWN"
+        logger.info("[ETL] Schema check for call_history in DB=%s", self._current_db_name)
 
         required_columns = ('history_id', 'created_at', 'updated_at')
         placeholders = ", ".join(["%s"] * len(required_columns))
