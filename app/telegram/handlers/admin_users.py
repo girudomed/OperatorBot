@@ -623,7 +623,7 @@ def register_admin_users_handlers(
     # Reply-кнопка «👥 Пользователи и роли»
     application.add_handler(
         MessageHandler(
-            filters.Regex(r"^👥 Пользователи и роли$"),
+            filters.Regex(r"(?i)пользовател.*рол"),
             handler.open_from_keyboard,
         )
     )

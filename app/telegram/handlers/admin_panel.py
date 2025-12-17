@@ -741,8 +741,9 @@ def register_admin_panel_handlers(
     if MessageHandler and filters:
         application.add_handler(
             MessageHandler(
-                filters.Regex(r"^👑 Админ-панель$"),
+                filters.Regex(r"(?i)админ-панел"),
                 handler.admin_command,
+                block=False,
             )
         )
     application.add_handler(CommandHandler("admin", handler.admin_command))

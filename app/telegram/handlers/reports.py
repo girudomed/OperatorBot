@@ -52,7 +52,7 @@ def register_report_handlers(
     application.bot_data["report_handler"] = handler
     application.add_handler(
         MessageHandler(
-            filters.Regex(r"^📊 Отчёты$"),
+            filters.Regex(r"(?i)отч[её]ты"),
             handler.handle_reports_button,
         )
     )

@@ -66,7 +66,7 @@ def register_call_lookup_handlers(
     )
     application.add_handler(
         MessageHandler(
-            filters.Regex(r"^🔍 Поиск звонка$"),
+            filters.Regex(r"(?i)поиск\s+звонка"),
             handler.handle_menu_button,
         )
     )
