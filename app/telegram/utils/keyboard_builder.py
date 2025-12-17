@@ -41,7 +41,16 @@ class KeyboardBuilder:
         """
         logger.debug(f"[KEYBOARD] Building main keyboard for role_id={role_id}")
         
-        perms = perms_override or await self.roles_repo.get_user_permissions(role_id)
+        try:
+            perms = perms_override or await self.roles_repo.get_user_permissions(role_id)
+        except Exception as exc:
+            logger.exception("Не удалось получить права роли %s: %s", role_id, exc)
+            perms = perms_override or {
+                'can_view_own_stats': True,
+                'can_view_all_stats': False,
+                'can_manage_users': False,
+                'can_debug': False,
+            }
         
         keyboard = []
         
@@ -70,12 +79,13 @@ class KeyboardBuilder:
         # Всегда добавляем помощь
         keyboard.append([KeyboardButton("ℹ️ Помощь")])
         keyboard.append([KeyboardButton("📘 Мануал")])
-        
-        return ReplyKeyboardMarkup(
+        reply_keyboard = ReplyKeyboardMarkup(
             keyboard,
             resize_keyboard=True,
             one_time_keyboard=False
         )
+        logger.info("Reply keyboard built for role_id=%s: %s", role_id, keyboard)
+        return reply_keyboard
     
     def build_reports_menu(self, can_view_all: bool) -> InlineKeyboardMarkup:
         """
