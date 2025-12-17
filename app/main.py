@@ -35,6 +35,7 @@ from app.utils.error_handlers import (
 from app.db.manager import DatabaseManager
 from app.db.repositories.lm_repository import LMRepository
 from app.db.utils_schema import validate_schema
+from app.db.repositories.users import UserRepository
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.utils.rate_limit import RateLimiter
 from app.utils.action_guard import ActionGuard
