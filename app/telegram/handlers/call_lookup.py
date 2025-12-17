@@ -28,6 +28,7 @@ from app.telegram.middlewares.permissions import PermissionsManager
 from app.telegram.utils.messages import safe_edit_message
 from app.telegram.utils.callback_data import AdminCB
 from app.logging_config import get_watchdog_logger
+from app.telegram.utils.state import reset_feature_states
 
 CALL_LOOKUP_COMMAND = "call_lookup"
 CALL_LOOKUP_PERMISSION = "call_lookup"
@@ -216,7 +217,7 @@ class _CallLookupHandlers:
             return
 
         chat_id = message.chat_id
-        context.chat_data.pop(self._pending_storage_key(chat_id), None)
+        reset_feature_states(context, chat_id)
 
         if not await self._is_allowed(user.id, user.username):
             logger.warning(
@@ -650,153 +651,6 @@ class _CallLookupHandlers:
             role, CALL_LOOKUP_PERMISSION
         )
 
-    def _build_result_message(
-        self,
-        *,
-        response: Dict[str, Any],
-        period: str,
-        request: _LookupRequest,
-    ) -> Tuple[str, Optional[InlineKeyboardMarkup]]:
-        normalized_phone = self._mask_phone(response.get("normalized_phone"))
-        items: List[Dict[str, Any]] = response.get("items", [])
-        lines = [
-            f"Поиск по номеру: {normalized_phone}",
-            f"Период: {period}",
-        ]
-
-        if not items:
-            lines.append("По заданным параметрам ничего не найдено.")
-            return "\n".join(lines), None
-
-        for idx, item in enumerate(items, start=request.offset + 1):
-            timestamp = self._format_datetime(item.get("call_time"))
-            duration = self._format_duration(item.get("talk_duration"))
-            info = f"{item.get('caller_info') or '-'} → {item.get('called_info') or '-'}"
-            patient = self._mask_phone(item.get("caller_number"))
-            piece = (
-                f"{idx}. {timestamp} | {info}\n"
-                f"   Пациент: {patient}\n"
-                f"   ID: {item.get('history_id')} | Длительность: {duration} | "
-                f"Оценка: {item.get('score') if item.get('score') is not None else '—'}"
-            )
-            lines.append(piece)
-
-        keyboard: List[List[InlineKeyboardButton]] = []
-        for item in items:
-            history_id = item.get("history_id")
-            if not history_id:
-                continue
-            row = [
-                InlineKeyboardButton(
-                    "Расшифровка",
-                    callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "t", history_id)
-                )
-            ]
-            if item.get("record_url"):
-                row.append(
-                    InlineKeyboardButton(
-                        "Запись",
-                        callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "r", history_id)
-                    )
-                )
-            keyboard.append(row)
-
-        pagination_row: List[InlineKeyboardButton] = []
-        prev_offset = max(0, request.offset - request.limit)
-        if request.offset > 0:
-            pagination_row.append(
-                InlineKeyboardButton(
-                    "⬅️ Назад",
-                    callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "p", prev_offset)
-                )
-            )
-        if response["count"] >= request.limit:
-            pagination_row.append(
-                InlineKeyboardButton(
-                    "➡️ Далее",
-                    callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "p", request.offset + request.limit)
-                )
-            )
-        if pagination_row:
-            keyboard.append(pagination_row)
-
-        markup = InlineKeyboardMarkup(keyboard) if keyboard else None
-        return "\n".join(lines), markup
-
-    def _parse_command_args(self, args: List[str]) -> Tuple[str, str]:
-        tokens = [token for token in args if token.strip()]
-        if not tokens:
-            raise ValueError("Добавьте номер телефона.")
-
-        period: Optional[str] = None
-        phone_tokens: List[str] = []
-
-        for token in tokens:
-            if token.startswith("@"):  # игнорируем упоминания бота
-                continue
-            lowered = token.lower()
-            if lowered in PERIOD_CHOICES and period is None:
-                period = lowered
-                continue
-            phone_tokens.append(token)
-
-        if not phone_tokens:
-            raise ValueError("Добавьте номер телефона в команду.")
-
-        phone = "".join(phone_tokens)
-        if not phone.strip():
-            raise ValueError("Добавьте номер телефона в команду.")
-
-        return phone, (period or "monthly")
-
-    def _lookup_menu_keyboard(self, *_: Any, **__: Any) -> InlineKeyboardMarkup:
-        buttons = [
-            [
-                InlineKeyboardButton(
-                    "📅 За день",
-                    callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "ask", "daily"),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "📆 За неделю",
-                    callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "ask", "weekly"),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "📊 За 2 недели",
-                    callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "ask", "biweekly"),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🗓 За месяц",
-                    callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "ask", "monthly"),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "◀️ Назад",
-                    callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "cancel"),
-                )
-            ],
-        ]
-        return InlineKeyboardMarkup(buttons)
-
-    async def _send_usage_hint(self, message: Message) -> None:
-        text = (
-            "📂 <b>Расшифровки</b>\n\n"
-            "Выберите период, после чего введите номер телефона — бот покажет расшифровки "
-            "по нужному пациенту. Если нужно выйти из режима, нажмите кнопку «Назад»."
-        )
-        await self._safe_reply_text(
-            message,
-            text,
-            reply_markup=self._lookup_menu_keyboard(),
-            parse_mode="HTML",
-        )
-
     async def _edit_or_send(
         self,
         *,
@@ -836,7 +690,7 @@ class _CallLookupHandlers:
         offset: int,
     ) -> str:
         safe_offset = max(0, int(offset))
-        return f"{CALL_LOOKUP_CALLBACK_PREFIX}:p:{safe_offset}"
+        return f"{AdminCB.PREFIX}:{AdminCB.CALL_LOOKUP}:p:{safe_offset}"
 
     @staticmethod
     def _format_datetime(value: Any) -> str:

@@ -45,6 +45,7 @@ from app.telegram.middlewares.permissions import PermissionsManager
 from app.logging_config import get_watchdog_logger
 from app.telegram.utils.logging import describe_user
 from app.config import SUPREME_ADMIN_ID, DEV_ADMIN_ID
+from app.telegram.utils.state import reset_feature_states
 
 logger = get_watchdog_logger(__name__)
 
@@ -577,6 +578,8 @@ async def help_bug_callback(
         await query.answer("Доступно только утверждённым пользователям.", show_alert=True)
         return
 
+    # Reset other active text input modes e.g. call_lookup
+    reset_feature_states(context, update.effective_chat.id if update.effective_chat else None)
     context.user_data[BUG_REPORT_KEY] = True
     await query.message.reply_text(
         "Опишите проблему одним сообщением. Напишите «Отмена», чтобы отменить отправку.",
