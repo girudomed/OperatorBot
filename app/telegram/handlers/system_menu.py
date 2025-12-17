@@ -75,6 +75,10 @@ class SystemMenuHandler:
                 "❌ У вас нет доступа к системным действиям. Обратитесь к разработчику."
             )
             return
+        logger.info(
+            "[SYSTEM_MENU] Пользователь %s открыл системное меню",
+            describe_user(user),
+        )
 
         include_cache_reset = self.permissions.is_dev_admin(user.id, user.username)
 

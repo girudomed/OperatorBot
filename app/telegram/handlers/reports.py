@@ -76,6 +76,10 @@ class _ReportHandler:
         await self._start_reports_flow(update, context, period, date_range)
 
     async def handle_reports_button(self, update: Update, context: CallbackContext) -> None:
+        logger.info(
+            "[REPORTS] Пользователь %s нажал кнопку «📊 Отчёты»",
+            describe_user(update.effective_user),
+        )
         await self._start_reports_flow(update, context, period="daily", date_range=None)
 
     async def start_report_flow(

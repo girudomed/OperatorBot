@@ -316,6 +316,10 @@ class _CallLookupHandlers:
         user = update.effective_user
         if not message or not user:
             return
+        logger.info(
+            "[CALL_LOOKUP] Пользователь %s нажал кнопку «🔍 Поиск звонка»",
+            describe_user(user),
+        )
 
         if not await self._is_allowed(user.id, user.username):
             await self._safe_reply_text(
