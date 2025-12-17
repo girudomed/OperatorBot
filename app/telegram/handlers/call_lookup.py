@@ -29,6 +29,8 @@ from app.telegram.utils.messages import safe_edit_message
 from app.telegram.utils.callback_data import AdminCB
 from app.logging_config import get_watchdog_logger
 from app.telegram.utils.state import reset_feature_states
+from app.utils.error_handlers import log_async_exceptions
+from app.telegram.utils.logging import describe_user
 
 CALL_LOOKUP_COMMAND = "call_lookup"
 CALL_LOOKUP_PERMISSION = "call_lookup"
