@@ -433,7 +433,7 @@ class ServiceTester:
                 'can_view_all_stats': False,
                 'can_manage_users': False,
                 'can_debug': False,
-            })
+            }, has_personal_stats=True)
             assert keyboard is not None
             self.log_test("KeyboardBuilder.build_main_keyboard", True)
         except Exception as e:

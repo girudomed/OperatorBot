@@ -4,11 +4,19 @@ from app.telegram.ui.admin import keyboards
 from app.telegram.ui.admin.screens import Screen
 
 
-def render_main_menu_screen(allow_commands: bool) -> Screen:
+def render_main_menu_screen(
+    allow_commands: bool,
+    allow_yandex_tools: bool,
+) -> Screen:
     text = (
         "🏠 <b>Админ-панель</b>\n"
         "Дашборд — главный экран. Остальные разделы вынесены отдельными экранами.\n\n"
         "Выберите следующий шаг:"
     )
-    return Screen(text=text, keyboard=keyboards.main_menu_keyboard(allow_commands))
-
+    return Screen(
+        text=text,
+        keyboard=keyboards.main_menu_keyboard(
+            allow_commands=allow_commands,
+            allow_yandex_tools=allow_yandex_tools,
+        ),
+    )

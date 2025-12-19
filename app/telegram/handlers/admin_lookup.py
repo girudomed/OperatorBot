@@ -1,15 +1,16 @@
 # Файл: app/telegram/handlers/admin_lookup.py
 
 """
-Раздел админ-панели для работы с расшифровками.
+Раздел админ-панели для работы с поиском звонков.
 """
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, ContextTypes
 
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.telegram.utils.callback_data import AdminCB
 from app.utils.error_handlers import log_async_exceptions
+from app.telegram.utils.admin_registry import register_admin_callback_handler
 from app.logging_config import get_watchdog_logger
 from app.telegram.utils.logging import describe_user
 from app.telegram.utils.messages import safe_edit_message
@@ -18,7 +19,7 @@ logger = get_watchdog_logger(__name__)
 
 
 class AdminLookupHandler:
-    """Подсказки и быстрые действия для раздела Расшифровок."""
+    """Подсказки и быстрые действия для раздела поиска звонков."""
 
     def __init__(self, permissions: PermissionsManager):
         self.permissions = permissions
@@ -52,7 +53,7 @@ class AdminLookupHandler:
                 describe_user(user),
             )
             message = (
-                "📂 <b>Расшифровки</b>\n\n"
+                "🔍 <b>Поиск звонков</b>\n\n"
                 "Выберите период, после чего бот попросит ввести номер телефона "
                 "и автоматически выполнит поиск. Никаких команд вручную вводить не нужно.\n\n"
                 "Чтобы выйти из режима, нажмите «Назад»."
@@ -96,7 +97,7 @@ class AdminLookupHandler:
             logger.exception("Не удалось открыть подсказку расшифровок: %s", exc)
             await safe_edit_message(
                 query,
-                text="⚠️ Не удалось открыть раздел «Расшифровки». Попробуйте снова чуть позже.",
+                text="⚠️ Не удалось открыть раздел «Поиск звонков». Попробуйте снова чуть позже.",
                 reply_markup=InlineKeyboardMarkup(
                     [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]]
                 ),
@@ -108,10 +109,5 @@ def register_admin_lookup_handlers(
     permissions: PermissionsManager,
 ):
     handler = AdminLookupHandler(permissions)
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.show_lookup_entry,
-            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.LOOKUP}",
-        )
-    )
+    register_admin_callback_handler(application, AdminCB.LOOKUP, handler.show_lookup_entry)
     logger.info("Admin lookup handlers registered")

@@ -8,6 +8,12 @@ Telegram handlers для Live Dashboard операторов.
 
 from __future__ import annotations
 
+from typing import List, Optional
+
+from typing import List, Optional
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 import traceback
@@ -17,6 +23,8 @@ from app.db.repositories.analytics import AnalyticsRepository
 from app.db.repositories.users import UserRepository
 from app.services.dashboard_cache import DashboardCacheService
 from app.logging_config import get_watchdog_logger
+from app.utils.rate_limit import rate_limit_hit
+from app.core.roles import DEFAULT_ROLE_ID
 
 logger = get_watchdog_logger(__name__)
 
@@ -29,6 +37,9 @@ class DashboardHandler:
         self.analytics_repo = AnalyticsRepository(db_manager)
         self.user_repo = UserRepository(db_manager)
         self.cache_service = DashboardCacheService(db_manager)
+        self._max_aggregated = 30
+        self._rate_limit_seconds = 2.0
+        self._busy_key = "dashboard_busy"
     
     async def dashboard_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
@@ -51,7 +62,7 @@ class DashboardHandler:
                 )
                 return
             
-            role_id = user_record.get('role_id', 1)
+            role_id = int(user_record.get('role_id') or DEFAULT_ROLE_ID)
             operator_name = user_record.get('operator_name')
             
             logger.info(
@@ -59,48 +70,56 @@ class DashboardHandler:
                 f"operator_name={operator_name}"
             )
             
+            is_operator = role_id == DEFAULT_ROLE_ID
+
             # Формируем клавиатуру в зависимости от роли
             keyboard = []
-            
-            # Кнопка "Мой дашборд" доступна всем у кого есть operator_name
+
             if operator_name:
                 keyboard.append([
                     InlineKeyboardButton(
-                        "👤 Моя статистика", 
+                        "👤 Моя статистика",
                         callback_data=f"dash_my_day_{operator_name}"
                     )
                 ])
-                logger.debug(f"[DASHBOARD] Added personal dashboard button for {operator_name}")
-            
-            # Сводный дашборд только для админов и выше (role_id >= 2)
-            if role_id >= 2:
+                logger.debug(
+                    f"[DASHBOARD] Added personal dashboard button for {operator_name}"
+                )
+
+            if not is_operator:
                 keyboard.append([
                     InlineKeyboardButton(
-                        "📊 Сводка по всем", 
+                        "📊 Сводка по всем",
                         callback_data="dash_all_day"
                     )
                 ])
                 keyboard.append([
                     InlineKeyboardButton(
-                        "🔍 Другой оператор", 
+                        "🔍 Другой оператор",
                         callback_data="dash_select_operator"
                     )
                 ])
-                logger.debug(f"[DASHBOARD] Added admin buttons for role_id={role_id}")
-            
+                logger.debug(f"[DASHBOARD] Added leadership buttons for role_id={role_id}")
+
             if not keyboard:
-                logger.warning(
-                    f"[DASHBOARD] User {user_id} has no operator_name and insufficient role. "
-                    f"No dashboard buttons available."
-                )
-                await update.message.reply_text(
-                    "⚠️ У вас нет привязки к оператору.\n"
-                    "Обратитесь к администратору для настройки доступа."
-                )
+                if is_operator:
+                    await update.message.reply_text(
+                        "⚠️ Персональная статистика недоступна: оператор не привязан. "
+                        "Обратитесь к администратору, чтобы закрепить ваш операторский ID."
+                    )
+                    logger.warning(
+                        "[DASHBOARD] Operator %s has no operator binding", user_id
+                    )
+                else:
+                    logger.warning(
+                        f"[DASHBOARD] User {user_id} with role_id={role_id} has no dashboard entries"
+                    )
+                    await update.message.reply_text(
+                        "⚠️ Нет доступных разделов дашборда. Обратитесь к разработчику."
+                    )
                 return
-            
+
             reply_markup = InlineKeyboardMarkup(keyboard)
-            
             await update.message.reply_text(
                 "📊 <b>Аналитика и Статистика</b>\n\n"
                 "Выберите что вы хотите посмотреть:",
@@ -126,7 +145,9 @@ class DashboardHandler:
         await query.answer()
         
         try:
-            data = query.data
+            data = query.data or ""
+            if await self._rate_limit_callback(query, context, data):
+                return
             user_id = update.effective_user.id
             
             logger.info(f"[DASHBOARD] Callback received: user_id={user_id}, data={data}")
@@ -135,17 +156,27 @@ class DashboardHandler:
             parts = data.split('_')
             
             if data.startswith('dash_my_'):
+                if not await self._acquire_guard(context, query):
+                    return
                 # Персональный дашборд
                 period = parts[2]  # day, week, month
                 operator_name = '_'.join(parts[3:])
                 logger.debug(f"[DASHBOARD] Personal dashboard: operator={operator_name}, period={period}")
-                await self._show_single_dashboard(query, operator_name, period)
+                try:
+                    await self._show_single_dashboard(query, operator_name, period)
+                finally:
+                    self._release_guard(context)
             
             elif data.startswith('dash_all_'):
+                if not await self._acquire_guard(context, query):
+                    return
                 # Сводный дашборд
                 period = parts[2]
                 logger.debug(f"[DASHBOARD] Aggregated dashboard: period={period}")
-                await self._show_all_operators_dashboard(query, period)
+                try:
+                    await self._show_all_operators_dashboard(query, period)
+                finally:
+                    self._release_guard(context)
             
             elif data == 'dash_select_operator':
                 # Выбор оператора
@@ -153,6 +184,8 @@ class DashboardHandler:
                 await self._show_operator_selection(query)
             
             elif data.startswith('dash_refresh_'):
+                if not await self._acquire_guard(context, query):
+                    return
                 # Обновление дашборда
                 dashboard_type = parts[2]  # my, all, operator
                 period = parts[3]
@@ -162,12 +195,20 @@ class DashboardHandler:
                     operator_name = '_'.join(parts[4:])
                     # Инвалидируем кеш
                     await self.cache_service.invalidate_cache(operator_name, period)
-                    await self._show_single_dashboard(query, operator_name, period, refresh=True)
+                    try:
+                        await self._show_single_dashboard(query, operator_name, period, refresh=True)
+                    finally:
+                        self._release_guard(context)
                 else:
                     await self.cache_service.invalidate_cache(period_type=period)
-                    await self._show_all_operators_dashboard(query, period, refresh=True)
+                    try:
+                        await self._show_all_operators_dashboard(query, period, refresh=True)
+                    finally:
+                        self._release_guard(context)
             
             elif data.startswith('dash_period_'):
+                if not await self._acquire_guard(context, query):
+                    return
                 # Переключение периода
                 dashboard_type = parts[2]
                 period = parts[3]
@@ -175,9 +216,15 @@ class DashboardHandler:
                 
                 if len(parts) > 4:
                     operator_name = '_'.join(parts[4:])
-                    await self._show_single_dashboard(query, operator_name, period)
+                    try:
+                        await self._show_single_dashboard(query, operator_name, period)
+                    finally:
+                        self._release_guard(context)
                 else:
-                    await self._show_all_operators_dashboard(query, period)
+                    try:
+                        await self._show_all_operators_dashboard(query, period)
+                    finally:
+                        self._release_guard(context)
             
             elif data == 'dash_back':
                 # Возврат в главное меню
@@ -210,6 +257,7 @@ class DashboardHandler:
                 f"[DASHBOARD] Showing single dashboard: operator={operator_name}, "
                 f"period={period}, refresh={refresh}"
             )
+            timestamp = self._current_msk_time()
             
             # Пробуем получить из кеша если не refresh
             dashboard = None
@@ -310,7 +358,10 @@ class DashboardHandler:
             logger.info(f"[DASHBOARD] Showing aggregated dashboard: period={period}, refresh={refresh}")
             
             # Получаем метрики для всех
-            dashboards = await self.analytics_repo.get_live_dashboard_all_operators(period)
+            dashboards, total_count = await self.analytics_repo.get_live_dashboard_all_operators(
+                period,
+                limit=self._max_aggregated,
+            )
             
             if not dashboards:
                 logger.warning(f"[DASHBOARD] No data found for aggregated dashboard, period={period}")
@@ -323,7 +374,12 @@ class DashboardHandler:
             logger.info(f"[DASHBOARD] Found {len(dashboards)} operators for aggregated view")
             
             # Форматируем сообщение
-            message = self._format_all_dashboards(dashboards, period, refresh)
+            message = self._format_all_dashboards(
+                dashboards,
+                period,
+                refresh,
+                total_count=total_count,
+            )
             
             # Кнопки управления
             keyboard = [
@@ -397,6 +453,7 @@ class DashboardHandler:
     def _format_single_dashboard(self, dashboard: dict, refresh: bool = False) -> str:
         """Форматирует данные дашборда для отображения."""
         try:
+            timestamp = self._current_msk_time()
             period_names = {
                 'day': 'за сегодня',
                 'week': 'за неделю',
@@ -419,6 +476,7 @@ class DashboardHandler:
             message = f"""
 📊 <b>Статистика: {operator_name}</b>
 📅 Период: <b>{period_label}</b>
+🕒 Обновлено: <b>{timestamp} МСК</b>
 {"🔄 <i>Данные обновлены</i>" if refresh else ""}
 
 <b>1️⃣ Общая статистика:</b>
@@ -458,9 +516,11 @@ class DashboardHandler:
     
     def _format_all_dashboards(
         self,
-        dashboards: list,
+        dashboards: List[dict],
         period: str,
-        refresh: bool = False
+        refresh: bool = False,
+        *,
+        total_count: Optional[int] = None,
     ) -> str:
         """Форматирует сводный дашборд всех операторов."""
         try:
@@ -477,6 +537,7 @@ class DashboardHandler:
             message = f"""
 📊 <b>Сводная статистика по всем операторам</b>
 📅 Период: <b>{period_label}</b>
+🕒 Обновлено: <b>{timestamp} МСК</b>
 {"🔄 <i>Данные обновлены</i>" if refresh else ""}
 
 """
@@ -512,6 +573,11 @@ class DashboardHandler:
             
             if len(sorted_dashboards) > 10:
                 message += f"\n<i>... и ещё {len(sorted_dashboards) - 10} операторов</i>"
+            if total_count and total_count > len(sorted_dashboards):
+                message += (
+                    f"\n<i>Показаны первые {len(sorted_dashboards)} из {total_count} операторов."
+                    " Остальные скрыты, чтобы не перегружать БД.</i>"
+                )
             
             return message.strip()
         
@@ -531,3 +597,32 @@ class DashboardHandler:
                 pattern='^dash_'
             )
         ]
+    
+    def _current_msk_time(self) -> str:
+        return datetime.now(ZoneInfo("Europe/Moscow")).strftime("%d.%m %H:%M")
+    
+    async def _acquire_guard(self, context: ContextTypes.DEFAULT_TYPE, query) -> bool:
+        if context.user_data.get(self._busy_key):
+            await query.answer("Запрос уже выполняется. Подождите пару секунд.", show_alert=True)
+            return False
+        context.user_data[self._busy_key] = True
+        return True
+
+    def _release_guard(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        context.user_data.pop(self._busy_key, None)
+
+    async def _rate_limit_callback(self, query, context, data: str) -> bool:
+        user = query.from_user if query else None
+        if not user:
+            return False
+        key_suffix = data.split('_', 1)[0] if data else 'dash'
+        key = f"dashboard:{key_suffix}"
+        if rate_limit_hit(
+            context.application.bot_data,
+            user.id,
+            key,
+            cooldown_seconds=self._rate_limit_seconds,
+        ):
+            await query.answer("Слишком часто обновляете статистику. Подождите пару секунд.", show_alert=True)
+            return True
+        return False

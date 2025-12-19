@@ -7,14 +7,14 @@
 """
 
 import html
-from typing import Dict
+from typing import Dict, Optional
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler
 
 from app.db.manager import DatabaseManager
 from app.db.repositories.users import UserRepository
 from app.db.repositories.roles import RolesRepository
-from app.core.roles import role_name_from_id, role_display_name_from_name
+from app.core.roles import role_name_from_id, role_display_name_from_name, role_id_from_name
 from app.telegram.keyboards.reply_main import ReplyMainKeyboardBuilder
 from app.telegram.keyboards.exceptions import KeyboardPermissionsError
 from app.telegram.middlewares.permissions import PermissionsManager
@@ -101,13 +101,29 @@ class StartHandler:
         
         # Approved пользователь
         role_id = int(user_ctx.get('role_id') or 1)
-        role_slug = (user_ctx.get('role_name') or role_name_from_id(role_id)).lower()
+        role_slug = self._resolve_role_slug(
+            user_ctx.get('role_slug') or user_ctx.get('role_name'),
+            role_id,
+        )
+        try:
+            effective_role_slug = await self.permissions.get_effective_role(user_id, username)
+            if effective_role_slug:
+                role_slug = effective_role_slug.lower()
+                role_id = role_id_from_name(role_slug)
+        except Exception:
+            logger.exception(
+                "[START] Не удалось определить актуальную роль пользователя",
+                extra={"user_id": user_id, "username": username},
+            )
         perms: Dict[str, bool] = {}
+        has_personal_stats = bool(user_ctx.get('operator_name'))
         try:
             role_display = role_display_name_from_name(role_slug)
             perms = self._build_effective_permissions(user_ctx, is_supreme, is_dev)
             keyboard = await self.keyboard_builder.build_main_keyboard(
-                role_id, perms_override=perms
+                role_id,
+                perms_override=perms,
+                has_personal_stats=has_personal_stats,
             )
         except KeyboardPermissionsError as exc:
             if effective_message:
@@ -128,6 +144,15 @@ class StartHandler:
         
         safe_role_name = html.escape(role_display)
         message = self._build_role_message(safe_user_name, safe_role_name, perms)
+        if (
+            perms.get('can_view_own_stats')
+            and not perms.get('can_view_all_stats')
+            and not has_personal_stats
+        ):
+            message += (
+                "\n\n⚠️ Персональная статистика недоступна: оператор не привязан."
+                " Обратитесь к администратору, чтобы закрепить ваш операторский ID."
+            )
 
         if effective_message:
             await effective_message.reply_text(
@@ -137,7 +162,14 @@ class StartHandler:
             )
         
         logger.info(f"[START] Sent welcome for {user_id}, role={role_slug}")
-    
+
+    @staticmethod
+    def _resolve_role_slug(raw_value: Optional[str], fallback_role_id: Optional[int]) -> str:
+        candidate = (raw_value or "").strip().lower().replace(" ", "_")
+        if candidate:
+            return candidate
+        return role_name_from_id(fallback_role_id)
+
     def _build_effective_permissions(
         self,
         user_ctx: Dict[str, bool],
@@ -172,26 +204,26 @@ class StartHandler:
                 "Доступны:\n"
                 "• ⚙️ Системные функции\n"
                 "• 👥 Управление пользователями\n"
-                "• 📊 Отчёты по всем операторам\n"
+                "• 📊 AI отчеты по всем операторам\n"
                 "• 🔍 Поиск звонков\n\n"
-                "⚠️ Опасные операции требуют подтверждения."
+                "🛠 Dev-panel действия требуют подтверждения."
             )
         if perms.get('can_manage_users'):
             return (
                 f"👋 Добро пожаловать, <b>{safe_user_name}</b>!\n\n"
                 f"🛡️ Вы авторизованы как <b>{safe_role_name}</b>.\n\n"
                 "Доступны:\n"
-                "• 📊 Отчёты и статистика\n"
+                "• 📊 AI отчеты и статистика\n"
                 "• 🔍 Поиск звонков\n"
                 "• 👥 Управление пользователями\n\n"
-                "Для настройки доступов откройте «Пользователи и роли»."
+                "Для настройки доступов откройте раздел «Пользователи»."
             )
         if perms.get('can_view_all_stats'):
             return (
                 f"👋 Добро пожаловать, <b>{safe_user_name}</b>!\n\n"
                 f"📊 Вы авторизованы как <b>{safe_role_name}</b>.\n\n"
                 "Доступны:\n"
-                "• 📊 Отчёты по всем операторам\n"
+                "• 📊 AI отчеты по всем операторам\n"
                 "• 🔍 Поиск звонков\n\n"
                 "Начните с раздела «Отчёты» или «Поиск звонка»."
             )

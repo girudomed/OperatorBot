@@ -9,10 +9,7 @@ from typing import Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
-    CallbackQueryHandler,
     ContextTypes,
-    MessageHandler,
-    filters,
 )
 
 from app.telegram.utils.callback_data import AdminCB
@@ -27,6 +24,7 @@ from app.telegram.utils.logging import describe_user
 from app.telegram.utils.messages import safe_edit_message
 from app.utils.action_guard import ActionGuard
 from app.utils.rate_limit import rate_limit_hit
+from app.telegram.utils.admin_registry import register_admin_callback_handler
 
 logger = get_watchdog_logger(__name__)
 
@@ -47,70 +45,6 @@ class AdminUsersHandler:
         self.page_size = 10
         self.write_cooldown_seconds = 5.0
         self.read_cooldown_seconds = 1.5
-    
-    @log_async_exceptions
-    async def open_from_keyboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """
-        Entry-point для reply-кнопки «👥 Пользователи и роли».
-        Показывает краткую сводку и отдаёт inline-меню управления.
-        """
-        message = update.effective_message
-        user = update.effective_user
-        if not message or not user:
-            return
-        
-        has_access = await self.permissions.can_access_admin_panel(user.id, user.username)
-        if not has_access:
-            await message.reply_text(
-                "❌ У вас нет доступа к управлению пользователями.\n"
-                "Обратитесь к администратору."
-            )
-            logger.warning(
-                "Denied user management via keyboard for %s",
-                describe_user(user),
-            )
-            return
-        
-        try:
-            counters = await self.admin_repo.get_users_counters()
-        except Exception as exc:
-            logger.error(
-                "Не удалось получить сводку пользователей: %s",
-                exc,
-                exc_info=True,
-            )
-            await message.reply_text("❌ Ошибка при загрузке списка пользователей.")
-            return
-        
-        pending = counters.get("pending_users", 0)
-        approved = counters.get("approved_users", 0)
-        blocked = counters.get("blocked_users", 0)
-        total = counters.get("total_users", 0)
-        
-        summary = (
-            "👥 <b>Пользователи и роли</b>\n\n"
-            f"Всего: <b>{total}</b>\n"
-            f"⏳ В ожидании: <b>{pending}</b>\n"
-            f"✅ Одобрены: <b>{approved}</b>\n"
-            f"🚫 Заблокированы: <b>{blocked}</b>\n\n"
-            "Выберите раздел:"
-        )
-        keyboard = [
-            [InlineKeyboardButton(f"⏳ Ожидают ({pending})", callback_data=self._build_list_callback("pending"))],
-            [InlineKeyboardButton(f"✅ Одобренные ({approved})", callback_data=self._build_list_callback("approved"))],
-            [InlineKeyboardButton(f"🚫 Заблокированные ({blocked})", callback_data=self._build_list_callback("blocked"))],
-            [InlineKeyboardButton("◀️ К админ-панели", callback_data=AdminCB.create(AdminCB.BACK))],
-        ]
-        
-        await message.reply_text(
-            summary,
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-        logger.info(
-            "User %s opened user management via keyboard",
-            describe_user(user),
-        )
 
     def _parse_status_page(self, data: str) -> tuple[str, int]:
         # Try new format
@@ -119,13 +53,13 @@ class AdminUsersHandler:
             # args: [sub_action, status, page, ...]
             # sub_action is LIST or DETAILS etc.
             if len(args) > 1:
-                status = args[1]
+                status = self._normalize_status_arg(args[1])
                 page = int(args[2]) if len(args) > 2 and args[2].isdigit() else 0
                 return status, page
                 
         # Fallback to legacy
         parts = data.split(':')
-        status = parts[3] if len(parts) > 3 else self.default_filter
+        status = self._normalize_status_arg(parts[3] if len(parts) > 3 else self.default_filter)
         page = 0
         if len(parts) > 4:
             try:
@@ -133,6 +67,18 @@ class AdminUsersHandler:
             except ValueError:
                 page = 0
         return status, page
+
+    def _normalize_status_arg(self, raw: Optional[str]) -> Optional[str]:
+        mapping = {
+            "p": "pending",
+            "pending": "pending",
+            "a": "approved",
+            "approved": "approved",
+            "b": "blocked",
+            "blocked": "blocked",
+        }
+        slug = (raw or "").strip().lower()
+        return mapping.get(slug, slug or "pending")
 
     def _extract_user_id(self, data: str) -> int:
         # Try new format
@@ -157,8 +103,56 @@ class AdminUsersHandler:
             )
             return 0
 
+    @log_async_exceptions
+    async def handle_admin_command_action(
+        self,
+        action: Optional[str],
+        payload: Optional[str],
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> bool:
+        """
+        Точка делегации для действий типа adm:cmd:<action>:<payload>.
+        Если AdminPanel не распознал команду, он вызывает этот метод у зарегистрированного
+        admin_commands_handler (через bot_data). Здесь можно реализовать старые admincmd
+        сценарии или дополнительные быстрые действия.
+
+        Возвращает True если действие обработано, иначе False.
+        """
+        # Пока специальных делегаций не требуется — возвращаем False, чтобы admin_panel
+        # показал стандартное "Команда в разработке".
+        return False
+
     def _build_list_callback(self, status: str, page: int = 0) -> str:
         return AdminCB.create(AdminCB.USERS, AdminCB.LIST, status, page)
+
+    @log_async_exceptions
+    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        if not query:
+            return
+        actor = update.effective_user
+        if not actor:
+            return
+        if not await self.permissions.can_manage_users(actor.id, actor.username):
+            await query.answer("Недостаточно прав", show_alert=True)
+            return
+        action, args = AdminCB.parse(query.data or "")
+        if action != AdminCB.USERS:
+            return
+        sub_action = args[0] if args else AdminCB.LIST
+        if sub_action == AdminCB.LIST:
+            await self.show_users_list(update, context)
+        elif sub_action == AdminCB.DETAILS:
+            await self.show_user_details(update, context)
+        elif sub_action == AdminCB.APPROVE:
+            await self.handle_approve(update, context)
+        elif sub_action == AdminCB.DECLINE:
+            await self.handle_decline(update, context)
+        elif sub_action == AdminCB.BLOCK:
+            await self.handle_block(update, context)
+        elif sub_action == AdminCB.UNBLOCK:
+            await self.handle_unblock(update, context)
     
     @log_async_exceptions
     async def show_users_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -195,9 +189,15 @@ class AdminUsersHandler:
             offset = page * limit
             page_slice, total = await self.admin_repo.get_users_page(status_filter, limit, offset)
         
+        keyboard: list[list[InlineKeyboardButton]] = []
         if total == 0:
             message = f"📋 Нет пользователей со статусом: {status_label}"
-            keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]]
+            keyboard.append([
+                InlineKeyboardButton(
+                    "🔄 Обновить",
+                    callback_data=self._build_list_callback(status_filter, max(page, 0)),
+                )
+            ])
             logger.info(
                 "Админ %s открыл пустой список пользователей (%s)",
                 describe_user(update.effective_user),
@@ -211,22 +211,19 @@ class AdminUsersHandler:
                 f"👥 <b>Пользователи ({status_label})</b>\n"
                 f"Показано {start + 1}-{min(end, total)} из {total}\n"
             )
-            
-            keyboard = []
             for user in page_slice:
                 user_text = f"{user.get('full_name', 'Нет имени')} (@{user.get('username', 'нет')})"
                 user_id = user.get('id')
-                
                 keyboard.append([
                     InlineKeyboardButton(
                         user_text,
                         callback_data=AdminCB.create(
-                            AdminCB.USERS, 
-                            AdminCB.DETAILS, 
-                            status_filter, 
-                            page, 
-                            user_id
-                        )
+                            AdminCB.USERS,
+                            AdminCB.DETAILS,
+                            status_filter,
+                            page,
+                            user_id,
+                        ),
                     )
                 ])
             nav_row = []
@@ -246,15 +243,6 @@ class AdminUsersHandler:
                 )
             if nav_row:
                 keyboard.append(nav_row)
-            
-            # Фильтры
-            filter_buttons = [
-                InlineKeyboardButton("⏳ В ожидании", callback_data=self._build_list_callback('pending')),
-                InlineKeyboardButton("✅ Одобрены", callback_data=self._build_list_callback('approved')),
-                InlineKeyboardButton("🚫 Заблокированы", callback_data=self._build_list_callback('blocked'))
-            ]
-            keyboard.append(filter_buttons)
-            keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))])
             logger.info(
                 "Админ %s просматривает %s пользователей (%s показано)",
                 describe_user(update.effective_user),
@@ -267,6 +255,37 @@ class AdminUsersHandler:
                     "displayed": len(page_slice),
                 },
             )
+
+        filter_buttons = [
+            InlineKeyboardButton("⏳ В ожидании", callback_data=self._build_list_callback('pending')),
+            InlineKeyboardButton("✅ Одобрены", callback_data=self._build_list_callback('approved')),
+            InlineKeyboardButton("🚫 Заблокированы", callback_data=self._build_list_callback('blocked')),
+        ]
+        keyboard.append(filter_buttons)
+        keyboard.append(
+            [
+                InlineKeyboardButton("⏳ Заявки", callback_data=AdminCB.create(AdminCB.APPROVALS, AdminCB.LIST, 0)),
+                InlineKeyboardButton("⬆️ Повышения", callback_data=AdminCB.create(AdminCB.PROMOTION, "menu")),
+            ]
+        )
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    "👑 Список админов",
+                    callback_data=AdminCB.create(AdminCB.ADMINS, AdminCB.LIST, 0),
+                ),
+                InlineKeyboardButton(
+                    "🧩 Назначить роль",
+                    callback_data=AdminCB.create(AdminCB.COMMAND, "set_role"),
+                ),
+            ]
+        )
+        keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))])
+
+        # Всегда пытаемся обновить. safe_edit_message сам решит: редактировать или прислать новое,
+        # если редактирование невозможно (например, текст совпал, но мы хотим обновить клавиатуру).
+        # Однако ПРАВИИМ_ДАННЫЕ рекомендует: если экран новый - присылай новое.
+        # Вход в список из меню - это новый экран.
         
         await safe_edit_message(
             query,
@@ -697,55 +716,10 @@ def register_admin_users_handlers(
     """Регистрирует хендлеры управления пользователями."""
     handler = AdminUsersHandler(admin_repo, permissions, notifications)
     
-    # Список пользователей
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.show_users_list,
-            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.USERS}:{AdminCB.LIST}",
-        )
-    )
+    # Сохраняем для доступа через роутер
+    application.bot_data["admin_users_handler"] = handler
+    
+    register_admin_callback_handler(application, AdminCB.USERS, handler.handle_callback)
 
-    # Детали пользователя
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.show_user_details,
-            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.USERS}:{AdminCB.DETAILS}",
-        )
-    )
-
-    # Действия
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.handle_approve,
-            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.USERS}:{AdminCB.APPROVE}",
-        )
-    )
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.handle_decline,
-            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.USERS}:{AdminCB.DECLINE}",
-        )
-    )
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.handle_block,
-            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.USERS}:{AdminCB.BLOCK}",
-        )
-    )
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.handle_unblock,
-            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.USERS}:{AdminCB.UNBLOCK}",
-        )
-    )
-
-    # Reply-кнопка «👥 Пользователи и роли»
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(r"(?i)^\s*(?:👥\s*)?пользовател[ьи]\s+и\s+рол[ьи]\s*$"),
-            handler.open_from_keyboard,
-            group=0,
-        )
-    )
     
     logger.info("Admin users handlers registered")

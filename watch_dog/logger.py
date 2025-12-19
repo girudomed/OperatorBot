@@ -17,8 +17,18 @@ def setup_watchdog():
     Должна вызываться один раз при старте приложения.
     """
     # Создаем директорию для логов
-    if not os.path.exists(LOG_DIR):
-        os.makedirs(LOG_DIR)
+    log_dir = LOG_DIR
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except PermissionError:
+        fallback_dir = os.path.join(os.getcwd(), "logs")
+        os.makedirs(fallback_dir, exist_ok=True)
+        log_dir = fallback_dir
+        logging.warning(
+            "Не удалось создать каталог логов %s, используем fallback %s",
+            LOG_DIR,
+            fallback_dir,
+        )
 
     # Корневой логгер
     root_logger = logging.getLogger()
@@ -40,7 +50,7 @@ def setup_watchdog():
     root_logger.addHandler(console_handler)
 
     # 2. File Handler (Main Log)
-    main_log_path = os.path.join(LOG_DIR, MAIN_LOG_FILE)
+    main_log_path = os.path.join(log_dir, MAIN_LOG_FILE)
     file_handler = RotatingFileHandler(
         main_log_path, 
         maxBytes=MAX_BYTES, 
@@ -53,7 +63,7 @@ def setup_watchdog():
     root_logger.addHandler(file_handler)
 
     # 3. Error File Handler (Errors only)
-    error_log_path = os.path.join(LOG_DIR, ERROR_LOG_FILE)
+    error_log_path = os.path.join(log_dir, ERROR_LOG_FILE)
     error_handler = RotatingFileHandler(
         error_log_path, 
         maxBytes=MAX_BYTES, 

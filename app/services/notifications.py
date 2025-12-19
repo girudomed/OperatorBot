@@ -3,6 +3,7 @@
 import logging
 import time
 import asyncio
+from typing import Optional
 from app.db.connection import acquire_connection
 from datetime import datetime
 from app.logging_config import get_watchdog_logger
@@ -74,6 +75,24 @@ class NotificationsManager:
                     await asyncio.sleep(2 ** attempt)  # Экспоненциальное увеличение задержки перед следующей попыткой
         except Exception as e:
             logger.error(f"[КРОТ]: Общая ошибка при отправке уведомления: {e}", exc_info=True)
+
+    async def notify_approval(self, telegram_id: int, approver_name: Optional[str]) -> None:
+        """
+        Уведомляет пользователя о том, что его аккаунт одобрен.
+        """
+        if not telegram_id:
+            logger.warning("[КРОТ]: Не удалось отправить уведомление об одобрении — нет telegram_id")
+            return
+        approver = approver_name or "администратор"
+        text = (
+            f"✅ Ваш доступ одобрен. Администратор {approver} предоставил вам доступ к боту.\n"
+            "Можно пользоваться командами прямо сейчас."
+        )
+        try:
+            await self.bot.send_message(chat_id=telegram_id, text=text)
+            logger.info("[КРОТ]: Уведомление об одобрении отправлено пользователю %s", telegram_id)
+        except Exception as exc:
+            logger.error("[КРОТ]: Не удалось отправить уведомление об одобрении: %s", exc, exc_info=True)
 
     async def get_notifications(self, user_id):
         """

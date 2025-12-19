@@ -11,6 +11,7 @@
     5 - head_of_registry
     6 - founder
     7 - marketing_director
+    8 - developer (fallback for legacy slugs)
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ ROLE_ID_TO_NAME: Dict[int, str] = {
     5: "head_of_registry",
     6: "founder",
     7: "marketing_director",
+    8: "developer",
 }
 
 ROLE_NAME_TO_ID: Dict[str, int] = {name: role_id for role_id, name in ROLE_ID_TO_NAME.items()}
@@ -50,6 +52,7 @@ ROLE_DISPLAY_NAMES: Dict[int, str] = {
     5: "Head of Registry",
     6: "Founder",
     7: "Marketing Director",
+    8: "Developer",
 }
 
 # Права ролей согласно roles_reference
@@ -61,16 +64,17 @@ ROLE_PERMISSIONS: Dict[int, RolePermissions] = {
     5: RolePermissions(can_view_own_stats=True, can_view_all_stats=True, can_manage_users=True),
     6: RolePermissions(can_view_own_stats=True, can_view_all_stats=True, can_manage_users=True, can_debug=True),
     7: RolePermissions(can_view_own_stats=True, can_view_all_stats=True),
+    8: RolePermissions(can_view_own_stats=True, can_view_all_stats=True, can_manage_users=True, can_debug=True),
 }
 
 # Роли с админскими правами (can_manage_users=True)
-ADMIN_ROLE_IDS = {2, 3, 4, 5, 6}
+ADMIN_ROLE_IDS = {2, 3, 4, 5, 6, 8}
 
 # Роли с полным доступом к статистике (can_view_all_stats=True)
-STATS_VIEWER_ROLE_IDS = {2, 3, 4, 5, 6, 7}
+STATS_VIEWER_ROLE_IDS = {2, 3, 4, 5, 6, 7, 8}
 
 # Роли с правами отладки (can_debug=True) 
-DEBUG_ROLE_IDS = {3, 4, 6}
+DEBUG_ROLE_IDS = {3, 4, 6, 8}
 
 DEFAULT_ROLE_ID = 1
 

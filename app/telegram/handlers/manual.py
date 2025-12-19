@@ -37,7 +37,8 @@ def register_manual_handlers(application: Application) -> None:
         MessageHandler(
             filters.Regex(r"(?i)^\s*(?:📘\s*)?мануал\s*$"),
             _send_manual,
-            group=0,
             block=False,
-        )
+        ),
+        group=0,
     )
+    application.bot_data["manual_text_handler"] = _send_manual

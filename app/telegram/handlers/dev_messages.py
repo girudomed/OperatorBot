@@ -8,13 +8,14 @@ Telegram handler для системы сообщений разработчик
 from typing import Optional
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import Application, ContextTypes, CommandHandler, MessageHandler, filters
 
 from app.db.manager import DatabaseManager
 from app.db.repositories.admin import AdminRepository
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.telegram.utils.callback_data import AdminCB
 from app.logging_config import get_watchdog_logger
+from app.telegram.utils.admin_registry import register_admin_callback_handler
 
 logger = get_watchdog_logger(__name__)
 
@@ -254,19 +255,13 @@ class DevMessagesHandler:
         return result or []
     
     def get_handlers(self):
-        """Возвращает список handlers для регистрации."""
+        """Возвращает handlers для регистрации (без callback'ов adm:*)."""
         return [
             CommandHandler('message_dev', self.message_dev_command),
             CommandHandler('cancel', self.cancel_command),
-            CallbackQueryHandler(
-                self.reply_callback,
-                pattern=rf"^{AdminCB.PREFIX}:{AdminCB.DEV_REPLY}",
-            ),
-            # MessageHandler для перехвата текстовых сообщений (должен быть последним)
             MessageHandler(
                 filters.TEXT & ~filters.COMMAND,
                 self._combined_message_handler,
-                group=10,
                 block=False,
             )
         ]
@@ -306,3 +301,15 @@ class DevMessagesHandler:
             state = {}
             context.user_data[self.state_namespace] = state
         return state
+
+
+def register_dev_messages_handlers(
+    application: Application,
+    db_manager: DatabaseManager,
+    permissions: PermissionsManager,
+    admin_repo: Optional[AdminRepository] = None,
+) -> None:
+    handler = DevMessagesHandler(db_manager, permissions, admin_repo)
+    for entry in handler.get_handlers():
+        application.add_handler(entry)
+    register_admin_callback_handler(application, AdminCB.DEV_REPLY, handler.reply_callback)

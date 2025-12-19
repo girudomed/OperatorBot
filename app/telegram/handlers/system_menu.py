@@ -116,11 +116,15 @@ class SystemMenuHandler:
                 text = await self._run_integrity_checks()
             elif action == "sync":
                 text = await self._run_sync()
+            elif action == "yandex_index":
+                text = await self._run_yandex_index(update, context)
             elif action == "clear_cache":
                 if not include_cache_reset:
                     text = "❌ Доступ к очистке кеша разрешён только Dev Admin."
                 else:
                     text = await self._clear_caches()
+            elif action == "back":
+                text = "⚙️ <b>Системные функции</b>\nВыберите действие:"
             else:
                 text = "Неизвестное действие."
             await self._log_system_action(user.id, action, text)
@@ -262,6 +266,16 @@ class SystemMenuHandler:
             f"Ошибок: {errors}\n"
             f"Длительность: {duration:.2f} c"
         )
+    async def _run_yandex_index(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+        handler = context.application.bot_data.get("call_lookup_handler")
+        if not handler or not hasattr(handler, "handle_reindex"):
+            return "Сервис индексации недоступен."
+        try:
+            await handler.handle_reindex(update, context)
+            return "🎧 Индексация записей запущена."
+        except Exception as exc:
+            logger.exception("system_yandex_index failed: %s", exc)
+            return f"❌ Ошибка при запуске индексации: {exc}"
 
     async def _clear_caches(self) -> str:
         self.roles_repo.clear_cache()
@@ -293,24 +307,26 @@ def register_system_handlers(
         MessageHandler(
             filters.Regex(r"(?i)^\s*(?:⚙️\s*)?система\s*$"),
             handler.handle_system_command,
-            group=0,
-        )
+        ),
+        group=0,
     )
     application.add_handler(
         MessageHandler(
             filters.Regex(r"(?i)^\s*последние\s+ошибки\s*$"),
             handler.handle_last_errors_command,
-            group=0,
-        )
+        ),
+        group=0,
     )
     application.add_handler(
         CallbackQueryHandler(handler.handle_system_callback, pattern=r"^system_")
     )
     # Кнопка «ℹ️ Помощь» работает как /help
+    help_cb = partial(help_command, permissions=permissions_manager)
     application.add_handler(
         MessageHandler(
             filters.Regex(r"(?i)^\s*(?:ℹ️\s*)?помощ[ььи]\s*$"),
-            partial(help_command, permissions=permissions_manager),
-            group=0,
-        )
+            help_cb,
+        ),
+        group=0,
     )
+    application.bot_data["system_menu_handler"] = handler

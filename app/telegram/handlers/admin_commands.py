@@ -31,6 +31,7 @@ from app.telegram.middlewares.permissions import PermissionsManager
 from app.telegram.utils.logging import describe_user
 from app.telegram.utils.messages import safe_edit_message
 from app.utils.error_handlers import log_async_exceptions
+from app.telegram.utils.callback_data import AdminCB
 
 logger = get_watchdog_logger(__name__)
 COMMAND_CALLBACK_PREFIX = "admincmd"
@@ -438,7 +439,17 @@ class AdminCommandsHandler:
             )
 
     def _callback(self, *parts: object) -> str:
-        return ":".join(str(part) for part in (COMMAND_CALLBACK_PREFIX, *parts))
+        """
+        Генерирует unified admin callback_data через AdminCB.
+        Кнопки быстрых команд теперь используют формат adm:cmd:<action>:<args...>
+        — чтобы все callback'ы шли через единую точку входа admin_panel.handle_callback.
+        """
+        parts_list = [str(p) for p in parts]
+        if not parts_list:
+            return AdminCB.create(AdminCB.BACK)
+        # Простая схема: все части после первого превращаем в аргументы команды.
+        # Пример: ("approve","list") -> adm:cmd:approve:list
+        return AdminCB.create(AdminCB.COMMAND, *parts_list)
 
     def _filter_special_accounts(self, users: List[dict]) -> List[dict]:
         filtered = []
@@ -532,6 +543,23 @@ class AdminCommandsHandler:
         if target_role:
             return await self.permissions.can_promote(user.id, target_role, user.username)
         return await self.permissions.can_approve(user.id, user.username)
+
+    @log_async_exceptions
+    async def handle_admin_command_action(
+        self,
+        action: Optional[str],
+        payload: Optional[str],
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> bool:
+        """
+        Делегируемые быстрые команды (adm:cmd:<action>:<payload>).
+        AdminPanel вызывает этот метод, если сама не распознала action.
+        Возвращаем True если действие обработано, иначе False.
+        По умолчанию — ничего не делаем и возвращаем False.
+        """
+        # Здесь можно реализовать фичи, ранее реализованные через admincmd:*
+        return False
 
     # ---------- Callback handlers ----------
 
@@ -770,47 +798,16 @@ def register_admin_commands_handlers(
     application.add_handler(CommandHandler("set_role", handler.set_role_command))
     application.add_handler(CommandHandler("admins", handler.admins_command))
     application.add_handler(CommandHandler("dev", handler.dev_alert_command))
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.handle_approve_list_callback,
-            pattern=rf"^{COMMAND_CALLBACK_PREFIX}:approve:list$",
-        )
-    )
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.handle_approve_view_callback,
-            pattern=rf"^{COMMAND_CALLBACK_PREFIX}:approve:view:",
-        )
-    )
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.handle_approve_action_callback,
-            pattern=rf"^{COMMAND_CALLBACK_PREFIX}:approve:action:",
-        )
-    )
+    # CallbackQueryHandler registration for admin command buttons removed.
+    # All admin inline buttons must go through admin-panel router (adm:*).
+    # Legacy patterns (admincmd:...) are handled by legacy adapter and/or should be
+    # migrated to use AdminCB.create(AdminCB.COMMAND, ...).
+    # Handler moved to admin-panel router. See admin_panel.handle_callback for routing.
+    # Handler moved to admin-panel router. See admin_panel.handle_callback for routing.
     application.bot_data["admin_commands_handler"] = handler
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.handle_promote_list_callback,
-            pattern=rf"^{COMMAND_CALLBACK_PREFIX}:promote:(admin|superadmin):list$",
-        )
-    )
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.handle_promote_view_callback,
-            pattern=rf"^{COMMAND_CALLBACK_PREFIX}:promote:(admin|superadmin):view:",
-        )
-    )
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.handle_promote_action_callback,
-            pattern=rf"^{COMMAND_CALLBACK_PREFIX}:promote:(admin|superadmin):do:",
-        )
-    )
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.handle_close_menu, pattern=rf"^{COMMAND_CALLBACK_PREFIX}:close$"
-        )
-    )
+    # Promotion callbacks must be routed via admin-panel (adm:prm:...).
+    # Promotion callbacks must be routed via admin-panel (adm:prm:...).
+    # Promotion callbacks must be routed via admin-panel (adm:prm:...).
+    # Closing menu handled through admin-panel router (BACK action) or legacy adapter.
 
     logger.info("Admin commands handlers registered")

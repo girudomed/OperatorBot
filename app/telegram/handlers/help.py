@@ -33,6 +33,7 @@ class HelpHandler:
         """
         user_id = update.effective_user.id
         username = update.effective_user.username
+        message = update.effective_message
         
         logger.info(f"[HELP] Command from {user_id}")
         
@@ -40,14 +41,15 @@ class HelpHandler:
         user = await self.user_repo.get_user_by_telegram_id(user_id)
         
         if not user or user.get('status') != 'approved':
-            await update.message.reply_text(
-                "ℹ️ **Справка**\n\n"
-                "Для доступа к функциям бота необходимо:\n"
-                "1. Зарегистрироваться: /register\n"
-                "2. Дождаться одобрения администратора\n\n"
-                "После одобрения вам будут доступны функции в зависимости от роли.",
-                parse_mode='Markdown'
-            )
+            if message:
+                await message.reply_text(
+                    "ℹ️ **Справка**\n\n"
+                    "Для доступа к функциям бота необходимо:\n"
+                    "1. Зарегистрироваться: /register\n"
+                    "2. Дождаться одобрения администратора\n\n"
+                    "После одобрения вам будут доступны функции в зависимости от роли.",
+                    parse_mode='Markdown'
+                )
             return
         
         role_id = user.get('role_id', 1)
@@ -111,7 +113,8 @@ class HelpHandler:
             "❓ Вопросы? Обратитесь к администратору."
         )
         
-        await update.message.reply_text(help_text, parse_mode='Markdown')
+        if message:
+            await message.reply_text(help_text, parse_mode='Markdown')
         
         logger.info(f"[HELP] Sent help for {user_id}, role_id={role_id}")
     

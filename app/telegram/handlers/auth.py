@@ -70,7 +70,7 @@ COMMAND_DESCRIPTIONS = {
 }
 
 # Стадии диалога для регистрации
-ASK_NAME, ASK_ROLE, ASK_OPERATOR_ID = range(3)
+ASK_NAME, ASK_ROLE = range(2)
 ALLOWED_PRE_AUTH_COMMANDS = {"/start", "/help", "/register", "/cancel"}
 
 
@@ -108,12 +108,16 @@ class AuthManager:
                 role_id,
                 operator_id,
             )
+            extension = await self.user_repo.find_extension_by_full_name(full_name)
             await self.user_repo.register_user_if_not_exists(
                 user_id=user_id,
+                telegram_id=user_id,
                 username=username,
                 full_name=full_name,
                 operator_id=operator_id,
-                role_id=role_id
+                role_id=role_id,
+                operator_name=full_name,
+                extension=extension,
             )
 
             elapsed_time = time.time() - start_time
@@ -131,10 +135,10 @@ class AuthManager:
 
 # Команда для начала регистрации
 async def register_handler(update: Update, context: CallbackContext, auth_manager: AuthManager):
-    """Начало регистрации: бот запрашивает позывной оператора."""
+    """Начало регистрации: бот запрашивает ФИО."""
     user = update.effective_user
     logger.info(f"Регистрация начата для пользователя {user.id} ({user.full_name}).")
-    await update.message.reply_text("Пожалуйста, введите ваш позывной оператора из приветственного сообщения:")
+    await update.message.reply_text("Пожалуйста, введите ваше полное имя (как в системе):")
     return ASK_NAME
 
 
@@ -144,50 +148,22 @@ async def ask_name_handler(update: Update, context: CallbackContext, auth_manage
     full_name = update.message.text.strip()
     context.user_data['full_name'] = full_name
     logger.info(f"Получено полное имя: {full_name} от пользователя {update.effective_user.id}.")
-    await update.message.reply_text("Теперь, пожалуйста, укажите вашу роль (например, Operator или Supervisor):")
+    await update.message.reply_text(
+        "Теперь укажите вашу должность (например: оператор контакт-центра, врач, администратор).\n"
+        "Это поле в свободной форме, роль в системе назначается автоматически."
+    )
     return ASK_ROLE
 
 
 # Обработка роли пользователя
 async def ask_role_handler(update: Update, context: CallbackContext, auth_manager: AuthManager):
     """Получение роли пользователя."""
-    role = update.message.text.strip()
-    context.user_data['role'] = role
-    logger.info(f"Получена роль: {role} для пользователя {update.effective_user.id}.")
-
-    if role.lower() == "operator":
-        await update.message.reply_text(
-            "Теперь укажите ваш Operator ID — он помогает связать ваш профиль с АТС."
-        )
-        return ASK_OPERATOR_ID
-
+    job_title = update.message.text.strip()
+    context.user_data['job_title'] = job_title
+    context.user_data['role'] = "operator"
+    logger.info(f"Получена должность: {job_title} для пользователя {update.effective_user.id}.")
+    await update.message.reply_text("Спасибо! Завершаю регистрацию…")
     return await _complete_registration(update, context, auth_manager)
-
-
-# Обработка operator_id (для операторов)
-async def ask_operator_id_handler(update: Update, context: CallbackContext, auth_manager: AuthManager):
-    """Получение operator_id и завершение регистрации."""
-    operator_id_input = update.message.text.strip()
-    if not operator_id_input.isdigit():
-        logger.warning(f"Неверный ввод operator ID от пользователя {update.effective_user.id}: {operator_id_input}")
-        await update.message.reply_text("Ошибка: Operator ID должен содержать только цифры. Пожалуйста, попробуйте снова:")
-        return ASK_OPERATOR_ID
-
-    operator_id = int(operator_id_input)
-    context.user_data['operator_id'] = operator_id
-
-    full_name = context.user_data['full_name']
-    role = context.user_data['role']
-    user_id = update.effective_user.id
-
-    logger.info(f"Попытка регистрации пользователя с ID {user_id}, роль {role}, operator ID {operator_id}.")
-
-    return await _complete_registration(
-        update,
-        context,
-        auth_manager,
-        operator_id=operator_id,
-    )
 
 
 async def _complete_registration(
@@ -399,13 +375,14 @@ def setup_auth_handlers(application, db_manager: DatabaseManager, permissions_ma
         states={
             ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, partial(ask_name_handler, auth_manager=auth_manager))],
             ASK_ROLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, partial(ask_role_handler, auth_manager=auth_manager))],
-            ASK_OPERATOR_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, partial(ask_operator_id_handler, auth_manager=auth_manager))],
         },
         fallbacks=[CommandHandler('cancel', cancel_handle)],
     )
 
     application.add_handler(registration_conv_handler)
-    application.add_handler(CommandHandler('help', partial(help_command, permissions=permissions_manager)))
+    help_handler = partial(help_command, permissions=permissions_manager)
+    application.add_handler(CommandHandler('help', help_handler))
+    application.bot_data["help_command_handler"] = help_handler
     application.add_handler(
         CallbackQueryHandler(
             partial(help_bug_callback, permissions=permissions_manager),

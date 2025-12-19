@@ -71,7 +71,59 @@ class CallLookupService:
         self.db_manager = db_manager
         self.lm_repo = lm_repo
         self.db_name = db_name or DB_CONFIG.get("db")
+        self._history_pk_column = "history_id"
+        self._history_pk_checked = False
+        self._call_scores_join_available: Optional[bool] = None
+        self._call_access_details_supported: Optional[bool] = None
 
+    async def _get_history_pk_column(self) -> str:
+        if not self._history_pk_checked:
+            has_history_id = await has_column(
+                self.db_manager,
+                "call_history",
+                "history_id",
+                self.db_name,
+            )
+            if not has_history_id:
+                self._history_pk_column = "id"
+            self._history_pk_checked = True
+        return self._history_pk_column
+
+    async def _has_call_scores_history(self) -> bool:
+        if self._call_scores_join_available is not None:
+            return self._call_scores_join_available
+        try:
+            exists = await has_column(
+                self.db_manager,
+                "call_scores",
+                "history_id",
+                self.db_name,
+            )
+        except Exception:
+            exists = False
+        self._call_scores_join_available = exists
+        return exists
+
+    async def _supports_call_access_details(self) -> bool:
+        if self._call_access_details_supported is not None:
+            return self._call_access_details_supported
+        try:
+            has_history = await has_column(
+                self.db_manager,
+                "call_access_logs",
+                "history_id",
+                self.db_name,
+            )
+            has_recording = await has_column(
+                self.db_manager,
+                "call_access_logs",
+                "recording_id",
+                self.db_name,
+            )
+            self._call_access_details_supported = bool(has_history and has_recording)
+        except Exception:
+            self._call_access_details_supported = False
+        return self._call_access_details_supported
     def _normalize_phone_input(self, phone: str) -> str:
         digits = re.sub(r"\D+", "", phone or "")
         if not digits:
@@ -160,6 +212,22 @@ class CallLookupService:
             self.db_name,
         )
         record_url_select = "ch.record_url" if record_url_exists else "NULL"
+        history_pk = await self._get_history_pk_column()
+        scores_join_available = await self._has_call_scores_history()
+        score_columns = "NULL AS score, NULL AS transcript"
+        score_join = ""
+        score_result_select = "NULL"
+        if scores_join_available:
+            score_columns = "cs.call_score AS score, cs.transcript"
+            score_join = f"LEFT JOIN call_scores cs ON cs.history_id = ch.{history_pk}"
+            score_result_exists = await has_column(
+                self.db_manager,
+                "call_scores",
+                "result",
+                self.db_name,
+            )
+            if score_result_exists:
+                score_result_select = "cs.result"
 
         caller_expr = _normalize_phone_sql(
             "COALESCE(ch.caller_number, ch.caller_info, '')"
@@ -170,7 +238,7 @@ class CallLookupService:
 
         query = f"""
             SELECT
-                ch.history_id AS history_id,
+                ch.{history_pk} AS history_id,
                 COALESCE(ch.context_start_time_dt, FROM_UNIXTIME(ch.context_start_time)) AS call_time,
                 ch.caller_info,
                 ch.caller_number,
@@ -179,10 +247,9 @@ class CallLookupService:
                 ch.talk_duration,
                 {record_url_select} AS record_url,
                 ch.recording_id,
-                cs.call_score AS score,
-                cs.transcript
+                {score_columns}
             FROM call_history ch
-            LEFT JOIN call_scores cs ON cs.history_id = ch.history_id
+            {score_join}
             WHERE (
                 {called_expr} COLLATE utf8mb4_general_ci LIKE CAST(%s AS CHAR CHARACTER SET utf8mb4)
                 OR {caller_expr} COLLATE utf8mb4_general_ci LIKE CAST(%s AS CHAR CHARACTER SET utf8mb4)
@@ -262,22 +329,38 @@ class CallLookupService:
             self.db_name,
         )
         record_url_select = "ch.record_url" if record_url_exists else "NULL"
-
+        history_pk = await self._get_history_pk_column()
+        scores_join_available = await self._has_call_scores_history()
+        score_columns = "NULL AS score, NULL AS transcript"
+        score_join = ""
+        score_result_select = "NULL"
+        if scores_join_available:
+            score_columns = "cs.call_score AS score, cs.transcript"
+            score_join = f"LEFT JOIN call_scores cs ON cs.history_id = ch.{history_pk}"
+            score_result_exists = await has_column(
+                self.db_manager,
+                "call_scores",
+                "result",
+                self.db_name,
+            )
+            if score_result_exists:
+                score_result_select = "cs.result"
         query = f"""
             SELECT
-                ch.history_id AS history_id,
+                ch.{history_pk} AS history_id,
                 COALESCE(ch.context_start_time_dt, FROM_UNIXTIME(ch.context_start_time)) AS call_time,
                 ch.caller_info,
                 ch.caller_number,
                 ch.called_info,
+                ch.called_number,
                 ch.talk_duration,
                 {record_url_select} AS record_url,
                 ch.recording_id,
-                cs.call_score AS score,
-                cs.transcript
+                {score_columns},
+                {score_result_select} AS operator_result
             FROM call_history ch
-            LEFT JOIN call_scores cs ON cs.history_id = ch.history_id
-            WHERE ch.history_id = %s
+            {score_join}
+            WHERE ch.{history_pk} = %s
             LIMIT 1
         """
         result = await self.db_manager.execute_with_retry(
@@ -322,7 +405,8 @@ class CallLookupService:
         try:
             details = history_details or []
             detail_failed = False
-            if details:
+            detail_supported = await self._supports_call_access_details()
+            if details and detail_supported:
                 detail_query = """
                     INSERT INTO call_access_logs (
                         user_id,
@@ -337,11 +421,11 @@ class CallLookupService:
                 try:
                     for detail in details:
                         await self.db_manager.execute_with_retry(
-                            detail_query,
-                            params=(
-                                requesting_user_id,
-                                normalized_phone,
-                                result_count,
+                        detail_query,
+                        params=(
+                            requesting_user_id,
+                            normalized_phone,
+                            result_count,
                                 detail.get("history_id"),
                                 detail.get("recording_id"),
                             ),

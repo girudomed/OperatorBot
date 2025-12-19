@@ -453,8 +453,9 @@ class AnalyticsRepository:
 
     async def get_live_dashboard_all_operators(
         self,
-        period_type: str = 'day'
-    ) -> List[DashboardMetrics]:
+        period_type: str = 'day',
+        limit: Optional[int] = None,
+    ) -> Tuple[List[DashboardMetrics], int]:
         """
         Получить сводный дашборд по всем операторам.
         
@@ -478,19 +479,22 @@ class AnalyticsRepository:
         """
         
         operators_result = await self.db_manager.execute_query(query, fetchall=True)
-        
         if not operators_result:
-            return []
+            return [], 0
+
+        total_count = len(operators_result)
+        if limit:
+            operators_result = operators_result[:limit]
         
         # Получаем дашборд для каждого оператора
-        dashboards = []
+        dashboards: List[DashboardMetrics] = []
         for row in operators_result:
             operator_name = row.get('operator_name')
             if operator_name:
                 dashboard = await self.get_live_dashboard_single(operator_name, period_type)
                 dashboards.append(dashboard)
         
-        return dashboards
+        return dashboards, total_count
 
     # ========================================================================
     # Звонки для рекомендаций

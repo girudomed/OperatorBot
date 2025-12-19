@@ -7,7 +7,7 @@
 from typing import List, Dict, Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, ContextTypes
 
 from app.db.repositories.admin import AdminRepository
 from app.telegram.middlewares.permissions import PermissionsManager
@@ -18,6 +18,7 @@ from app.core.roles import role_name_from_id, resolve_role_slug_display
 from app.telegram.utils.logging import describe_user
 from app.telegram.utils.messages import safe_edit_message
 from app.telegram.utils.callback_data import AdminCB
+from app.telegram.utils.admin_registry import register_admin_callback_handler
 
 logger = get_watchdog_logger(__name__)
 
@@ -57,6 +58,30 @@ class AdminAdminsHandler:
 
     def _build_details_callback(self, user_id: int, page: int = 0) -> str:
         return AdminCB.create(AdminCB.ADMINS, AdminCB.DETAILS, page, user_id)
+
+    @log_async_exceptions
+    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        if not query:
+            return
+        action, args = AdminCB.parse(query.data or "")
+        if action != AdminCB.ADMINS:
+            return
+        sub_action = args[0] if args else AdminCB.LIST
+        if sub_action == AdminCB.LIST:
+            await self.show_admins_list(update, context)
+        elif sub_action == "candidates":
+            await self.show_candidates(update, context)
+        elif sub_action == AdminCB.DETAILS:
+            await self.show_admin_details(update, context)
+        elif sub_action == "promote_admin":
+            await self.promote_to_admin(update, context)
+        elif sub_action == "promote_super":
+            await self.promote_to_superadmin(update, context)
+        elif sub_action == "demote_admin":
+            await self.demote_to_admin(update, context)
+        elif sub_action == "demote_operator":
+            await self.demote_to_operator(update, context)
 
     @log_async_exceptions
     async def show_admins_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -540,47 +565,6 @@ def register_admin_admins_handlers(
 ):
     handler = AdminAdminsHandler(admin_repo, permissions, notifications)
 
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.show_admins_list,
-            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.ADMINS}:{AdminCB.LIST}",
-        )
-    )
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.show_candidates,
-            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.ADMINS}:candidates",
-        )
-    )
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.show_admin_details,
-            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.ADMINS}:{AdminCB.DETAILS}",
-        )
-    )
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.promote_to_admin,
-            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.ADMINS}:promote_admin",
-        )
-    )
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.promote_to_superadmin,
-            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.ADMINS}:promote_super",
-        )
-    )
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.demote_to_admin,
-            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.ADMINS}:demote_admin",
-        )
-    )
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.demote_to_operator,
-            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.ADMINS}:demote_operator",
-        )
-    )
+    register_admin_callback_handler(application, AdminCB.ADMINS, handler.handle_callback)
 
     logger.info("Admin admins handlers registered")

@@ -12,11 +12,13 @@ import sys
 import logging
 import signal
 import os
+import re
 from typing import Optional
 
 from telegram import BotCommand, Update
 from telegram.error import TelegramError
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, TypeHandler, filters
+from telegram.request import HTTPXRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -42,6 +44,7 @@ from app.utils.action_guard import ActionGuard
 
 # Сервисы
 from app.services.call_lookup import CallLookupService
+from app.services.yandex import YandexDiskCache, YandexDiskClient
 from app.services.weekly_quality import WeeklyQualityService
 from app.services.reports import ReportService
 
@@ -49,6 +52,8 @@ from app.services.reports import ReportService
 from app.telegram.handlers.auth import setup_auth_handlers
 from app.telegram.handlers.start import StartHandler
 from app.telegram.handlers.call_lookup import register_call_lookup_handlers
+from app.telegram.handlers.logging_middleware import register_logging_handlers
+from app.telegram.handlers.dev_messages import register_dev_messages_handlers
 from app.telegram.handlers.weekly_quality import register_weekly_quality_handlers
 from app.telegram.handlers.reports import register_report_handlers
 from app.telegram.handlers.system_menu import register_system_handlers
@@ -94,11 +99,22 @@ async def user_context_injector(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data.pop("user_ctx", None)
 
 
+_INCOMING_TEXT_SKIP_PATTERNS = [
+    re.compile(r"(?i)^\s*(?:📊\s*)?(?:ai\s+)?отч[её]ты\s*$"),
+]
+
+
 async def debug_incoming(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Логирует входящие текстовые сообщения для отладки Reply-клавиатуры."""
     message = update.effective_message
-    if message and message.text:
-        logger.warning("[INCOMING TEXT] %r", message.text)
+    if not message or not message.text:
+        return
+
+    normalized = message.text.strip()
+    for pattern in _INCOMING_TEXT_SKIP_PATTERNS:
+        if pattern.match(normalized):
+            return
+    logger.warning("[INCOMING TEXT] %r", message.text)
 
 
 async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -251,6 +267,11 @@ async def main():
         lm_repo = LMRepository(db_manager)
         user_repo = UserRepository(db_manager)
         call_lookup_service = CallLookupService(db_manager, lm_repo)
+        yandex_disk_client = YandexDiskClient.from_env()
+        yandex_disk_cache = YandexDiskCache(
+            os.getenv("REDIS_URL"),
+            file_ttl_seconds=int(os.getenv("YDISK_TG_FILE_TTL", "0") or 0) or None,
+        )
         weekly_quality_service = WeeklyQualityService(db_manager)
         report_service = ReportService(db_manager)
         rate_limiter = RateLimiter()
@@ -264,7 +285,18 @@ async def main():
         notification_service = NotificationService()  # Existing service
 
         # 3. Инициализация приложения Telegram
-        application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+        request = HTTPXRequest(
+            connect_timeout=10,
+            read_timeout=70,
+            write_timeout=30,
+            pool_timeout=10,
+        )
+        application = (
+            ApplicationBuilder()
+            .token(TELEGRAM_TOKEN)
+            .request(request)
+            .build()
+        )
         application.add_error_handler(telegram_error_handler)
         workers_started = False
         
@@ -277,6 +309,7 @@ async def main():
         application.bot_data["user_repository"] = user_repo
         application.bot_data["rate_limiter"] = rate_limiter
         application.bot_data["action_guard"] = action_guard
+        application.bot_data["yandex_disk_cache"] = yandex_disk_cache
 
         # 4. Регистрация хендлеров
         logger.info("Регистрация хендлеров...")
@@ -293,12 +326,27 @@ async def main():
             group=99,
         )
         
+        # Вспомогательные лог-хендлеры
+        register_logging_handlers(application)
+
         # Auth
         setup_auth_handlers(application, db_manager, permissions_manager)
 
         # /start с новым UX
         start_handler = StartHandler(db_manager)
         application.add_handler(start_handler.get_handler())
+        # Live dashboard (личная статистика операторов)
+        from app.telegram.handlers.dashboard import DashboardHandler
+        dashboard_handler = DashboardHandler(db_manager)
+        for handler in dashboard_handler.get_handlers():
+            application.add_handler(handler)
+        application.add_handler(
+            MessageHandler(
+                filters.Regex(r"(?i)^\s*(?:📊\s*)?моя\s+статистик[аи]\s*$"),
+                dashboard_handler.dashboard_command,
+            ),
+            group=0,
+        )
         
         # Admin Panel
         from app.telegram.handlers.admin_panel import register_admin_panel_handlers
@@ -322,6 +370,7 @@ async def main():
         register_admin_stats_handlers(application, admin_repo, metrics_service, permissions_manager)
         register_admin_lookup_handlers(application, permissions_manager)
         register_admin_settings_handlers(application, admin_repo, permissions_manager)
+        register_dev_messages_handlers(application, db_manager, permissions_manager, admin_repo)
         
         # Legacy Adapter (перехват старых кнопок)
         from app.telegram.handlers.legacy_adapter import LegacyCallbackAdapter
@@ -332,7 +381,13 @@ async def main():
         register_admin_lm_handlers(application, lm_repo, permissions_manager)
         
         # Call Lookup (/call_lookup)
-        register_call_lookup_handlers(application, call_lookup_service, permissions_manager)
+        register_call_lookup_handlers(
+            application,
+            call_lookup_service,
+            permissions_manager,
+            yandex_disk_client=yandex_disk_client,
+            yandex_disk_cache=yandex_disk_cache,
+        )
         
         # Weekly Quality (/weekly_quality)
         register_weekly_quality_handlers(application, weekly_quality_service, permissions_manager)
@@ -351,7 +406,7 @@ async def main():
         
         # Text Router (центральный обработчик текста)
         from app.telegram.handlers.text_router import TextRouter
-        application.add_handler(TextRouter.get_handler())
+        application.add_handler(TextRouter.get_handler(), group=10)
 
         await set_bot_commands(application)
 
@@ -405,7 +460,13 @@ async def main():
         await application.bot.delete_webhook(drop_pending_updates=True)
         logger.info("Webhook удален (если был), переключаемся на Polling.")
         
-        await application.updater.start_polling()
+        await application.updater.start_polling(
+            timeout=50,
+            read_timeout=70,
+            write_timeout=30,
+            connect_timeout=10,
+            pool_timeout=10,
+        )
         logger.info("Бот запущен и готов к работе (Polling).")
         await stop_event.wait()
 
@@ -429,6 +490,8 @@ async def main():
             await application.stop()
             await application.shutdown()
 
+        if 'yandex_disk_cache' in locals() and yandex_disk_cache:
+            await yandex_disk_cache.close()
         await db_manager.close()
         logger.info("Бот остановлен.")
         

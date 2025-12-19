@@ -56,15 +56,15 @@ async def test_handle_callback_routes_new_dashboard(monkeypatch):
 @pytest.mark.asyncio
 async def test_handle_callback_routes_commands_menu(monkeypatch):
     handler = AdminPanelHandler(_StubRepo(), _StubPermissions())
-    mock_commands = AsyncMock()
-    monkeypatch.setattr(handler, "_show_command_shortcuts", mock_commands)
+    mock_main = AsyncMock()
+    monkeypatch.setattr(handler, "_show_main_menu", mock_main)
 
     update = _DummyUpdate(AdminCB.create(AdminCB.COMMANDS))
     context = _DummyContext()
 
     await handler.handle_callback(update, context)
 
-    mock_commands.assert_awaited_once_with(update, context)
+    mock_main.assert_awaited_once_with(update, context)
 
 
 @pytest.mark.asyncio

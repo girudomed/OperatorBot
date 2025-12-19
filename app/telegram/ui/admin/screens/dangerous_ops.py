@@ -1,4 +1,4 @@
-"""Экран опасных операций."""
+"""Экран Dev-panel."""
 
 from app.telegram.ui.admin import keyboards
 from app.telegram.ui.admin.screens import Screen
@@ -6,9 +6,9 @@ from app.telegram.ui.admin.screens import Screen
 
 def render_dangerous_ops_screen() -> Screen:
     text = (
-        "⚠️ <b>Опасные операции</b>\n"
-        "Здесь действия, которые грузят базу или запускают массовые рассылки."
-        " Каждое требует явного подтверждения."
+        "🛠 <b>Dev-panel</b>\n"
+        "Системные действия для разработчиков и техподдержки: техработы,"
+        " настройки и диагностика системы."
     )
     return Screen(text=text, keyboard=keyboards.dangerous_ops_keyboard())
 

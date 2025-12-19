@@ -10,9 +10,14 @@ def test_create_with_args():
     assert data == "adm:usr:lst:p:1"
 
 def test_length_limit():
+    # Ранее код бросал ValueError при превышении лимита.
+    # Теперь возвращается хэш-фиктивный callback в формате adm:hd:<hash> или adm:err в редком случае.
     long_arg = "a" * 60
-    with pytest.raises(ValueError, match="exceeds 64 bytes"):
-        AdminCB.create(AdminCB.USERS, long_arg)
+    data = AdminCB.create(AdminCB.USERS, long_arg)
+    assert isinstance(data, str)
+    # Допустимые варианты: hashed fallback или err
+    assert data.startswith("adm:hd:") or data == "adm:err"
+    assert len(data.encode("utf-8")) <= 64
 
 def test_parse_valid():
     data = "adm:usr:lst:p:1"

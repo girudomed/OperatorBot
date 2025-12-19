@@ -12,9 +12,10 @@
 """
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, Application, CallbackQueryHandler
+from telegram.ext import ContextTypes, Application
 
 from app.telegram.utils.callback_data import AdminCB
+from app.telegram.utils.admin_registry import register_admin_callback_handler
 
 from app.db.repositories.lm_repository import LMRepository
 from app.telegram.middlewares.permissions import PermissionsManager
@@ -415,11 +416,6 @@ def register_admin_lm_handlers(
     """Регистрирует LM хендлеры."""
     handler = AdminLMHandler(lm_repo, permissions)
     
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.handle_callback,
-            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.LM_MENU}",
-        )
-    )
+    register_admin_callback_handler(application, AdminCB.LM_MENU, handler.handle_callback)
     
     logger.info("Admin LM handlers registered")

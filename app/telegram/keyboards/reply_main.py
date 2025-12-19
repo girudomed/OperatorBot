@@ -24,34 +24,22 @@ class ReplyMainKeyboardBuilder:
         self,
         role_id: int,
         perms_override: Optional[Dict[str, bool]] = None,
+        *,
+        has_personal_stats: bool = True,
     ) -> ReplyKeyboardMarkup:
         logger.debug("[KEYBOARD] Building main keyboard for role_id=%s", role_id)
         perms = await self._resolve_permissions(role_id, perms_override)
 
         keyboard = []
 
-        if perms.get("can_view_own_stats"):
+        if perms.get("can_view_own_stats") and has_personal_stats:
             keyboard.append([KeyboardButton("📊 Моя статистика")])
 
         if perms.get("can_view_all_stats"):
-            keyboard.append(
-                [
-                    KeyboardButton("📊 Отчёты"),
-                    KeyboardButton("🔍 Поиск звонка"),
-                ]
-            )
-
-        if perms.get("can_manage_users"):
-            keyboard.append([KeyboardButton("👥 Пользователи и роли")])
+            keyboard.append([KeyboardButton("🔍 Поиск звонка")])
 
         if perms.get("can_manage_users"):
             keyboard.append([KeyboardButton("👑 Админ-панель")])
-
-        if perms.get("can_debug"):
-            keyboard.append([KeyboardButton("⚙️ Система")])
-
-        keyboard.append([KeyboardButton("ℹ️ Помощь")])
-        keyboard.append([KeyboardButton("📘 Мануал")])
 
         reply_keyboard = ReplyKeyboardMarkup(
             keyboard,

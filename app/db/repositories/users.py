@@ -110,12 +110,21 @@ class UserRepository:
             if not await self.user_exists(user_id):
                 query_insert = """
                     INSERT INTO UsersTelegaBot 
-                        (user_id, full_name, role_id, status, operator_name, extension)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                        (user_id, telegram_id, username, full_name, role_id, status, operator_name, extension)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """
                 await self.db_manager.execute_query(
                     query_insert, 
-                    (user_id, full_name, normalized_role_id, status, operator_name, extension)
+                    (
+                        user_id,
+                        user_id,
+                        username,
+                        full_name,
+                        normalized_role_id,
+                        status,
+                        operator_name,
+                        extension,
+                    )
                 )
                 logger.info(f"[USER_REPO] Telegram user '{full_name}' registered successfully")
             else:
@@ -124,14 +133,39 @@ class UserRepository:
             logger.error(f"[USER_REPO] Error registering user {user_id}: {e}", exc_info=True)
             raise
 
+    async def find_extension_by_full_name(self, full_name: Optional[str]) -> Optional[str]:
+        """Пытается найти extension в таблице users по ФИО."""
+        if not full_name:
+            return None
+        query = """
+            SELECT extension
+            FROM users
+            WHERE LOWER(TRIM(full_name)) = LOWER(TRIM(%s))
+            LIMIT 1
+        """
+        row = await self.db_manager.execute_with_retry(
+            query,
+            params=(full_name,),
+            fetchone=True,
+        )
+        if not row:
+            return None
+        value = row.get("extension") if isinstance(row, dict) else None
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", errors="ignore")
+        return value.strip() if isinstance(value, str) and value.strip() else None
+
     async def register_user_if_not_exists(
         self,
         *,
         user_id: int,
+        telegram_id: Optional[int],
         username: Optional[str],
         full_name: str,
         operator_id: Optional[int] = None,
         role_id: int = 1,
+        operator_name: Optional[str] = None,
+        extension: Optional[str] = None,
     ) -> None:
         """
         Идемпотентная регистрация пользователя из Telegram.
@@ -154,12 +188,19 @@ class UserRepository:
             current_role_id = existing.get("role_id")
             normalized_role_id = await self._resolve_role_id(current_role_id)
             set_parts = [
+                "telegram_id = %s",
                 "username = %s",
                 "full_name = %s",
                 "operator_id = %s",
                 "updated_at = NOW()",
             ]
-            params_list = [username, full_name, operator_id]
+            params_list = [telegram_id or user_id, username, full_name, operator_id]
+            if operator_name:
+                set_parts.append("operator_name = %s")
+                params_list.append(operator_name)
+            if extension:
+                set_parts.append("extension = %s")
+                params_list.append(extension)
             if normalized_role_id != current_role_id:
                 set_parts.insert(3, "role_id = %s")
                 params_list.append(normalized_role_id)
@@ -188,14 +229,26 @@ class UserRepository:
             """
             INSERT INTO UsersTelegaBot (
                 user_id,
+                telegram_id,
                 username,
                 full_name,
                 operator_id,
+                operator_name,
+                extension,
                 role_id,
                 status
-            ) VALUES (%s, %s, %s, %s, %s, 'pending')
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending')
             """,
-            params=(user_id, username, full_name, operator_id, normalized_role_id),
+            params=(
+                user_id,
+                telegram_id or user_id,
+                username,
+                full_name,
+                operator_id,
+                operator_name,
+                extension,
+                normalized_role_id,
+            ),
             commit=True,
         )
         logger.info("[USER_REPO] Telegram user %s inserted with status pending.", user_id)
@@ -221,6 +274,10 @@ class UserRepository:
                 u.operator_name,
                 u.status,
                 u.role_id,
+                COALESCE(
+                    NULLIF(r.role_slug, ''),
+                    LOWER(REPLACE(r.role_name, ' ', '_'))
+                ) AS role_slug,
                 r.role_name,
                 r.can_view_own_stats,
                 r.can_view_all_stats,

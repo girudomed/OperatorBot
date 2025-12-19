@@ -15,7 +15,7 @@ def dashboard_keyboard() -> InlineKeyboard:
         [
             InlineKeyboardButton("🔄 Обновить", callback_data=AdminCB.create(AdminCB.DASHBOARD)),
             InlineKeyboardButton(
-                "📊 Детали", callback_data=AdminCB.create(AdminCB.DASHBOARD_DETAILS)
+                "📈 Статистика системы", callback_data=AdminCB.create(AdminCB.STATS)
             ),
         ],
         [
@@ -24,11 +24,7 @@ def dashboard_keyboard() -> InlineKeyboard:
         ],
         [
             InlineKeyboardButton(
-                "👥 Пользователи",
-                callback_data=AdminCB.create(AdminCB.USERS, AdminCB.LIST, AdminCB.STATUS_PENDING),
-            ),
-            InlineKeyboardButton(
-                "⚠️ Опасные операции", callback_data=AdminCB.create(AdminCB.CRITICAL)
+                "🛠 Dev-panel", callback_data=AdminCB.create(AdminCB.CRITICAL)
             ),
         ],
         [
@@ -38,24 +34,11 @@ def dashboard_keyboard() -> InlineKeyboard:
     ]
 
 
-def dashboard_details_keyboard() -> InlineKeyboard:
-    return [
-        [
-            InlineKeyboardButton(
-                "🔄 Обновить детали",
-                callback_data=AdminCB.create(AdminCB.DASHBOARD_DETAILS),
-            ),
-            InlineKeyboardButton("🏠 В дашборд", callback_data=AdminCB.create(AdminCB.DASHBOARD)),
-        ],
-        [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))],
-    ]
-
-
 def alerts_keyboard() -> InlineKeyboard:
     return [
         [
             InlineKeyboardButton(
-                "📂 Расшифровки", callback_data=AdminCB.create(AdminCB.LOOKUP)
+                "🔍 Поиск звонков", callback_data=AdminCB.create(AdminCB.LOOKUP)
             ),
             InlineKeyboardButton(
                 "👥 Пользователи",
@@ -76,9 +59,6 @@ def export_keyboard() -> InlineKeyboard:
                 "📝 Weekly CSV",
                 callback_data=AdminCB.create(AdminCB.COMMAND, "weekly_quality"),
             ),
-            InlineKeyboardButton(
-                "🧠 AI-отчёт", callback_data=AdminCB.create(AdminCB.COMMAND, "report")
-            ),
         ],
         [
             InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK)),
@@ -91,19 +71,24 @@ def dangerous_ops_keyboard() -> InlineKeyboard:
     return [
         [
             InlineKeyboardButton(
-                "📝 Weekly отчёт",
-                callback_data=AdminCB.create(AdminCB.CRITICAL, "weekly_quality"),
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "🧠 AI-отчёт", callback_data=AdminCB.create(AdminCB.CRITICAL, "report")
-            )
-        ],
-        [
-            InlineKeyboardButton(
                 "📢 Техработы",
                 callback_data=AdminCB.create(AdminCB.CRITICAL, "maintenance_alert"),
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "⚙️ Настройки", callback_data=AdminCB.create(AdminCB.SETTINGS)
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🎧 Индексация записей",
+                callback_data=AdminCB.create(AdminCB.YANDEX, "reindex"),
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🛠 Система", callback_data=AdminCB.create(AdminCB.SYSTEM)
             )
         ],
         [
@@ -128,7 +113,11 @@ def critical_confirm_keyboard(action: str) -> InlineKeyboard:
     ]
 
 
-def main_menu_keyboard(allow_commands: bool) -> InlineKeyboard:
+def main_menu_keyboard(
+    *,
+    allow_commands: bool,
+    allow_yandex_tools: bool,
+) -> InlineKeyboard:
     keyboard: InlineKeyboard = [
         [
             InlineKeyboardButton("📊 Дашборд", callback_data=AdminCB.create(AdminCB.DASHBOARD)),
@@ -139,19 +128,43 @@ def main_menu_keyboard(allow_commands: bool) -> InlineKeyboard:
         ],
         [
             InlineKeyboardButton(
-                "👑 Админы", callback_data=AdminCB.create(AdminCB.ADMINS, AdminCB.LIST)
+                "📝 Еженедельный отчёт",
+                callback_data=AdminCB.create(AdminCB.COMMAND, "weekly_quality"),
             ),
-            InlineKeyboardButton("⚙️ Настройки", callback_data=AdminCB.create(AdminCB.SETTINGS)),
+            InlineKeyboardButton(
+                "🧠 AI-отчёт", callback_data=AdminCB.create(AdminCB.REPORTS, "period_menu")
+            ),
         ],
         [
             InlineKeyboardButton("🧠 LM Метрики", callback_data=AdminCB.create(AdminCB.LM_MENU)),
-            InlineKeyboardButton("📂 Расшифровки", callback_data=AdminCB.create(AdminCB.LOOKUP)),
+            InlineKeyboardButton("🔍 Поиск звонков", callback_data=AdminCB.create(AdminCB.LOOKUP)),
+        ],
+        [
+            InlineKeyboardButton(
+                "📈 Статистика системы",
+                callback_data=AdminCB.create(AdminCB.STATS),
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "ℹ️ Помощь",
+                callback_data=AdminCB.create(AdminCB.HELP_SCREEN),
+            ),
+            InlineKeyboardButton(
+                "📘 Мануал",
+                callback_data=AdminCB.create(AdminCB.MANUAL),
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "⚙️ Система",
+                callback_data=AdminCB.create(AdminCB.SYSTEM),
+            )
         ],
     ]
-    if allow_commands:
-        keyboard.append(
-            [InlineKeyboardButton("📑 Команды", callback_data=AdminCB.create(AdminCB.COMMANDS))]
-        )
+    # Всегда добавляем явную кнопку "◀️ Назад" в админских inline-меню
+    # чтобы гарантировать единообразную навигацию назад через AdminCB.BACK.
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))])
     return keyboard
 
 

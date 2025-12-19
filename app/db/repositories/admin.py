@@ -28,6 +28,24 @@ from app.utils.error_handlers import log_async_exceptions
 
 logger = get_watchdog_logger(__name__)
 
+FORCE_ADMIN_SLUGS = {
+    "head_of_registry",
+    "registry_head",
+    "заврег",
+    "зав_регистратуры",
+}
+
+LEGACY_ADMIN_SLUGS = {
+    "admin",
+    "superadmin",
+    "developer",
+    "founder",
+    "head_of_registry",
+    "registry_head",
+    "marketing_director",
+    "stadmin",
+}
+
 
 class AdminRepository:
     """
@@ -119,6 +137,13 @@ class AdminRepository:
                     ORDER BY rr.role_id
                 """
                 rows = await self.db.execute_with_retry(query, fetchall=True) or []
+                if not rows:
+                    rows = await self._load_roles_from_legacy()
+                    if rows:
+                        logger.warning("[ADMIN_REPO] roles_reference пустая, используем RolesTelegaBot_legacy")
+                if not rows:
+                    logger.error("[ADMIN_REPO] Не удалось загрузить роли: roles_reference и legacy пустые")
+                    return
                 slug_to_id: Dict[str, int] = {}
                 id_to_slug: Dict[int, str] = {}
                 display: Dict[str, str] = {}
@@ -139,6 +164,11 @@ class AdminRepository:
                         self._operator_role_id = role_id
                     if bool(row.get("can_manage_users")):
                         admin_ids.add(role_id)
+                    if (
+                        primary_slug in FORCE_ADMIN_SLUGS
+                        or normalized in FORCE_ADMIN_SLUGS
+                    ):
+                        admin_ids.add(role_id)
                 if slug_to_id:
                     self._role_slug_to_id = slug_to_id
                     self._role_id_to_slug = id_to_slug
@@ -148,6 +178,29 @@ class AdminRepository:
                 logger.exception("[ADMIN_REPO] Не удалось загрузить роли: %s", exc)
             finally:
                 self._roles_loaded = True
+
+    async def _load_roles_from_legacy(self) -> List[Dict[str, Any]]:
+        try:
+            raw = await self.db.execute_with_retry(
+                "SELECT id, role_name FROM RolesTelegaBot_legacy",
+                fetchall=True,
+            ) or []
+        except Exception as exc:
+            logger.warning("[ADMIN_REPO] Не удалось прочитать RolesTelegaBot_legacy: %s", exc)
+            return []
+        translated: List[Dict[str, Any]] = []
+        for row in raw:
+            role_id = int(row.get("id"))
+            role_name = (row.get("role_name") or "").strip() or f"Role {role_id}"
+            normalized = self._normalize_role_slug(role_name)
+            translated.append(
+                {
+                    "role_id": role_id,
+                    "role_name": role_name,
+                    "can_manage_users": 1 if normalized in LEGACY_ADMIN_SLUGS else 0,
+                }
+            )
+        return translated
 
     async def _get_role_id_by_slug(self, slug: str) -> Optional[int]:
         normalized = self._normalize_role_slug(slug)
@@ -181,7 +234,7 @@ class AdminRepository:
         try:
             query = """
                 {base}
-                WHERE LOWER(u.status) = 'pending'
+                WHERE LOWER(TRIM(u.status)) = 'pending'
                 ORDER BY u.id DESC
             """
             rows = await self.db.execute_with_retry(
@@ -289,7 +342,7 @@ class AdminRepository:
             query = """
                 UPDATE UsersTelegaBot
                 SET status = 'approved', approved_by = %s
-                WHERE id = %s AND LOWER(status) = 'pending'
+                WHERE id = %s AND LOWER(TRIM(status)) = 'pending'
             """
             await self.db.execute_with_retry(
                 query, params=(approver_db_id, user_id), commit=True
@@ -449,7 +502,7 @@ class AdminRepository:
                 logger.warning(f"[ADMIN_REPO] Unknown role '{new_role}' for action {action}")
                 return False
             
-            status_clause = "AND LOWER(status) = 'approved'" if only_approved else ""
+            status_clause = "AND LOWER(TRIM(status)) = 'approved'" if only_approved else ""
             query = f"""
                 UPDATE UsersTelegaBot
                 SET role_id = %s
@@ -545,7 +598,7 @@ class AdminRepository:
             placeholders = ', '.join(['%s'] * len(admin_role_ids))
             query = f"""
                 {self.USER_FIELDS_BASE}
-                WHERE u.role_id IN ({placeholders}) AND LOWER(u.status) != 'blocked'
+                WHERE u.role_id IN ({placeholders}) AND LOWER(TRIM(u.status)) != 'blocked'
                 ORDER BY u.role_id DESC, u.full_name
             """
             rows = await self.db.execute_with_retry(
@@ -576,7 +629,7 @@ class AdminRepository:
                 return []
             query = """
                 {base}
-                WHERE LOWER(u.status) = 'approved' AND (u.role_id IS NULL OR u.role_id = %s)
+                WHERE LOWER(TRIM(u.status)) = 'approved' AND (u.role_id IS NULL OR u.role_id = %s)
                 ORDER BY u.id DESC
                 LIMIT %s OFFSET %s
             """
@@ -609,7 +662,7 @@ class AdminRepository:
                 normalized = status_filter.strip().lower()
                 query = """
                     {base}
-                    WHERE LOWER(u.status) = %s
+                    WHERE LOWER(TRIM(u.status)) = %s
                     ORDER BY u.id DESC
                 """.format(base=self.USER_FIELDS_BASE)
                 params = (normalized,)
@@ -652,7 +705,7 @@ class AdminRepository:
         )
         try:
             normalized = (status_filter or "").strip().lower() or None
-            where_clause = "WHERE LOWER(u.status) = %s" if normalized else ""
+            where_clause = "WHERE LOWER(TRIM(u.status)) = %s" if normalized else ""
             filter_params: List[Any] = [normalized] if normalized else []
             data_query = """
                 {base}
@@ -698,18 +751,18 @@ class AdminRepository:
             query = f"""
                 SELECT 
                     COUNT(*) as total_users,
-                    SUM(CASE WHEN LOWER(u.status) = 'pending' THEN 1 ELSE 0 END) as pending_users,
-                    SUM(CASE WHEN LOWER(u.status) = 'approved' THEN 1 ELSE 0 END) as approved_users,
-                    SUM(CASE WHEN LOWER(u.status) = 'blocked' THEN 1 ELSE 0 END) as blocked_users,
+                    SUM(CASE WHEN LOWER(TRIM(u.status)) = 'pending' THEN 1 ELSE 0 END) as pending_users,
+                    SUM(CASE WHEN LOWER(TRIM(u.status)) = 'approved' THEN 1 ELSE 0 END) as approved_users,
+                    SUM(CASE WHEN LOWER(TRIM(u.status)) = 'blocked' THEN 1 ELSE 0 END) as blocked_users,
                     SUM(
                         CASE
-                            WHEN LOWER(u.status) = 'approved' AND u.role_id IN ({admin_placeholders})
+                            WHEN LOWER(TRIM(u.status)) = 'approved' AND u.role_id IN ({admin_placeholders})
                                 THEN 1 ELSE 0
                         END
                     ) as admins_count,
                     SUM(
                         CASE
-                            WHEN LOWER(u.status) = 'approved' AND u.role_id = %s
+                            WHEN LOWER(TRIM(u.status)) = 'approved' AND u.role_id = %s
                                 THEN 1 ELSE 0
                         END
                     ) as operators_count
@@ -726,9 +779,9 @@ class AdminRepository:
                     rr.role_id,
                     rr.role_name,
                     COUNT(u.id) AS total_count,
-                    SUM(CASE WHEN LOWER(u.status) = 'approved' THEN 1 ELSE 0 END) AS approved_count,
-                    SUM(CASE WHEN LOWER(u.status) = 'pending' THEN 1 ELSE 0 END) AS pending_count,
-                    SUM(CASE WHEN LOWER(u.status) = 'blocked' THEN 1 ELSE 0 END) AS blocked_count
+                    SUM(CASE WHEN LOWER(TRIM(u.status)) = 'approved' THEN 1 ELSE 0 END) AS approved_count,
+                    SUM(CASE WHEN LOWER(TRIM(u.status)) = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+                    SUM(CASE WHEN LOWER(TRIM(u.status)) = 'blocked' THEN 1 ELSE 0 END) AS blocked_count
                 FROM roles_reference rr
                 LEFT JOIN UsersTelegaBot u ON u.role_id = rr.role_id
                 GROUP BY rr.role_id, rr.role_name
@@ -838,7 +891,7 @@ class AdminRepository:
 
             query = """
                 {base}
-                WHERE LOWER(u.status) = 'approved' AND u.role_id = %s
+                WHERE LOWER(TRIM(u.status)) = 'approved' AND u.role_id = %s
                 ORDER BY u.id DESC
                 LIMIT %s
             """

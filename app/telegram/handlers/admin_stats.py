@@ -7,7 +7,7 @@
 from datetime import datetime, timedelta
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CallbackQueryHandler, ContextTypes, Application
+from telegram.ext import ContextTypes, Application
 
 from app.db.repositories.admin import AdminRepository
 from app.services.metrics_service import MetricsService
@@ -17,6 +17,7 @@ from app.utils.error_handlers import log_async_exceptions
 from app.utils.rate_limit import rate_limit_hit
 from app.telegram.utils.messages import safe_edit_message
 from app.telegram.utils.callback_data import AdminCB
+from app.telegram.utils.admin_registry import register_admin_callback_handler
 
 logger = get_watchdog_logger(__name__)
 
@@ -36,70 +37,98 @@ class AdminStatsHandler:
     
     @log_async_exceptions
     async def show_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Показывает общую статистику системы."""
+        """Показывает выбор периода статистики или конкретный период."""
         query = update.callback_query
         user = update.effective_user
+        action, args = AdminCB.parse(query.data or "")
+        sub_action = args[0] if args else None
+
         user_id = user.id if user else 0
         if user_id and rate_limit_hit(
             context.application.bot_data,
             user_id,
             "admin_stats",
-            cooldown_seconds=2.0,
+            cooldown_seconds=1.5,
         ):
-            await query.answer("Слишком часто обновляете статистику. Подождите пару секунд.", show_alert=True)
+            await query.answer("Слишком часто обновляете статистику. Подождите.", show_alert=True)
             return
         await query.answer()
-        
-        # Получаем базовую статистику
-        pending_users = await self.admin_repo.get_pending_users()
-        all_admins = await self.admin_repo.get_admins()
-        
-        # Получаем метрики качества по нескольким окнам
-        quality_lines = await self._collect_quality_lines()
-        
-        message = (
-            f"📈 <b>Статистика системы</b>\n\n"
-            f"<b>Пользователи:</b>\n"
-            f"⏳ Ожидают утверждения: {len(pending_users)}\n"
-            f"👑 Администраторов: {len(all_admins)}\n\n"
-            f"<b>Качество по периодам:</b>\n"
-            f"{quality_lines}"
+        if sub_action == "period" and len(args) > 1:
+            await self._show_period_summary(query, period_key=args[1])
+            return
+
+        await self._show_period_picker(query)
+
+    async def _show_period_picker(self, query) -> None:
+        text = (
+            "📈 <b>Статистика системы</b>\n"
+            "Выберите интересующий период, чтобы открыть детализацию качества."
         )
-        
-        keyboard = [
-            [InlineKeyboardButton("🔄 Обновить", callback_data=AdminCB.create(AdminCB.STATS))],
-            [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]
-        ]
-        
+        keyboard = []
+        row: list[InlineKeyboardButton] = []
+        for idx, (label, key, _) in enumerate(self._period_configs()):
+            row.append(
+                InlineKeyboardButton(
+                    label,
+                    callback_data=AdminCB.create(AdminCB.STATS, "period", key),
+                )
+            )
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+        keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))])
         await safe_edit_message(
             query,
-            text=message,
+            text=text,
             reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='HTML'
+            parse_mode="HTML",
         )
 
-    async def _collect_quality_lines(self) -> str:
+    async def _show_period_summary(self, query, *, period_key: str) -> None:
+        config = next((cfg for cfg in self._period_configs() if cfg[1] == period_key), None)
+        if not config:
+            await query.answer("Неизвестный период", show_alert=True)
+            return
+        label, _, days = config
         today = datetime.now().date()
-        period_configs = [
-            ("За последние 24 часа", 1),
-            ("За 7 дней", 7),
-            ("За 14 дней", 14),
-            ("За 30 дней", 30),
-            ("За 180 дней", 180),
+        start_date = today if days == 1 else today - timedelta(days=days - 1)
+        try:
+            summary = await self.metrics.calculate_quality_summary(
+                start_date=start_date.isoformat(),
+                end_date=today.isoformat(),
+            )
+            text = self._format_quality_summary(label, summary)
+        except Exception as exc:
+            logger.error("Failed to calculate quality summary for %s: %s", label, exc)
+            text = f"{label}: данные временно недоступны."
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "🔄 Обновить",
+                        callback_data=AdminCB.create(AdminCB.STATS, "period", period_key),
+                    )
+                ],
+                [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.STATS))],
+            ]
+        )
+        await safe_edit_message(
+            query,
+            text=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+
+    def _period_configs(self):
+        return [
+            ("24 ч", "24h", 1),
+            ("7 дней", "7d", 7),
+            ("14 дней", "14d", 14),
+            ("30 дней", "30d", 30),
+            ("180 дней", "180d", 180),
         ]
-        blocks = []
-        for label, days in period_configs:
-            try:
-                start_date = today if days == 1 else today - timedelta(days=days - 1)
-                summary = await self.metrics.calculate_quality_summary(
-                    start_date=start_date.isoformat(),
-                    end_date=today.isoformat(),
-                )
-                blocks.append(self._format_quality_summary(label, summary))
-            except Exception as exc:
-                logger.error("Failed to calculate quality summary for %s: %s", label, exc)
-                blocks.append(f"{label}: данные временно недоступны.")
-        return "\n\n".join(blocks)
 
     def _format_quality_summary(self, label: str, summary: dict) -> str:
         start_label = summary.get("start_date")
@@ -131,12 +160,5 @@ def register_admin_stats_handlers(
 ):
     """Регистрирует хендлеры статистики."""
     handler = AdminStatsHandler(admin_repo, metrics_service, permissions)
-    
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.show_stats,
-            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.STATS}",
-        )
-    )
-    
+    register_admin_callback_handler(application, AdminCB.STATS, handler.show_stats)
     logger.info("Admin stats handlers registered")

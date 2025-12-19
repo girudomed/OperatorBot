@@ -284,12 +284,14 @@ class OperatorRepository:
         # The 'statuses' and 'placeholders' logic is no longer needed as 'status' and 'role_id' are removed from WHERE clause.
         # The instruction implies removing these fields and filtering by extension IS NOT NULL instead.
         query = f"""
-            SELECT user_id,
-                   full_name,
-                   extension
+            SELECT
+                user_id,
+                NULLIF(full_name, '') AS full_name,
+                NULLIF(name, '') AS name,
+                extension
             FROM users
             WHERE extension IS NOT NULL
-            ORDER BY COALESCE(full_name, 'Без имени')
+            ORDER BY COALESCE(NULLIF(full_name, ''), NULLIF(name, ''), CAST(user_id AS CHAR))
         """
         # The 'params' should be empty as there are no dynamic parameters in the new WHERE clause.
         params = () 
@@ -311,7 +313,11 @@ class OperatorRepository:
     async def get_operator_info_by_user_id(self, user_id: int) -> Optional[Dict[str, Any]]:
         """Получает информацию об операторе по user_id."""
         query = """
-            SELECT user_id, full_name, extension
+            SELECT
+                user_id,
+                NULLIF(full_name, '') AS full_name,
+                NULLIF(name, '') AS name,
+                extension
             FROM users
             WHERE user_id = %s
             LIMIT 1

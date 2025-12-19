@@ -53,15 +53,31 @@ class OpenAIService:
                 return content.strip() if content else ""
 
             except OpenAIError as e:
-                logger.warning(f"OpenAIError (попытка {attempt + 1}/{max_retries}): {e}")
-                await asyncio.sleep(2 ** attempt)
-            except Exception:
-                logger.exception(
-                    "Ошибка OpenAI (попытка %s/%s)",
+                logger.warning(
+                    "OpenAIError (попытка %s/%s): %s",
                     attempt + 1,
                     max_retries,
+                    e,
                 )
                 await asyncio.sleep(2 ** attempt)
+            except (asyncio.TimeoutError,) as exc:
+                # Временные сетевые/таймаут ошибки — повторяем попытку с экспоненциальной задержкой.
+                logger.warning(
+                    "OpenAI timeout (попытка %s/%s): %s",
+                    attempt + 1,
+                    max_retries,
+                    exc,
+                )
+                await asyncio.sleep(2 ** attempt)
+            except Exception as exc:
+                # Непредвиденные ошибки логируем и пробрасываем выше — не скрываем баги.
+                logger.exception(
+                    "Unexpected error while calling OpenAI (attempt %s/%s): %s",
+                    attempt + 1,
+                    max_retries,
+                    exc,
+                )
+                raise
         
         return "Ошибка: Не удалось получить ответ от OpenAI."
 

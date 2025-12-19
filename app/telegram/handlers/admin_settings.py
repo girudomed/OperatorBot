@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, ContextTypes
 
 from app.config import OPENAI_API_KEY, TELEGRAM_TOKEN, DB_CONFIG, SENTRY_DSN
 from app.db.repositories.admin import AdminRepository
@@ -25,6 +25,7 @@ from app.telegram.utils.messages import safe_edit_message, MAX_MESSAGE_CHUNK
 from app.telegram.utils.logging import describe_user
 from app.telegram.utils.callback_data import AdminCB
 from app.utils.error_handlers import log_async_exceptions
+from app.telegram.utils.admin_registry import register_admin_callback_handler
 from app.workers.task_worker import start_workers, stop_workers
 
 logger = get_watchdog_logger(__name__)
@@ -230,10 +231,5 @@ def register_admin_settings_handlers(
     permissions: PermissionsManager,
 ) -> None:
     handler = AdminSettingsHandler(admin_repo, permissions)
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.handle_settings_action,
-            pattern=rf"^{AdminCB.PREFIX}:{AdminCB.SETTINGS}",
-        )
-    )
+    register_admin_callback_handler(application, AdminCB.SETTINGS, handler.handle_settings_action)
     logger.info("Admin settings handlers registered")

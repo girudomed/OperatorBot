@@ -8,6 +8,7 @@
 
 from typing import Optional, List
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from app.telegram.utils.callback_data import AdminCB
 from app.telegram.utils.state import reset_feature_states
@@ -35,10 +36,7 @@ from app.utils.job_guard import JobGuard
 from app.core.roles import role_name_from_id
 from app.telegram.ui.admin.screens import Screen
 from app.telegram.ui.admin.screens.menu import render_main_menu_screen
-from app.telegram.ui.admin.screens.dashboard import (
-    render_dashboard_screen,
-    render_dashboard_details_screen,
-)
+from app.telegram.ui.admin.screens.dashboard import render_dashboard_screen
 from app.telegram.ui.admin.screens.alerts import render_alerts_screen
 from app.telegram.ui.admin.screens.export import render_export_screen
 from app.telegram.ui.admin.screens.dangerous_ops import (
@@ -57,6 +55,8 @@ from app.telegram.ui.admin.screens.promotions import (
     render_promotion_detail_screen,
 )
 from app.telegram.ui.admin import keyboards as admin_keyboards
+from app.telegram.keyboards.inline_system import build_system_menu
+from app.telegram.utils.admin_registry import get_admin_callback_handler
 
 logger = get_watchdog_logger(__name__)
 
@@ -97,8 +97,8 @@ class AdminPanelHandler:
         reset_feature_states(context, update.effective_chat.id if update.effective_chat else None)
         
         logger.info("Админ-панель открыта пользователем %s", describe_user(user))
-        # Главный экран = дашборд
-        await self._show_dashboard(update, context)
+        # Главный экран — меню админ-панели
+        await self._show_main_menu(update, context)
     
     async def _show_main_menu(
         self,
@@ -108,10 +108,16 @@ class AdminPanelHandler:
         """Отображает компактное главное меню с навигацией по разделам."""
         user = update.effective_user
         allow_commands = False
+        allow_yandex_tools = False
         try:
             allow_commands = await self.permissions.has_permission(
                 user.id,
                 "commands",
+                user.username,
+            )
+            allow_yandex_tools = await self.permissions.has_permission(
+                user.id,
+                "debug",
                 user.username,
             )
         except Exception:
@@ -120,7 +126,10 @@ class AdminPanelHandler:
         # Сброс состояний других фич
         reset_feature_states(context, update.effective_chat.id if update.effective_chat else None)
 
-        screen = render_main_menu_screen(allow_commands)
+        screen = render_main_menu_screen(
+            allow_commands,
+            allow_yandex_tools,
+        )
         await self._render_screen(update, screen)
         logger.debug(
             "Показано главное меню админ-панели для %s",
@@ -173,10 +182,41 @@ class AdminPanelHandler:
         query = update.callback_query
         if not query:
             return
-        await query.answer()
 
         data = query.data or ""
         cb_action, cb_args = AdminCB.parse(data)
+
+        # Resolve hashed fallback callback_data (adm:hd:<digest>) if present.
+        # When AdminCB.create produced a hashed fallback, it registers the original
+        # callback string in AdminCB._hash_registry via AdminCB.register_hash.
+        # Here we try to resolve that digest back to the original callback_data and
+        # re-parse it so normal routing can proceed. We first check in-memory cache,
+        # then attempt async Redis lookup if configured.
+        if cb_action == AdminCB.HD:
+            digest = cb_args[0] if cb_args else None
+            original = None
+            if digest:
+                # Fast path: in-memory
+                try:
+                    original = AdminCB.resolve_hash(digest)
+                except Exception:
+                    original = None
+                # Slow path: async Redis-backed resolve
+                if not original:
+                    try:
+                        original = await AdminCB.resolve_hash_async(digest)
+                    except Exception:
+                        original = None
+            if original:
+                data = original
+                cb_action, cb_args = AdminCB.parse(data)
+            else:
+                # Не удалось разрешить хеш — аккуратный fallback в меню.
+                await query.answer()
+                await self._handle_unknown_callback(query)
+                return True
+
+        await query.answer()
 
         user = update.effective_user
         logger.info(
@@ -189,11 +229,12 @@ class AdminPanelHandler:
 
         if not cb_action:
             await self._handle_unknown_callback(query)
-            return
+            return True
 
         handled = await self._handle_new_callback(cb_action, cb_args, update, context)
         if not handled:
             await self._handle_unknown_callback(query)
+        return True
 
     async def _handle_new_callback(
         self,
@@ -206,7 +247,7 @@ class AdminPanelHandler:
             await self._show_dashboard(update, context)
             return True
         if action == AdminCB.DASHBOARD_DETAILS:
-            await self._show_dashboard_details(update, context)
+            await self._handle_dashboard_details_deprecated(update, context)
             return True
         if action == AdminCB.ALERTS:
             await self._show_alerts_screen(update)
@@ -221,11 +262,14 @@ class AdminPanelHandler:
             else:
                 await self._show_dangerous_ops_screen(update)
             return True
+        if action == AdminCB.SYSTEM:
+            await self._open_system_tools(update, context)
+            return True
         if action == AdminCB.BACK:
             await self._show_main_menu(update, context)
             return True
         if action == AdminCB.COMMANDS:
-            await self._show_command_shortcuts(update, context)
+            await self._show_main_menu(update, context)
             return True
         if action == AdminCB.APPROVALS:
             await self._handle_approvals_flow(args, update, context)
@@ -233,11 +277,80 @@ class AdminPanelHandler:
         if action == AdminCB.PROMOTION:
             await self._handle_promotion_flow(args, update, context)
             return True
+        if action == AdminCB.CALL_LOOKUP:
+            handler = context.application.bot_data.get("call_lookup_handler")
+            if not handler:
+                logger.error("Call lookup handler is not registered in bot_data")
+                return False
+            await handler.handle_callback(update, context)
+            return True
+        if action == AdminCB.USERS:
+            handler = get_admin_callback_handler(context, AdminCB.USERS)
+            if not handler:
+                logger.error("Admin users handler is not registered in bot_data")
+                return False
+            await handler(update, context)
+            return True
+        if action == AdminCB.CALL:
+            handler = context.application.bot_data.get("call_lookup_handler")
+            if not handler:
+                logger.error("Call handler is not registered in bot_data")
+                return False
+            await handler.handle_call_callback(update, context, args)
+            return True
+        if action == AdminCB.YANDEX:
+            handler = context.application.bot_data.get("call_lookup_handler")
+            if not handler:
+                logger.error("Call lookup handler is not registered in bot_data")
+                return False
+            await handler.handle_reindex(update, context)
+            return True
         if action == AdminCB.COMMAND:
             payload = args[1] if len(args) > 1 else None
             await self._handle_command_action(args[0] if args else None, payload, update, context)
             return True
+        if action == AdminCB.HELP_SCREEN:
+            await self._show_inline_help(update, context)
+            return True
+        if action == AdminCB.MANUAL:
+            await self._show_manual_link(update, context)
+            return True
+        handler = get_admin_callback_handler(context, action)
+        if handler:
+            await handler(update, context)
+            return True
         return False
+
+    async def _show_inline_help(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> None:
+        handler = context.application.bot_data.get("help_command_handler")
+        if handler:
+            await handler(update, context)
+            return
+        await self._reply_feature_unavailable(update, "Справка временно недоступна.")
+
+    async def _show_manual_link(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> None:
+        handler = context.application.bot_data.get("manual_text_handler")
+        if handler:
+            await handler(update, context)
+            return
+        await self._reply_feature_unavailable(update, "Мануал временно недоступен.")
+
+    async def _reply_feature_unavailable(
+        self,
+        update: Update,
+        message: str,
+    ) -> None:
+        target = update.effective_message
+        if target:
+            await target.reply_text(message)
 
     async def _handle_approvals_flow(
         self,
@@ -494,7 +607,7 @@ class AdminPanelHandler:
         blocked_count = counters.get('blocked_users', 0)
         total_users = counters.get('total_users', 0)
 
-        updated_at = datetime.now().strftime("%H:%M:%S")
+        updated_at = datetime.now(ZoneInfo("Europe/Moscow")).strftime("%H:%M:%S")
 
         logger.info(
             "Дашборд открыт пользователем %s (pending=%s admins=%s)",
@@ -506,30 +619,6 @@ class AdminPanelHandler:
         screen = render_dashboard_screen(counters, updated_at)
         await self._render_screen(update, screen)
 
-    async def _show_dashboard_details(
-        self,
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE,
-    ) -> None:
-        query = update.callback_query
-        if query and await self._rate_limit(query, context, "admin_dashboard_details", 2.0):
-            return
-        try:
-            counters = await self.admin_repo.get_users_counters()
-        except Exception as exc:
-            logger.error("Не удалось загрузить детали дашборда: %s", exc)
-            await self._render_screen(
-                update,
-                Screen(
-                    text="⚠️ Не удалось получить данные. Попробуйте повторить позже.",
-                    keyboard=admin_keyboards.back_only_keyboard(),
-                ),
-            )
-            return
-        updated_at = datetime.now().strftime("%H:%M:%S")
-        screen = render_dashboard_details_screen(counters, updated_at)
-        await self._render_screen(update, screen)
-
     async def _show_alerts_screen(self, update: Update) -> None:
         await self._render_screen(update, render_alerts_screen())
 
@@ -538,6 +627,47 @@ class AdminPanelHandler:
 
     async def _show_dangerous_ops_screen(self, update: Update) -> None:
         await self._render_screen(update, render_dangerous_ops_screen())
+
+    async def _handle_dashboard_details_deprecated(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> None:
+        query = update.callback_query
+        if query:
+            await query.answer("Экран деталей отключён. Обновляю дашборд.", show_alert=True)
+        await self._show_dashboard(update, context)
+
+    async def _open_system_tools(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> None:
+        query = update.callback_query
+        user = update.effective_user
+        if not query or not user:
+            return
+        if not await self._can_use_system_tools(user.id, user.username):
+            await query.answer("Недостаточно прав", show_alert=True)
+            return
+        include_cache_reset = self.permissions.is_dev_admin(user.id, user.username)
+        await safe_edit_message(
+            query,
+            text="⚙️ <b>Системные функции</b>\nВыберите действие:",
+            reply_markup=build_system_menu(
+                include_cache_reset,
+                back_callback=AdminCB.create(AdminCB.BACK),
+            ),
+            parse_mode="HTML",
+        )
+
+    async def _can_use_system_tools(self, user_id: int, username: Optional[str]) -> bool:
+        if self.permissions.is_supreme_admin(user_id, username):
+            return True
+        if self.permissions.is_dev_admin(user_id, username):
+            return True
+        role = await self.permissions.get_effective_role(user_id, username)
+        return await self.permissions.check_permission(role, "debug")
 
     async def _show_critical_operation_confirmation(
         self,
@@ -577,51 +707,7 @@ class AdminPanelHandler:
             "📑 <b>Команды бота</b>\n"
             "Выберите нужное действие – команда выполнится автоматически."
         )
-        keyboard = [
-            [
-                InlineKeyboardButton(
-                    "📅 Еженедельный отчёт",
-                    callback_data=AdminCB.create(AdminCB.COMMAND, "weekly_quality"),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🧠 AI-отчёт",
-                    callback_data=AdminCB.create(AdminCB.COMMAND, "report"),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "⏳ Заявки",
-                    callback_data=AdminCB.create(AdminCB.APPROVALS, AdminCB.LIST, 0),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "⬆️ Повышения",
-                    callback_data=AdminCB.create(AdminCB.PROMOTION, "menu"),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "👑 Список админов",
-                    callback_data=AdminCB.create(AdminCB.COMMAND, "admins"),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🧩 Назначить роль",
-                    callback_data=AdminCB.create(AdminCB.COMMAND, "set_role"),
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "⚠️ Оповестить о техработах",
-                    callback_data=AdminCB.create(AdminCB.COMMAND, "maintenance_alert"),
-                )
-            ],
-            [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))],
-        ]
+        keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]]
         await safe_edit_message(
             query,
             text=text,
@@ -736,6 +822,19 @@ class AdminPanelHandler:
             finally:
                 job_guard.release(guard_key)
             return
+
+        # Delegate unknown command actions to the admin_commands handler if present.
+        # This keeps admin-panel as the single router while allowing feature handlers
+        # (like AdminCommandsHandler) to implement their own business logic.
+        commands_handler = context.application.bot_data.get("admin_commands_handler")
+        if commands_handler and hasattr(commands_handler, "handle_admin_command_action"):
+            try:
+                delegated = await commands_handler.handle_admin_command_action(action, payload, update, context)
+                if delegated:
+                    return
+            except Exception as exc:
+                logger.exception("Delegation to admin_commands failed: %s", exc)
+
         await query.answer("Команда в разработке", show_alert=True)
 
     async def _run_weekly_quality(self, query, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -751,7 +850,7 @@ class AdminPanelHandler:
                 query,
                 text="❌ Не удалось построить отчёт качества.",
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.COMMANDS))]]
+                    [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]]
                 ),
             )
             return
@@ -762,7 +861,7 @@ class AdminPanelHandler:
                         "🔄 Обновить", callback_data=AdminCB.create(AdminCB.COMMAND, "weekly_quality")
                     )
                 ],
-                [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.COMMANDS))],
+                [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))],
             ]
         )
         await safe_edit_message(
@@ -787,7 +886,7 @@ class AdminPanelHandler:
                 query,
                 text="👑 Нет администраторов в системе.",
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.COMMANDS))]]
+                    [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]]
                 ),
             )
             return
@@ -804,7 +903,7 @@ class AdminPanelHandler:
             query,
             text=text,
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.COMMANDS))]]
+                [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]]
             ),
             parse_mode="HTML",
         )
@@ -832,7 +931,7 @@ class AdminPanelHandler:
                 query,
                 text="Нет утверждённых пользователей.",
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.COMMANDS))]]
+                    [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]]
                 ),
             )
             return
@@ -863,7 +962,7 @@ class AdminPanelHandler:
             )
         if nav_row:
             keyboard.append(nav_row)
-        keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.COMMANDS))])
+        keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))])
         await safe_edit_message(
             query,
             text="🧩 <b>Выберите пользователя для смены роли</b>",
@@ -1024,6 +1123,7 @@ def register_admin_panel_handlers(
     permissions: PermissionsManager
 ):
     """Регистрирует хендлеры админ-панели."""
+    application.bot_data.setdefault("admin_callback_handlers", {})
     handler = AdminPanelHandler(admin_repo, permissions)
     
     # Команда /admin и reply-кнопка
@@ -1031,16 +1131,20 @@ def register_admin_panel_handlers(
         MessageHandler(
             filters.Regex(r"(?i)^\s*(?:👑\s*)?админ-?панел[ья]\s*$"),
             handler.admin_command,
-            group=0,
             block=False,
-        )
+        ),
+        group=0,
     )
     logger.info("Registered admin reply button handler (regex: админ-панел)")
     application.add_handler(CommandHandler("admin", handler.admin_command))
     
     # Callback handlers
     application.add_handler(
-        CallbackQueryHandler(handler.handle_callback, pattern=rf"^{AdminCB.PREFIX}:")
+        CallbackQueryHandler(
+            handler.handle_callback,
+            pattern=rf"^{AdminCB.PREFIX}:",
+            block=False,
+        )
     )
 
     logger.info("Admin panel handlers registered")

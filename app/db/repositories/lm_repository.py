@@ -7,6 +7,7 @@
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 import json
+import aiomysql
 
 from app.db.manager import DatabaseManager
 from app.db.models import LMValueRecord
@@ -87,10 +88,12 @@ class LMRepository:
         try:
             result = await self.db_manager.execute_with_retry(query, params)
         except Exception as exc:  # pragma: no cover - зависимость от БД
+            # Ловим любые ошибки слоёв БД/менеджера, логируем с трассировкой и поднимаем контролируемую ошибку.
             logger.exception(
-                "Failed to execute INSERT for LM value %s (history_id=%s)",
+                "Failed to execute INSERT for LM value %s (history_id=%s): %s",
                 metric_code,
                 history_id,
+                exc,
             )
             raise RuntimeError(
                 f"Database error while saving LM value {metric_code}"
@@ -111,9 +114,10 @@ class LMRepository:
                 )
             except Exception as exc:  # pragma: no cover - зависимость от БД
                 logger.exception(
-                    "Failed to fetch LM value ID for %s (history_id=%s)",
+                    "Failed to fetch LM value ID for %s (history_id=%s): %s",
                     metric_code,
                     history_id,
+                    exc,
                 )
                 raise RuntimeError(
                     f"Database error while confirming LM value {metric_code}"
