@@ -149,7 +149,16 @@ class AdminAdminsHandler:
             ]
         )
         keyboard.append(
-            [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]
+            [
+                InlineKeyboardButton(
+                    "⬅️ К пользователям",
+                    callback_data=AdminCB.create(AdminCB.USERS, AdminCB.LIST, AdminCB.STATUS_PENDING),
+                ),
+                InlineKeyboardButton(
+                    "🏠 В админку",
+                    callback_data=AdminCB.create(AdminCB.BACK),
+                ),
+            ]
         )
 
         await safe_edit_message(

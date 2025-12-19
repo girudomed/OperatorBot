@@ -3,15 +3,13 @@
 """
 Раздел админ-панели «Настройки».
 
-Позволяет просматривать логи, проверять ключевые переменные окружения,
+Позволяет проверять ключевые переменные окружения,
 перезапускать воркеры и очищать устаревшие данные кеша.
 """
 
 from __future__ import annotations
 
 import html
-from io import BytesIO
-from pathlib import Path
 from typing import Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -30,12 +28,6 @@ from app.workers.task_worker import start_workers, stop_workers
 
 logger = get_watchdog_logger(__name__)
 
-LOG_FILES = [
-    Path("logs/operabot.log"),
-    Path("logs/errors.log"),
-    Path("logs/logs.log"),
-]
-MAX_LOG_LINES = 40
 DEFAULT_CACHE_TTL_DAYS = 30
 
 
@@ -71,24 +63,9 @@ class AdminSettingsHandler:
 
         message = (
             "⚙️ <b>Настройки</b>\n\n"
-            "Сервисные операции для администраторов:\n"
-            "• просматривайте последние логи;\n"
-            "• очищайте устаревший кеш дашбордов."
+            "На данный момент нет доступных операций."
         )
-        keyboard = [
-            [
-                InlineKeyboardButton(
-                    "📄 Логи", callback_data=AdminCB.create(AdminCB.SETTINGS, "logs")
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    "🧹 Очистить кеш",
-                    callback_data=AdminCB.create(AdminCB.SETTINGS, "cleanup"),
-                ),
-            ],
-            [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))],
-        ]
+        keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]]
 
         await safe_edit_message(
             query,
@@ -128,101 +105,8 @@ class AdminSettingsHandler:
 
         if sub_action == "menu":
             await self.show_settings_menu(update, context)
-        elif sub_action == "logs":
-            await self._send_logs(query)
-        elif sub_action == "cleanup":
-            await self._cleanup_cache(query)
         else:
-            await query.answer("Неизвестная команда", show_alert=True)
-
-    async def _send_logs(self, query) -> None:
-        log_text = None
-        log_path = None
-        for candidate in LOG_FILES:
-            if candidate.exists():
-                try:
-                    lines = candidate.read_text(encoding="utf-8", errors="ignore").splitlines()
-                except Exception as exc:
-                    logger.warning("Не удалось прочитать лог %s: %s", candidate, exc)
-                    continue
-                log_path = candidate
-                tail = lines[-MAX_LOG_LINES:] if len(lines) > MAX_LOG_LINES else lines
-                log_text = "\n".join(tail)
-                break
-
-        keyboard = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "🔄 Обновить",
-                        callback_data=AdminCB.create(AdminCB.SETTINGS, "logs"),
-                    ),
-                    InlineKeyboardButton(
-                        "◀️ Назад", callback_data=AdminCB.create(AdminCB.SETTINGS)
-                    ),
-                ]
-            ]
-        )
-        if not log_text:
-            await safe_edit_message(
-                query,
-                text="📄 Логи недоступны (файлы не найдены).",
-                reply_markup=keyboard,
-                parse_mode="HTML",
-            )
-            return
-
-        await self._send_logs_file(query, log_text, log_path)
-        await safe_edit_message(
-            query,
-            text="📄 Файл с логами отправлен отдельным сообщением.",
-            reply_markup=keyboard,
-            parse_mode="HTML",
-        )
-
-
-    async def _cleanup_cache(self, query) -> None:
-        try:
-            delete_query = """
-                DELETE FROM operator_dashboards
-                WHERE cached_at < DATE_SUB(NOW(), INTERVAL %s DAY)
-            """
-            await self.admin_repo.db.execute_with_retry(
-                delete_query,
-                params=(DEFAULT_CACHE_TTL_DAYS,),
-                commit=True,
-            )
-            text = (
-                f"🧹 Удалены записи из operator_dashboards старше {DEFAULT_CACHE_TTL_DAYS} дней."
-            )
-            logger.info("Old dashboard cache entries removed via admin settings")
-        except Exception as exc:
-            logger.exception("Не удалось очистить кеш дашбордов: %s", exc)
-            text = f"⚠️ Ошибка при очистке кеша: {exc}"
-
-        await safe_edit_message(
-            query,
-            text=text,
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.SETTINGS))]]
-            ),
-        )
-
-    async def _send_logs_file(self, query, log_text: str, log_path: Optional[Path]) -> None:
-        message = getattr(query, "message", None)
-        if not message:
-            logger.warning("Нет message для отправки логов файлом")
-            return
-        buffer = BytesIO()
-        buffer.write(log_text.encode("utf-8"))
-        buffer.seek(0)
-        filename = (log_path.name if isinstance(log_path, Path) else "logs.txt") or "logs.txt"
-        caption = f"📄 Логи ({filename})"
-        await message.reply_document(
-            document=buffer,
-            filename=filename,
-            caption=caption,
-        )
+            await self.show_settings_menu(update, context)
 
 
 def register_admin_settings_handlers(

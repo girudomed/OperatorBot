@@ -63,6 +63,8 @@ logger = get_watchdog_logger(__name__)
 class AdminPanelHandler:
     """Основной хендлер админ-панели."""
     
+    SYSTEM_MENU_ROLES = {"founder", "head_of_registry"}
+    
     def __init__(
         self,
         admin_repo: AdminRepository,
@@ -382,6 +384,13 @@ class AdminPanelHandler:
             page = self._safe_int(args[2]) if len(args) > 2 else 0
             await self._decline_pending_user(update, context, telegram_id, page)
             return
+        if sub_action == AdminCB.BACK:
+            handler = get_admin_callback_handler(context, AdminCB.USERS)
+            if handler:
+                await handler(update, context)
+            else:
+                await self._show_main_menu(update, context)
+            return
         page = self._safe_int(args[1]) if len(args) > 1 else 0
         await self._show_approvals_list(update, page)
 
@@ -651,13 +660,20 @@ class AdminPanelHandler:
             await query.answer("Недостаточно прав", show_alert=True)
             return
         include_cache_reset = self.permissions.is_dev_admin(user.id, user.username)
+        description = (
+            "⚙️ <b>Системные функции</b>\n"
+            "⚠️ Только для Dev и руководства. Команды выполняются мгновенно и могут влиять на прод.\n\n"
+            "• 🔍 Состояние бота — проверка доступности БД/пула.\n"
+            "• ❌ Последние ошибки — выборка последних записей из логов.\n"
+            "• 🔌 Проверка БД/Mango — базовые SQL/интеграционные тесты.\n"
+            "• 🔄 Синхронизация аналитики — запускает ETL call_scores → call_analytics.\n"
+            "• 🎧 Индексация записей — пересканирование записи в Яндекс.Диск.\n"
+            "• 🗑️ Очистить кеш — только Dev, очищает Redis/локальный кеш.\n"
+        )
         await safe_edit_message(
             query,
-            text="⚙️ <b>Системные функции</b>\nВыберите действие:",
-            reply_markup=build_system_menu(
-                include_cache_reset,
-                back_callback=AdminCB.create(AdminCB.BACK),
-            ),
+            text=description,
+            reply_markup=build_system_menu(include_cache_reset),
             parse_mode="HTML",
         )
 
@@ -667,7 +683,7 @@ class AdminPanelHandler:
         if self.permissions.is_dev_admin(user_id, username):
             return True
         role = await self.permissions.get_effective_role(user_id, username)
-        return await self.permissions.check_permission(role, "debug")
+        return role in self.SYSTEM_MENU_ROLES
 
     async def _show_critical_operation_confirmation(
         self,

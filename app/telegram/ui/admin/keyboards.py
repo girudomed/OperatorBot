@@ -14,9 +14,6 @@ def dashboard_keyboard() -> InlineKeyboard:
     return [
         [
             InlineKeyboardButton("🔄 Обновить", callback_data=AdminCB.create(AdminCB.DASHBOARD)),
-            InlineKeyboardButton(
-                "📈 Статистика системы", callback_data=AdminCB.create(AdminCB.STATS)
-            ),
         ],
         [
             InlineKeyboardButton("🚨 Алерты", callback_data=AdminCB.create(AdminCB.ALERTS)),
@@ -24,7 +21,8 @@ def dashboard_keyboard() -> InlineKeyboard:
         ],
         [
             InlineKeyboardButton(
-                "🛠 Dev-panel", callback_data=AdminCB.create(AdminCB.CRITICAL)
+                "📝 Еженедельный отчёт",
+                callback_data=AdminCB.create(AdminCB.COMMAND, "weekly_quality"),
             ),
         ],
         [
@@ -38,7 +36,8 @@ def alerts_keyboard() -> InlineKeyboard:
     return [
         [
             InlineKeyboardButton(
-                "🔍 Поиск звонков", callback_data=AdminCB.create(AdminCB.LOOKUP)
+                "🔍 Поиск звонков",
+                callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "intro"),
             ),
             InlineKeyboardButton(
                 "👥 Пользователи",
@@ -70,28 +69,6 @@ def export_keyboard() -> InlineKeyboard:
 def dangerous_ops_keyboard() -> InlineKeyboard:
     return [
         [
-            InlineKeyboardButton(
-                "📢 Техработы",
-                callback_data=AdminCB.create(AdminCB.CRITICAL, "maintenance_alert"),
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "⚙️ Настройки", callback_data=AdminCB.create(AdminCB.SETTINGS)
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "🎧 Индексация записей",
-                callback_data=AdminCB.create(AdminCB.YANDEX, "reindex"),
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "🛠 Система", callback_data=AdminCB.create(AdminCB.SYSTEM)
-            )
-        ],
-        [
             InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK)),
             InlineKeyboardButton("🏠 В дашборд", callback_data=AdminCB.create(AdminCB.DASHBOARD)),
         ],
@@ -107,7 +84,7 @@ def critical_confirm_keyboard(action: str) -> InlineKeyboard:
             )
         ],
         [
-            InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.CRITICAL)),
+            InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.SYSTEM)),
             InlineKeyboardButton("🏠 В дашборд", callback_data=AdminCB.create(AdminCB.DASHBOARD)),
         ],
     ]
@@ -120,7 +97,6 @@ def main_menu_keyboard(
 ) -> InlineKeyboard:
     keyboard: InlineKeyboard = [
         [
-            InlineKeyboardButton("📊 Дашборд", callback_data=AdminCB.create(AdminCB.DASHBOARD)),
             InlineKeyboardButton(
                 "👥 Пользователи",
                 callback_data=AdminCB.create(AdminCB.USERS, AdminCB.LIST, AdminCB.STATUS_PENDING),
@@ -128,22 +104,21 @@ def main_menu_keyboard(
         ],
         [
             InlineKeyboardButton(
-                "📝 Еженедельный отчёт",
-                callback_data=AdminCB.create(AdminCB.COMMAND, "weekly_quality"),
-            ),
-            InlineKeyboardButton(
                 "🧠 AI-отчёт", callback_data=AdminCB.create(AdminCB.REPORTS, "period_menu")
             ),
-        ],
-        [
-            InlineKeyboardButton("🧠 LM Метрики", callback_data=AdminCB.create(AdminCB.LM_MENU)),
-            InlineKeyboardButton("🔍 Поиск звонков", callback_data=AdminCB.create(AdminCB.LOOKUP)),
+            InlineKeyboardButton(
+                "🧠 LM Метрики", callback_data=AdminCB.create(AdminCB.LM_MENU)
+            ),
         ],
         [
             InlineKeyboardButton(
-                "📈 Статистика системы",
+                "🔍 Поиск звонков",
+                callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "intro"),
+            ),
+            InlineKeyboardButton(
+                "📈 Live-Dashboard",
                 callback_data=AdminCB.create(AdminCB.STATS),
-            )
+            ),
         ],
         [
             InlineKeyboardButton(

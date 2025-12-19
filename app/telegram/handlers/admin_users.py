@@ -256,31 +256,34 @@ class AdminUsersHandler:
                 },
             )
 
-        filter_buttons = [
-            InlineKeyboardButton("⏳ В ожидании", callback_data=self._build_list_callback('pending')),
-            InlineKeyboardButton("✅ Одобрены", callback_data=self._build_list_callback('approved')),
-            InlineKeyboardButton("🚫 Заблокированы", callback_data=self._build_list_callback('blocked')),
-        ]
-        keyboard.append(filter_buttons)
-        keyboard.append(
-            [
-                InlineKeyboardButton("⏳ Заявки", callback_data=AdminCB.create(AdminCB.APPROVALS, AdminCB.LIST, 0)),
-                InlineKeyboardButton("⬆️ Повышения", callback_data=AdminCB.create(AdminCB.PROMOTION, "menu")),
+        if status_filter == 'pending':
+            filter_buttons = [
+                InlineKeyboardButton("✅ Одобрены", callback_data=self._build_list_callback('approved')),
+                InlineKeyboardButton("🚫 Заблокированы", callback_data=self._build_list_callback('blocked')),
             ]
-        )
-        keyboard.append(
-            [
-                InlineKeyboardButton(
-                    "👑 Список админов",
-                    callback_data=AdminCB.create(AdminCB.ADMINS, AdminCB.LIST, 0),
-                ),
-                InlineKeyboardButton(
-                    "🧩 Назначить роль",
-                    callback_data=AdminCB.create(AdminCB.COMMAND, "set_role"),
-                ),
-            ]
-        )
-        keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))])
+            keyboard.append(filter_buttons)
+            keyboard.append(
+                [
+                    InlineKeyboardButton("⏳ Заявки", callback_data=AdminCB.create(AdminCB.APPROVALS, AdminCB.LIST, 0)),
+                ]
+            )
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        "👑 Список админов",
+                        callback_data=AdminCB.create(AdminCB.ADMINS, AdminCB.LIST, 0),
+                    ),
+                ]
+            )
+        elif status_filter == 'approved':
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        "⬅️ К пользователям",
+                        callback_data=self._build_list_callback(self.default_filter, 0),
+                    )
+                ]
+            )
 
         # Всегда пытаемся обновить. safe_edit_message сам решит: редактировать или прислать новое,
         # если редактирование невозможно (например, текст совпал, но мы хотим обновить клавиатуру).

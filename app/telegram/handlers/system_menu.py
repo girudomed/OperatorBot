@@ -13,6 +13,7 @@ from collections import deque
 from functools import partial
 from pathlib import Path
 from typing import Optional, Iterable, Deque
+from io import BytesIO
 
 from telegram import Update
 from telegram.ext import (
@@ -48,6 +49,8 @@ class SystemMenuHandler:
         Path("logs/operabot.log"),
         Path("logs/errors.log"),
     ]
+    ALLOWED_ROLES = {"founder", "head_of_registry"}
+    MAX_LOG_LINES = 40
 
     def __init__(
         self,
@@ -104,7 +107,7 @@ class SystemMenuHandler:
             await query.answer("Недостаточно прав", show_alert=True)
             return
 
-        action = query.data.replace("system_", "", 1)
+        action = (query.data or "").replace("system_", "", 1)
         include_cache_reset = self.permissions.is_dev_admin(user.id, user.username)
 
         try:
@@ -118,6 +121,8 @@ class SystemMenuHandler:
                 text = await self._run_sync()
             elif action == "yandex_index":
                 text = await self._run_yandex_index(update, context)
+            elif action == "logs":
+                text = await self._send_logs(query)
             elif action == "clear_cache":
                 if not include_cache_reset:
                     text = "❌ Доступ к очистке кеша разрешён только Dev Admin."
@@ -148,7 +153,7 @@ class SystemMenuHandler:
         if self.permissions.is_dev_admin(user_id, username):
             return True
         role = await self.permissions.get_effective_role(user_id, username)
-        return await self.permissions.check_permission(role, "debug")
+        return role in self.ALLOWED_ROLES
 
     async def _collect_status(self) -> str:
         lines = ["⚙️ <b>Состояние системы</b>"]
@@ -181,6 +186,29 @@ class SystemMenuHandler:
             return "✅ В логе нет ошибок за последнюю сессию."
         return "❌ <b>Последние ошибки</b>:\n" + "\n".join(errors)
 
+    async def _send_logs(self, query) -> str:
+        log_text = None
+        log_path = None
+        for candidate in self.LOG_PATHS:
+            if candidate.exists():
+                try:
+                    lines = candidate.read_text(encoding="utf-8", errors="ignore").splitlines()
+                except Exception as exc:
+                    logger.warning("Не удалось прочитать лог %s: %s", candidate, exc)
+                    continue
+                log_path = candidate
+                tail = (
+                    lines[-self.MAX_LOG_LINES :]
+                    if len(lines) > self.MAX_LOG_LINES
+                    else lines
+                )
+                log_text = "\n".join(tail)
+                break
+        if not log_text:
+            return "📄 Логи недоступны (файлы не найдены)."
+        await self._send_logs_file(query, log_text, log_path)
+        return "📄 Файл с логами отправлен отдельным сообщением."
+
     def _grep_logs(
         self,
         paths: Iterable[Path],
@@ -207,6 +235,22 @@ class SystemMenuHandler:
             except Exception as exc:
                 logger.warning("Не удалось прочитать лог %s: %s", path, exc)
         return bucket
+
+    async def _send_logs_file(self, query, log_text: str, log_path: Optional[Path]) -> None:
+        message = getattr(query, "message", None)
+        if not message:
+            logger.warning("Нет message для отправки логов файлом")
+            return
+        buffer = BytesIO()
+        buffer.write(log_text.encode("utf-8"))
+        buffer.seek(0)
+        filename = (log_path.name if isinstance(log_path, Path) else "logs.txt") or "logs.txt"
+        caption = f"📄 Логи ({filename})"
+        await message.reply_document(
+            document=buffer,
+            filename=filename,
+            caption=caption,
+        )
 
     @log_async_exceptions
     async def handle_last_errors_command(

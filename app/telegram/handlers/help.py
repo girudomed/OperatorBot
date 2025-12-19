@@ -6,7 +6,7 @@
 Краткие блоки команд, NO spam, role-based контент.
 """
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler
 
 from app.db.manager import DatabaseManager
@@ -14,6 +14,8 @@ from app.db.repositories.users import UserRepository
 from app.db.repositories.roles import RolesRepository
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.logging_config import get_watchdog_logger
+from app.telegram.utils.messages import safe_edit_message
+from app.telegram.utils.callback_data import AdminCB
 
 logger = get_watchdog_logger(__name__)
 
@@ -34,8 +36,11 @@ class HelpHandler:
         user_id = update.effective_user.id
         username = update.effective_user.username
         message = update.effective_message
+        query = update.callback_query
         
         logger.info(f"[HELP] Command from {user_id}")
+        if query:
+            await query.answer()
         
         # Получить роль
         user = await self.user_repo.get_user_by_telegram_id(user_id)
@@ -113,7 +118,17 @@ class HelpHandler:
             "❓ Вопросы? Обратитесь к администратору."
         )
         
-        if message:
+        if query:
+            reply_markup = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))]]
+            )
+            await safe_edit_message(
+                query,
+                text=help_text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown',
+            )
+        elif message:
             await message.reply_text(help_text, parse_mode='Markdown')
         
         logger.info(f"[HELP] Sent help for {user_id}, role_id={role_id}")

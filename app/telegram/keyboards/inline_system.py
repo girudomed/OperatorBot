@@ -2,11 +2,17 @@
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from app.telegram.utils.callback_data import AdminCB
 
-def build_system_menu(include_cache_reset: bool = False, back_callback: str = "system_back") -> InlineKeyboardMarkup:
+
+def build_system_menu(
+    include_cache_reset: bool = False,
+    back_callback: str = AdminCB.create(AdminCB.BACK),
+) -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("🔍 Состояние бота", callback_data="system_status")],
         [InlineKeyboardButton("❌ Последние ошибки", callback_data="system_errors")],
+        [InlineKeyboardButton("📄 Логи", callback_data="system_logs")],
         [InlineKeyboardButton("🔌 Проверка БД/Mango", callback_data="system_check")],
         [InlineKeyboardButton("🔄 Синхронизация аналитики", callback_data="system_sync")],
         [InlineKeyboardButton("🎧 Индексация записей", callback_data="system_yandex_index")],
@@ -15,7 +21,20 @@ def build_system_menu(include_cache_reset: bool = False, back_callback: str = "s
         keyboard.append(
             [InlineKeyboardButton("🗑️ Очистить кеш", callback_data="system_clear_cache")]
         )
-    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data=back_callback)])
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                "📢 Техработы",
+                callback_data=AdminCB.create(AdminCB.CRITICAL, "maintenance_alert"),
+            ),
+        ]
+    )
+    keyboard.append(
+        [
+            InlineKeyboardButton("◀️ Назад", callback_data=back_callback)
+        ]
+    )
+    return InlineKeyboardMarkup(keyboard)
     return InlineKeyboardMarkup(keyboard)
 
 

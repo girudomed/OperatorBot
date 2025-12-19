@@ -662,6 +662,14 @@ class _CallLookupHandlers:
                 )
             ]
         )
+        keyboard_rows.append(
+            [
+                InlineKeyboardButton(
+                    "⬅️ Назад",
+                    callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "cancel"),
+                )
+            ]
+        )
 
         return "\n".join(lines), InlineKeyboardMarkup(keyboard_rows)
 
@@ -838,22 +846,12 @@ class _CallLookupHandlers:
     ) -> None:
         if not message:
             return
-        chat_id = message.chat_id
-        if chat_id is not None:
-            context.chat_data[self._pending_storage_key(chat_id)] = {"period": default_period}
-        period_label = self._human_period_name(default_period)
-        text = (
-            "🔍 <b>Поиск звонков</b>\n\n"
-            "Используйте <code>/call_lookup &lt;номер&gt; &lt;период&gt;</code>\n"
-            "или выберите период на клавиатуре — бот запросит номер отдельно.\n\n"
-            f"По умолчанию выбран период: <b>{period_label}</b>.\n"
-            "Просто отправьте номер телефона цифрами или сначала смените период."
+        await self._prompt_lookup_start(
+            context,
+            message.chat_id,
+            message.from_user,
+            default_period=default_period,
         )
-        keyboard = self._lookup_menu_keyboard(
-            message.from_user.id if message.from_user else 0,
-            message.from_user.username if message.from_user else None,
-        )
-        await message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
     @log_async_exceptions
     async def handle_callback(self, update: Update, context: CallbackContext) -> None:
@@ -888,7 +886,17 @@ class _CallLookupHandlers:
             describe_user(user),
         )
 
-        if sub_action == "ask":
+        if sub_action == "intro":
+            period = params[0] if params else "monthly"
+            reset_feature_states(context, chat_id)
+            await self._prompt_lookup_start(
+                context,
+                chat_id,
+                user,
+                default_period=period,
+            )
+            return
+        elif sub_action == "ask":
             period = params[0] if params else "monthly"
             context.chat_data[self._pending_storage_key(chat_id)] = {"period": period}
             await self._safe_send_message(
@@ -1128,10 +1136,12 @@ class _CallLookupHandlers:
         elif sub_action == "cancel":
             context.chat_data.pop(self._pending_storage_key(chat_id), None)
             context.chat_data.pop(self._recordings_storage_key(chat_id), None)
+            context.chat_data.pop(self._call_details_storage_key(chat_id), None)
+            self._clear_analysis_chunks(context, chat_id)
             await self._safe_send_message(
                 context,
                 chat_id,
-                "Режим поиска звонков закрыт.",
+                "🔙 Поиск звонков остановлен. Выберите период, чтобы начать заново, или вернитесь назад.",
                 reply_markup=self._lookup_menu_keyboard(user.id, user.username),
             )
 
@@ -1181,6 +1191,8 @@ class _CallLookupHandlers:
             await self._handle_call_transcript_preview(update, context, history_id, user)
         elif sub_action == "analysis":
             await self._handle_call_analysis(update, context, history_id, user)
+        elif sub_action == "analysis_more":
+            await self._handle_call_analysis_more(update, context, history_id, user)
         elif sub_action == "back":
             await self._handle_call_back(update, context)
 
@@ -1249,8 +1261,8 @@ class _CallLookupHandlers:
         if not details:
             await self._safe_send_message(context, chat_id, "Звонок не найден.")
             return
-        await self._send_call_audio(context, chat_id, history_id, details, user)
         await self._send_call_transcript(context, chat_id, history_id, details, user)
+        await self._send_call_audio(context, chat_id, history_id, details, user)
 
     async def _handle_call_transcript_preview(
         self,
@@ -1316,17 +1328,71 @@ class _CallLookupHandlers:
             lines.append("")
             lines.append("<b>Метрики:</b>")
             lines.extend(metric_lines)
+        chunks = self._split_text_chunks("\n".join(lines), ANALYSIS_CHUNK_LIMIT)
+        first_chunk = chunks[0]
+        remainder = chunks[1:]
+        reply_markup = None
+        if remainder:
+            self._store_analysis_chunks(context, chat_id, history_id, remainder)
+            reply_markup = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "📄 Показать больше",
+                            callback_data=AdminCB.create(AdminCB.CALL, "analysis_more", history_id),
+                        )
+                    ]
+                ]
+            )
+        else:
+            self._clear_analysis_chunks(context, chat_id, history_id)
         await self._safe_send_message(
             context,
             chat_id,
-            "\n".join(lines),
+            first_chunk,
             parse_mode="HTML",
+            reply_markup=reply_markup,
         )
         logger.info(
-            "[CALL_LOOKUP] analysis_sent history_id=%s user=%s",
+            "[CALL_LOOKUP] analysis_sent history_id=%s user=%s chunks=%s",
             history_id,
             describe_user(user),
+            1 + len(remainder),
         )
+
+    async def _handle_call_analysis_more(
+        self,
+        update: Update,
+        context: CallbackContext,
+        history_id: int,
+        user: User,
+    ) -> None:
+        chat_id = self._resolve_chat_id(update, user)
+        chunk, has_more = self._pop_next_analysis_chunk(context, chat_id, history_id)
+        if not chunk:
+            await self._safe_send_message(context, chat_id, "Дополнительный текст анализа отсутствует.")
+            return
+        reply_markup = None
+        if has_more:
+            reply_markup = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "📄 Показать больше",
+                            callback_data=AdminCB.create(AdminCB.CALL, "analysis_more", history_id),
+                        )
+                    ]
+                ]
+            )
+        await self._safe_send_message(
+            context,
+            chat_id,
+            chunk,
+            parse_mode="HTML",
+            reply_markup=reply_markup,
+        )
+        if not has_more:
+            self._clear_analysis_chunks(context, chat_id, history_id)
 
     async def _handle_call_back(
         self,
@@ -1681,14 +1747,21 @@ class _CallLookupHandlers:
         patient = details.get("caller_number") or details.get("caller_info") or "—"
         duration = self._format_duration(details.get("talk_duration"))
         score = details.get("score")
+        caller_display = details.get("caller_info") or details.get("caller_number") or "—"
+        called_display = details.get("called_info") or details.get("called_number") or "—"
+        recording_id = details.get("recording_id")
         lines = [
             f"📞 Звонок #{history_id}",
             f"🕒 {call_time}",
             f"📱 {patient}",
             f"⏱ {duration}",
+            f"👤 Кто звонил: {caller_display}",
+            f"🏢 Кому звонили: {called_display}",
         ]
         if score is not None:
             lines.append(f"⭐ Score: {score}")
+        if recording_id:
+            lines.append(f"🎧 recording_id: {recording_id}")
         return "\n".join(lines)
 
     async def _send_call_card(
@@ -1835,8 +1908,36 @@ class _CallLookupHandlers:
         transcript: str,
     ) -> None:
         chunks = self._split_text(transcript, limit=3800)
-        for chunk in chunks:
-            await self._safe_send_message(context, chat_id, f"📝 Полный текст:\n{chunk}")
+        for index, chunk in enumerate(chunks):
+            reply_markup = None
+            if index + 1 < len(chunks):
+                reply_markup = InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "⬅️ Назад к списку",
+                                callback_data=AdminCB.create(AdminCB.CALL, "back", history_id),
+                            )
+                        ]
+                    ]
+                )
+            else:
+                reply_markup = InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "⬅️ Назад к списку",
+                                callback_data=AdminCB.create(AdminCB.CALL, "back", history_id),
+                            )
+                        ]
+                    ]
+                )
+            await self._safe_send_message(
+                context,
+                chat_id,
+                f"📝 Полный текст:\n{chunk}",
+                reply_markup=reply_markup,
+            )
 
     def _split_text(self, text: str, limit: int) -> List[str]:
         if len(text) <= limit:
@@ -1882,7 +1983,47 @@ class _CallLookupHandlers:
                 ),
             ],
         ]
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    "⬅️ В админ-панель",
+                    callback_data=AdminCB.create(AdminCB.BACK),
+                ),
+            ]
+        )
         return InlineKeyboardMarkup(buttons)
+
+    def _build_lookup_intro_text(self, period: str) -> str:
+        return (
+            "🔍 <b>Поиск звонков</b>\n\n"
+            "Выберите период на клавиатуре, а затем укажите номер.\n\n"
+            "Сначала придёт текстовая расшифровка. "
+            "Дождитесь скачивания звонка — это может занять некоторое время."
+        )
+
+    async def _prompt_lookup_start(
+        self,
+        context: CallbackContext,
+        chat_id: Optional[int],
+        user: Optional[User],
+        *,
+        default_period: str = "monthly",
+    ) -> None:
+        if chat_id is None:
+            return
+        context.chat_data[self._pending_storage_key(chat_id)] = {"period": default_period}
+        text = self._build_lookup_intro_text(default_period)
+        keyboard = self._lookup_menu_keyboard(
+            user.id if user else None,
+            user.username if user else None,
+        )
+        await self._safe_send_message(
+            context,
+            chat_id,
+            text,
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
 
     @staticmethod
     def _human_period_name(period: str) -> str:

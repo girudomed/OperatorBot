@@ -58,7 +58,13 @@ def render_approvals_list_screen(
             )
         ]
     )
-    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))])
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                "◀️ Назад", callback_data=AdminCB.create(AdminCB.APPROVALS, AdminCB.BACK)
+            )
+        ]
+    )
     return Screen(text=text, keyboard=keyboard)
 
 
@@ -69,7 +75,7 @@ def render_empty_approvals_screen() -> Screen:
     )
     keyboard = [
         [InlineKeyboardButton("🔄 Проверить снова", callback_data=AdminCB.create(AdminCB.APPROVALS, AdminCB.LIST, 0))],
-        [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))],
+        [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.APPROVALS, AdminCB.BACK))],
     ]
     return Screen(text=text, keyboard=keyboard)
 
@@ -122,4 +128,3 @@ def _user_label(user: dict) -> str:
     base = user.get("full_name") or user.get("username") or f"#{user.get('id')}"
     ext = f" · {user.get('extension')}" if user.get("extension") else ""
     return f"{base}{ext}"
-
