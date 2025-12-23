@@ -107,26 +107,30 @@ class LMRepository:
         INSERT INTO lm_value (
             history_id, call_score_id, metric_code, metric_group,
             value_numeric, value_label, value_json,
-            lm_version, calc_profile, calc_method, calc_source
+            lm_version, calc_profile, calc_method, calc_source,
+            calculated_at
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-        )
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        ) AS new
         ON DUPLICATE KEY UPDATE
-            call_score_id = VALUES(call_score_id),
-            value_numeric = VALUES(value_numeric),
-            value_label = VALUES(value_label),
-            value_json = VALUES(value_json),
-            lm_version = VALUES(lm_version),
-            calc_profile = VALUES(calc_profile),
-            calc_method = VALUES(calc_method),
-            calc_source = VALUES(calc_source),
+            call_score_id = new.call_score_id,
+            value_numeric = new.value_numeric,
+            value_label = new.value_label,
+            value_json = new.value_json,
+            lm_version = new.lm_version,
+            calc_profile = new.calc_profile,
+            calc_method = new.calc_method,
+            calc_source = new.calc_source,
+            calculated_at = new.calculated_at,
             updated_at = CURRENT_TIMESTAMP
         """
         
+        calculated_at = datetime.utcnow()
         params = (
             history_id, call_score_id, metric_code, metric_group,
             value_numeric, value_label, value_json_str,
-            lm_version, calc_profile, calc_method, calc_source
+            lm_version, calc_profile, calc_method, calc_source,
+            calculated_at
         )
         
         try:

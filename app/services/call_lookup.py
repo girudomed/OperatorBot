@@ -269,6 +269,11 @@ class CallLookupService:
             offset_value,
         )
 
+        logger.debug(
+            "Call lookup SQL:\n%s\nParams: %s",
+            query.strip(),
+            params,
+        )
         rows = await self.db_manager.execute_with_retry(
             query,
             params=params,
@@ -364,6 +369,11 @@ class CallLookupService:
             WHERE ch.{history_pk} = %s
             LIMIT 1
         """
+        logger.debug(
+            "Call details SQL:\n%s\nParams: (%s,)",
+            query.strip(),
+            history_id,
+        )
         result = await self.db_manager.execute_with_retry(
             query,
             params=(history_id,),
@@ -421,15 +431,21 @@ class CallLookupService:
                 """
                 try:
                     for detail in details:
-                        await self.db_manager.execute_with_retry(
-                        detail_query,
-                        params=(
+                        log_params = (
                             requesting_user_id,
                             normalized_phone,
                             result_count,
-                                detail.get("history_id"),
-                                detail.get("recording_id"),
-                            ),
+                            detail.get("history_id"),
+                            detail.get("recording_id"),
+                        )
+                        logger.debug(
+                            "Call access detail SQL:\n%s\nParams: %s",
+                            detail_query.strip(),
+                            log_params,
+                        )
+                        await self.db_manager.execute_with_retry(
+                            detail_query,
+                            params=log_params,
                         )
                     return
                 except Exception as detail_exc:
@@ -443,13 +459,19 @@ class CallLookupService:
                 INSERT INTO call_access_logs (user_id, phone_normalized, result_count, created_at)
                 VALUES (%s, %s, %s, NOW())
             """
+            summary_params = (
+                requesting_user_id,
+                normalized_phone,
+                len(details) if detail_failed and details else result_count,
+            )
+            logger.debug(
+                "Call access summary SQL:\n%s\nParams: %s",
+                summary_query.strip(),
+                summary_params,
+            )
             await self.db_manager.execute_with_retry(
                 summary_query,
-                params=(
-                    requesting_user_id,
-                    normalized_phone,
-                    len(details) if detail_failed and details else result_count,
-                ),
+                params=summary_params,
             )
         except Exception as exc:
             # Логируем, но не срываем основной поток операции
