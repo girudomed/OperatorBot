@@ -186,6 +186,12 @@ class DatabaseManager:
         async with self.acquire() as connection:
             async with connection.cursor() as cursor:
                 try:
+                    query_preview = " ".join(query.split()) if isinstance(query, str) else str(query)
+                    logger.info(
+                        "[DB] Executing query: %s | params=%s",
+                        query_preview,
+                        params,
+                    )
                     start_time = time.time()
                     await cursor.execute(query, params)
                     elapsed_time = time.time() - start_time
@@ -198,18 +204,28 @@ class DatabaseManager:
                 
                     if fetchone:
                         result = await cursor.fetchone()
+                        logger.info("[DB] fetchone result=%s", result)
                         if commit and connection:
                             await connection.commit()
                         return result if isinstance(result, dict) else {}
 
                     if fetchall:
                         result = await cursor.fetchall()
+                        logger.info(
+                            "[DB] fetchall rows=%s",
+                            len(result) if isinstance(result, list) else 0,
+                        )
                         if commit and connection:
                             await connection.commit()
                         return result if isinstance(result, list) else []
 
                     if commit and connection:
                         await connection.commit()
+                    logger.info(
+                        "[DB] exec ok rowcount=%s lastrowid=%s",
+                        cursor.rowcount,
+                        getattr(cursor, "lastrowid", None),
+                    )
                     return True
                 except Exception as e:
                     if log_error:
