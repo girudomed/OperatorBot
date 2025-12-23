@@ -255,6 +255,7 @@ class CallLookupService:
                 OR {caller_expr} COLLATE utf8mb4_general_ci LIKE CAST(%s AS CHAR CHARACTER SET utf8mb4)
             )
             AND COALESCE(ch.context_start_time_dt, FROM_UNIXTIME(ch.context_start_time)) BETWEEN %s AND %s
+            AND COALESCE(ch.talk_duration, 0) >= 10
             GROUP BY ch.{history_pk}
             ORDER BY COALESCE(ch.context_start_time_dt, FROM_UNIXTIME(ch.context_start_time)) DESC
             LIMIT %s OFFSET %s
@@ -367,6 +368,7 @@ class CallLookupService:
             FROM call_history ch
             {score_join}
             WHERE ch.{history_pk} = %s
+            AND COALESCE(ch.talk_duration, 0) >= 10
             LIMIT 1
         """
         logger.debug(

@@ -1357,6 +1357,7 @@ class LMRepository:
         query = f"""
             {base_query}
             WHERE {where_clause}{date_filter}
+              AND COALESCE(ch.talk_duration, cs.talk_duration, 0) >= 10
             ORDER BY COALESCE(ch.context_start_time_dt, cs.call_date, lv.created_at) DESC
             LIMIT %s OFFSET %s
         """
@@ -1414,6 +1415,7 @@ class LMRepository:
             LEFT JOIN call_scores cs ON cs.history_id = lv.history_id
             LEFT JOIN call_history ch ON ch.history_id = lv.history_id
             WHERE {conditions}
+              AND COALESCE(ch.talk_duration, cs.talk_duration, 0) >= 10
         """
 
         row = await self.db_manager.execute_with_retry(query, tuple(params) if params else None, fetchone=True)

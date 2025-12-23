@@ -656,12 +656,15 @@ class _CallLookupHandlers:
             )
 
             lines.append("")
-            lines.append(f"🕒 {call_time}")
-            lines.append(f"📱 {caller}")
-            lines.append(f"⏱ {duration}")
+            lines.append(f"{offset + idx}. #{history_id or '—'}")
+            header_parts = [
+                f"🕒 {call_time}",
+                f"⏱ {duration}",
+                f"⭐ {score_display}",
+            ]
+            lines.append(" | ".join(header_parts))
             lines.append(f"👤 Кто звонил: {caller}")
             lines.append(f"🏢 Кому звонили: {called}")
-            lines.append(f"⭐ Score: {score_display}")
             if recording_id:
                 lines.append(f"🎧 recording_id: {recording_id}")
 

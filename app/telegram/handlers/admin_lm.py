@@ -108,6 +108,14 @@ class LMHandlers:
                 # Загружаем расширенную инфо для證據 (evidence)
                 h_rec, s_rec = await self.repo.get_call_records_for_lm(h_id)
                 call_info = {**(h_rec or {}), **(s_rec or {})}
+                talk_duration = call_info.get("talk_duration")
+                if talk_duration is not None:
+                    try:
+                        if float(talk_duration) < 10.0:
+                            await query.answer("Звонок короче 10 секунд — карточка скрыта.", show_alert=True)
+                            return
+                    except (TypeError, ValueError):
+                        pass
                 
             except Exception as e:
                 logger.error(f"[LM] Database error for history_id={h_id}: {e}")
