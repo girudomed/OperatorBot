@@ -14,6 +14,7 @@ import signal
 import os
 import re
 from typing import Optional
+from pathlib import Path
 
 import httpx
 from telegram import BotCommand, Update
@@ -72,7 +73,8 @@ setup_global_exception_handlers()
 logger = get_watchdog_logger(__name__)
 
 # Блокировка повторного запуска
-LOCK_FILE = "/app/operabot.lock"
+BASE_DIR = Path(__file__).resolve().parent.parent
+LOCK_FILE = BASE_DIR / "operabot.lock"
 
 
 USER_ERROR_MESSAGE = "Ошибка доступа к базе. Проверьте конфигурацию/схему БД."
@@ -217,7 +219,7 @@ async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_T
             )
 
 def acquire_lock():
-    os.makedirs(os.path.dirname(LOCK_FILE), exist_ok=True)
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
     fp = open(LOCK_FILE, "w")
     try:
         fcntl.lockf(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -511,7 +513,7 @@ async def main():
             lock_fp.close()
         finally:
             try:
-                os.remove(LOCK_FILE)
+                LOCK_FILE.unlink()
             except FileNotFoundError:
                 logger.debug("Lock файл %s уже отсутствует при завершении", LOCK_FILE)
             except OSError as exc:
