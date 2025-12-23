@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import types
 import sys
 import logging
 import signal
@@ -249,6 +250,27 @@ def log_uncaught_exceptions(exc_type, exc_value, exc_traceback):
     )
 
 sys.excepthook = log_uncaught_exceptions
+
+
+def _patch_handler_registration(application):
+    """Позволяет писать код с group даже на старых версиях PTB10."""
+    original_add_handler = application.add_handler
+
+    def safe_add_handler(self, handler, *args, **kwargs):
+        try:
+            return original_add_handler(handler, *args, **kwargs)
+        except TypeError as exc:
+            if "unexpected keyword argument 'group'" in str(exc) and "group" in kwargs:
+                kwargs = dict(kwargs)
+                kwargs.pop("group", None)
+                logger.warning(
+                    "PTB version does not support grouped handlers, falling back to default. Details: %s",
+                    exc,
+                )
+                return original_add_handler(handler, *args, **kwargs)
+            raise
+
+    application.add_handler = types.MethodType(safe_add_handler, application)
 async def main():
     # Блокировка запуска
     lock_fp = acquire_lock()
@@ -322,6 +344,7 @@ async def main():
             .request(request)
             .build()
         )
+        _patch_handler_registration(application)
         application.add_error_handler(telegram_error_handler)
         workers_started = False
         

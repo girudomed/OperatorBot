@@ -1338,7 +1338,9 @@ class _CallLookupHandlers:
     ) -> None:
         chat_id = self._resolve_chat_id(update, update.effective_user)
         details = await self._ensure_call_details(context, chat_id, history_id)
-        transcript = details.get("transcript") if details else None
+        transcript = None
+        if details:
+            transcript = details.get("transcript") or details.get("raw_transcript")
         if not transcript:
             await self._safe_send_message(context, chat_id, "Полная расшифровка отсутствует.")
             return
@@ -1736,7 +1738,7 @@ class _CallLookupHandlers:
         record_url = details.get("record_url")
         recording_id = details.get("recording_id") or "—"
         lm_metrics = details.get("lm_metrics") or []
-        transcript_text = transcript or "Расшифровка отсутствует."
+        transcript_text = transcript or details.get("raw_transcript") or "Расшифровка отсутствует."
 
         metrics_lines = self._format_metrics(lm_metrics)
 
@@ -1922,7 +1924,7 @@ class _CallLookupHandlers:
         origin: Optional[str] = None,
         origin_context: Optional[str] = None,
     ) -> Tuple[str, bool]:
-        transcript = details.get("transcript")
+        transcript = details.get("transcript") or details.get("raw_transcript")
         truncated = False
         status = "missing"
         if transcript:

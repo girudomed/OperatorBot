@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import html
 from collections import deque
+import re
 from functools import partial
 from pathlib import Path
 from typing import Optional, Iterable, Deque
@@ -48,6 +49,7 @@ class SystemMenuHandler:
         Path("logs/operabot.log"),
         Path("logs/errors.log"),
     ]
+    TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
     ALLOWED_ROLES = {"founder", "head_of_registry"}
     MAX_LOG_LINES = 40
 
@@ -221,16 +223,21 @@ class SystemMenuHandler:
             if not path.exists():
                 continue
             try:
+                last_stamp = ""
                 with path.open("r", encoding="utf-8", errors="ignore") as handler:
                     for line in handler:
                         normalized = line.rstrip()
                         if not normalized:
                             continue
+                        ts_match = self.TIMESTAMP_RE.match(normalized)
+                        if ts_match:
+                            last_stamp = ts_match.group(0)
                         lower = normalized.lower()
                         if any(pattern in lower for pattern in patterns):
                             bucket.append(f"[{path.name}] {normalized}")
                         elif include_tracebacks and tb_keyword in lower:
-                            bucket.append(f"[{path.name}] {normalized}")
+                            prefix = f"{last_stamp} | " if last_stamp and not ts_match else ""
+                            bucket.append(f"[{path.name}] {prefix}{normalized}")
             except Exception as exc:
                 logger.warning("Не удалось прочитать лог %s: %s", path, exc)
         return bucket

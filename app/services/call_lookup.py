@@ -364,11 +364,12 @@ class CallLookupService:
                 {record_url_select} AS record_url,
                 ch.recording_id,
                 {score_columns},
+                ch.transcript AS raw_transcript,
                 {score_result_select} AS operator_result
             FROM call_history ch
             {score_join}
             WHERE ch.{history_pk} = %s
-            AND COALESCE(ch.talk_duration, 0) >= 10
+              AND COALESCE(ch.talk_duration, 0) >= 10
             LIMIT 1
         """
         logger.debug(
