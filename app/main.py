@@ -106,7 +106,10 @@ async def user_context_injector(update: Update, context: ContextTypes.DEFAULT_TY
 
 _INCOMING_TEXT_SKIP_PATTERNS = [
     re.compile(r"(?i)^\s*(?:📊\s*)?(?:ai\s+)?отч[её]ты\s*$"),
+    re.compile(r"(?i)^\s*🔍\s*поиск\s+звонк[ао]в?\s*$"),
 ]
+_CALL_LOOKUP_PENDING_PREFIX = "call_lookup_pending"
+_CALL_LOOKUP_NUMBER_PATTERN = re.compile(r"^[\d\+\-\s\.\(\)\*…]+$")
 
 
 async def debug_incoming(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -119,6 +122,13 @@ async def debug_incoming(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     for pattern in _INCOMING_TEXT_SKIP_PATTERNS:
         if pattern.match(normalized):
             return
+
+    chat = update.effective_chat
+    if chat:
+        pending_key = f"{_CALL_LOOKUP_PENDING_PREFIX}:{chat.id}"
+        if pending_key in context.chat_data and _CALL_LOOKUP_NUMBER_PATTERN.match(normalized):
+            return
+
     logger.warning("[INCOMING TEXT] %r", message.text)
 
 
