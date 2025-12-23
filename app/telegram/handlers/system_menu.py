@@ -30,7 +30,6 @@ from app.db.repositories.roles import RolesRepository
 from app.db.utils_schema import clear_schema_cache
 from app.logging_config import get_watchdog_logger
 from app.services.admin_logger import AdminActionLogger
-from app.services.call_analytics_sync import CallAnalyticsSyncService
 from app.telegram.handlers.auth import help_command
 from app.telegram.utils.logging import describe_user
 from app.utils.error_handlers import log_async_exceptions
@@ -60,7 +59,6 @@ class SystemMenuHandler:
         self.db_manager = db_manager
         self.permissions = permissions
         self.roles_repo = RolesRepository(db_manager)
-        self.analytics_service = CallAnalyticsSyncService(db_manager)
         self.action_logger = AdminActionLogger(db_manager)
 
     @log_async_exceptions
@@ -110,6 +108,8 @@ class SystemMenuHandler:
         action = (query.data or "").replace("system_", "", 1)
         include_cache_reset = self.permissions.is_dev_admin(user.id, user.username)
 
+        simple_reply_actions = {"status", "errors", "logs", "clear_cache"}
+
         try:
             if action == "status":
                 text = await self._collect_status()
@@ -117,10 +117,6 @@ class SystemMenuHandler:
                 text = await self._collect_recent_errors()
             elif action == "check":
                 text = await self._run_integrity_checks()
-            elif action == "sync":
-                text = await self._run_sync()
-            elif action == "yandex_index":
-                text = await self._run_yandex_index(update, context)
             elif action == "logs":
                 text = await self._send_logs(query)
             elif action == "clear_cache":
@@ -138,11 +134,14 @@ class SystemMenuHandler:
             text = f"❌ Ошибка при выполнении действия: {exc}"
 
         try:
-            await query.edit_message_text(
-                text=text,
-                parse_mode="HTML",
-                reply_markup=build_system_menu(include_cache_reset),
-            )
+            if action in simple_reply_actions:
+                await query.message.reply_text(text, parse_mode="HTML")
+            else:
+                await query.edit_message_text(
+                    text=text,
+                    parse_mode="HTML",
+                    reply_markup=build_system_menu(include_cache_reset),
+                )
         except Exception:
             logger.debug("Не удалось обновить сообщение системного меню", exc_info=True)
 
@@ -281,46 +280,14 @@ class SystemMenuHandler:
         )
 
     async def _run_integrity_checks(self) -> str:
-        lines = ["🔌 <b>Проверка ключевых таблиц</b>"]
-        tables = [
-            "UsersTelegaBot",
-            "roles_reference",
-            "call_history",
-            "call_scores",
-        ]
-        for table in tables:
-            try:
-                await self.db_manager.execute_with_retry(
-                    f"SELECT 1 FROM {table} LIMIT 1", fetchone=True
-                )
-                lines.append(f"✅ {table}")
-            except Exception as exc:
-                logger.error("Проверка таблицы %s завершилась ошибкой: %s", table, exc, exc_info=True)
-                lines.append(f"❌ {table}: {exc}")
-        return "\n".join(lines)
-
-    async def _run_sync(self) -> str:
-        result = await self.analytics_service.sync_new()
-        inserted = result.get("inserted", 0)
-        errors = result.get("errors", 0)
-        duration = float(result.get("duration") or 0.0)
-        return (
-            "🔄 <b>Синхронизация call_analytics</b>\n"
-            f"Добавлено записей: {inserted}\n"
-            f"Ошибок: {errors}\n"
-            f"Длительность: {duration:.2f} c"
-        )
-    async def _run_yandex_index(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-        handler = context.application.bot_data.get("call_lookup_handler")
-        if not handler or not hasattr(handler, "handle_reindex"):
-            return "Сервис индексации недоступен."
-        try:
-            await handler.handle_reindex(update, context)
-            return "🎧 Индексация записей запущена."
-        except Exception as exc:
-            logger.exception("system_yandex_index failed: %s", exc)
-            return f"❌ Ошибка при запуске индексации: {exc}"
-
+        status_text = await self._collect_status()
+        if status_text.startswith("⚙️ <b>Состояние системы</b>"):
+            status_text = status_text.replace(
+                "⚙️ <b>Состояние системы</b>",
+                "🔌 <b>Проверка БД</b>",
+                1,
+            )
+        return status_text
     async def _clear_caches(self) -> str:
         self.roles_repo.clear_cache()
         self.permissions.clear_cache()

@@ -41,24 +41,26 @@ class TestLMMetricsCalculations(unittest.TestCase):
     
     def test_response_speed_answered_call(self):
         """Тест: принятый звонок должен иметь высокий response_speed."""
-        speed = self.lm_service._calculate_response_speed(
+        speed_value, speed_label = self.lm_service._calculate_response_speed(
             self.test_call_history,
             self.test_call_score
         )
-        self.assertEqual(speed, 85.0)
-        self.assertGreaterEqual(speed, 0)
-        self.assertLessEqual(speed, 100)
+        self.assertEqual(speed_value, 5.0)
+        self.assertEqual(speed_label, 'green')
+        self.assertGreaterEqual(speed_value, 0)
+        self.assertLessEqual(speed_value, 5)
     
     def test_response_speed_missed_call(self):
         """Тест: пропущенный звонок должен иметь низкий response_speed."""
         missed_call = self.test_call_history.copy()
         missed_call['talk_duration'] = 0
         
-        speed = self.lm_service._calculate_response_speed(
+        speed_value, speed_label = self.lm_service._calculate_response_speed(
             missed_call,
             None
         )
-        self.assertEqual(speed, 20.0)
+        self.assertEqual(speed_value, 1.0)
+        self.assertEqual(speed_label, 'red')
     
     def test_talk_efficiency_long_call(self):
         """Тест: длинный разговор должен иметь высокую эффективность."""
@@ -127,15 +129,32 @@ class TestLMMetricsCalculations(unittest.TestCase):
         lost_call['outcome'] = 'no_interest'
         lost_call['is_target'] = 1
         
-        loss = self.lm_service._calculate_lost_opportunity(lost_call)
-        self.assertEqual(loss, 80.0)
+        loss_score, loss_meta = self.lm_service._calculate_lost_opportunity(self.test_call_history, lost_call)
+        self.assertEqual(loss_score, 80.0)
+        self.assertIsInstance(loss_meta, dict)
+    
+    def test_lost_opportunity_full_penalty(self):
+        """Тест: длинный разговор, низкий скор, нет причины = 100 баллов."""
+        lost_call = self.test_call_score.copy()
+        lost_call['outcome'] = 'lead_no_record'
+        lost_call['is_target'] = 1
+        lost_call['call_score'] = 3.5
+        lost_call['refusal_reason'] = ''
+        history = self.test_call_history.copy()
+        history['talk_duration'] = 45
+        
+        loss_score, loss_meta = self.lm_service._calculate_lost_opportunity(history, lost_call)
+        self.assertEqual(loss_score, 100.0)
+        self.assertTrue(loss_meta.get("requires_reason"))
     
     def test_lost_opportunity_converted(self):
         """Тест: записавшийся клиент = нет потерь."""
-        loss = self.lm_service._calculate_lost_opportunity(
+        loss_score, loss_meta = self.lm_service._calculate_lost_opportunity(
+            self.test_call_history,
             self.test_call_score
         )
-        self.assertEqual(loss, 0.0)
+        self.assertEqual(loss_score, 0.0)
+        self.assertIsInstance(loss_meta, dict)
     
     def test_cross_sell_potential_booked(self):
         """Тест: записавшийся клиент = высокий cross-sell."""
@@ -198,6 +217,7 @@ class TestLMMetricsCalculations(unittest.TestCase):
         """Тест: отмена = средний риск оттока."""
         cancel_call = self.test_call_score.copy()
         cancel_call['call_category'] = 'Отмена записи'
+        cancel_call['outcome'] = 'cancel'
         
         level, score = self.lm_service._calculate_churn_risk(cancel_call)
         self.assertEqual(level, 'high')  # 70 >= 70
@@ -215,34 +235,74 @@ class TestLMMetricsCalculations(unittest.TestCase):
         """Тест: прямая жалоба = 100% риск."""
         complaint_call = self.test_call_score.copy()
         complaint_call['call_category'] = 'Жалоба'
+        complaint_call['transcript'] = 'Почему вы не записали меня? Я буду жаловаться руководству.'
+        history = self.test_call_history.copy()
+        history['talk_duration'] = 90
         
-        score, flag = self.lm_service._calculate_complaint_risk(complaint_call)
-        self.assertEqual(score, 100.0)
+        score, flag, context = self.lm_service._calculate_complaint_risk(
+            history,
+            complaint_call,
+        )
+        self.assertGreaterEqual(score, 70.0)
         self.assertTrue(flag)
+        self.assertIn("жалоба", " ".join(context.get("reasons", [])).lower())
     
     def test_complaint_risk_low_quality(self):
-        """Тест: низкое качество = риск жалобы."""
+        """Тест: низкий скор без претензии не должен давать жалобу."""
         low_quality_call = self.test_call_score.copy()
         low_quality_call['call_score'] = 2.0
+        low_quality_call['talk_duration'] = 80
+        low_quality_call['transcript'] = 'Здравствуйте. Интересует запись. Спасибо.'
         
-        score, flag = self.lm_service._calculate_complaint_risk(low_quality_call)
-        self.assertEqual(score, 60.0)
-        self.assertTrue(flag)  # 60 >= 50
+        score, flag, context = self.lm_service._calculate_complaint_risk(
+            self.test_call_history,
+            low_quality_call,
+        )
+        self.assertEqual(score, 0.0)
+        self.assertFalse(flag)
+        self.assertIn("Нет признаков", " ".join(context.get("reasons", [])))
     
     def test_followup_needed_lead(self):
         """Тест: лид без записи требует фоллоу-ап."""
         lead_call = self.test_call_score.copy()
         lead_call['outcome'] = 'lead_no_record'
         
-        followup = self.lm_service._calculate_followup_needed(lead_call)
-        self.assertTrue(followup)
+        flag, context = self.lm_service._calculate_followup_needed(self.test_call_history, lead_call)
+        self.assertTrue(flag)
+        self.assertIsNotNone(context)
+        self.assertIn("reason", context)
     
     def test_followup_not_needed_booked(self):
         """Тест: запись не требует фоллоу-ап."""
-        followup = self.lm_service._calculate_followup_needed(
+        flag, context = self.lm_service._calculate_followup_needed(
+            self.test_call_history,
             self.test_call_score
         )
-        self.assertFalse(followup)
+        self.assertFalse(flag)
+        self.assertIsNone(context)
+    
+    def test_followup_reason_refusal_code(self):
+        """Тест: код отказа из списка => follow-up c причиной."""
+        call = self.test_call_score.copy()
+        call['refusal_category_code'] = 'PATIENT_WILL_CLARIFY'
+        call['refusal_reason'] = 'Пациент уточнит и подумает'
+        
+        flag, context = self.lm_service._calculate_followup_needed(self.test_call_history, call)
+        self.assertTrue(flag)
+        self.assertIsNotNone(context)
+        self.assertIn('PATIENT_WILL_CLARIFY', " ".join(context.get("reasons", [])))
+    
+    def test_followup_non_target_drop(self):
+        """Тест: технический обрыв с реальным клиентом."""
+        call = self.test_call_score.copy()
+        call['outcome'] = 'non_target'
+        call['transcript'] = 'Здравствуйте, хочу записаться'
+        history = self.test_call_history.copy()
+        history['talk_duration'] = 35
+        
+        flag, context = self.lm_service._calculate_followup_needed(history, call)
+        self.assertTrue(flag)
+        self.assertIn('non_target', " ".join(context.get("reasons", [])))
     
     # =================================================================
     # FORECAST METRICS TESTS

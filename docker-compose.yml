@@ -12,9 +12,27 @@ services:
       - .:/app  # Для разработки: монтируем код напрямую, для продакшена лучше убрать
     env_file:
       - .env
-    restart: always
+    restart: unless-stopped
     logging:
       driver: json-file
       options:
         max-size: "30m"  # Максимальный размер файла логов
         max-file: "1"    # Логи перезаписываются при достижении лимита
+
+  lm_weights_job:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: operabot:latest
+    container_name: lm_weights_job
+    command: ["bash", "-lc", "python scripts/update_lm_weights.py --days ${LM_WEIGHT_DAYS:-14} --limit ${LM_WEIGHT_LIMIT:-20000}"]
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app
+      - LM_WEIGHT_DAYS=${LM_WEIGHT_DAYS:-14}
+      - LM_WEIGHT_LIMIT=${LM_WEIGHT_LIMIT:-20000}
+    volumes:
+      - .:/app
+      - ./config:/app/config
+    restart: "no"

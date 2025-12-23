@@ -94,8 +94,6 @@ class OperatorRepository:
         """
         Получает данные звонков (history и scores) для оператора.
         """
-        start_ts = int(start_date.timestamp())
-        end_ts = int(end_date.timestamp())
         start_str = start_date.strftime('%Y-%m-%d %H:%M:%S')
         end_str = end_date.strftime('%Y-%m-%d %H:%M:%S')
 
@@ -104,17 +102,18 @@ class OperatorRepository:
         SELECT 
             ch.history_id, 
             ch.called_info, 
-            ch.context_start_time, 
+            ch.context_start_time,
+            COALESCE(ch.context_start_time_dt, FROM_UNIXTIME(ch.context_start_time)) AS context_start_time_dt, 
             ch.talk_duration,
             ch.answered_extension
         FROM mangoapi_db.call_history ch
         WHERE 
             ch.answered_extension = %s
-            AND ch.context_start_time BETWEEN %s AND %s
+            AND COALESCE(ch.context_start_time_dt, FROM_UNIXTIME(ch.context_start_time)) BETWEEN %s AND %s
         """
         history_rows = await self.db_manager.execute_with_retry(
             history_query, 
-            (extension, start_ts, end_ts), 
+            (extension, start_str, end_str), 
             fetchall=True
         ) or []
 
@@ -168,9 +167,13 @@ class OperatorRepository:
         history_query = """
             SELECT
                 COUNT(*) AS total_calls,
-                SUM(CASE WHEN cs.history_id IS NULL THEN 1 ELSE 0 END) AS missed_calls
+                SUM(
+                    CASE
+                        WHEN COALESCE(ch.talk_duration, 0) = 0 THEN 1
+                        ELSE 0
+                    END
+                ) AS missed_calls
             FROM call_history ch
-            LEFT JOIN call_scores cs ON cs.history_id = ch.history_id
             WHERE ch.context_start_time BETWEEN %s AND %s
         """
         log_extra = {

@@ -30,6 +30,17 @@ logger = get_watchdog_logger(__name__)
 # Type variable для правильной типизации декораторов
 F = TypeVar('F', bound=Callable[..., Any])
 
+try:
+    from aiohttp import ClientError as _AiohttpClientError
+except Exception:  # pragma: no cover
+    _AiohttpClientError = ()  # type: ignore
+
+NETWORK_ERROR_TYPES = (
+    ConnectionError,
+    TimeoutError,
+    asyncio.TimeoutError,
+) + ((_AiohttpClientError,) if isinstance(_AiohttpClientError, type) else ())
+
 _loop_exception_handler: Optional[
     Callable[[asyncio.AbstractEventLoop, Dict[str, Any]], None]
 ] = None
@@ -42,10 +53,10 @@ def setup_global_exception_handlers():
     global _loop_exception_handler
     # Обработчик необработанных исключений (sync)
     def handle_exception(exc_type, exc_value, exc_traceback):
-        if issubclass(exc_type, KeyboardInterrupt):
+        if issubclass(exc_type, (KeyboardInterrupt, SystemExit)):
             sys.__excepthook__(exc_type, exc_value, exc_traceback)
             return
-        
+
         logger.error(
             "Необработанное исключение в основном потоке",
             exc_info=(exc_type, exc_value, exc_traceback),
@@ -63,6 +74,9 @@ def setup_global_exception_handlers():
         message = context.get("message", "Необработанное исключение в async задаче")
         
         if exception:
+            if isinstance(exception, asyncio.CancelledError):
+                logger.info("Async task cancelled during shutdown: %s", message)
+                return
             logger.error(
                 f"Async exception: {message}",
                 exc_info=(type(exception), exception, exception.__traceback__),
@@ -182,6 +196,18 @@ def _classify_business_error(error: Exception) -> str:
         return "db_schema_error"
     if isinstance(error, PermissionError) or "permission" in message:
         return "permission_error"
+    if isinstance(error, NETWORK_ERROR_TYPES) or any(
+        token in message
+        for token in (
+            "network is unreachable",
+            "connection reset",
+            "connection aborted",
+            "connection refused",
+            "temporary failure in name resolution",
+            "host unreachable",
+        )
+    ):
+        return "network_error"
     if "timeout" in message:
         return "timeout_error"
     return "unexpected_error"
@@ -193,6 +219,8 @@ async def _notify_user_about_error(update: Optional[Update], category: str) -> b
     default_message = "⚠️ Произошла ошибка. Повторите действие или обратитесь к разработчику."
     if category == "db_schema_error":
         default_message = "⚠️ Ошибка БД, обратитесь к разработчику."
+    elif category == "network_error":
+        default_message = "⚠️ Проблемы с сетью. Проверьте соединение или повторите позднее."
     notified = False
     try:
         if update.callback_query:

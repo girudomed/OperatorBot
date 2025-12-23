@@ -11,6 +11,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app.telegram.utils.callback_data import AdminCB
+from app.telegram.utils.callback_lm import LMCB
 from app.telegram.utils.state import reset_feature_states
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -26,6 +27,7 @@ from telegram.ext import (
 )
 
 from app.db.repositories.admin import AdminRepository
+from app.db.repositories.lm_repository import LMRepository
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.logging_config import get_watchdog_logger
 from app.telegram.utils.logging import describe_user
@@ -54,9 +56,14 @@ from app.telegram.ui.admin.screens.promotions import (
     render_empty_promotion_screen,
     render_promotion_detail_screen,
 )
+from app.telegram.ui.admin.screens.lm_screens import render_lm_periods_screen
 from app.telegram.ui.admin import keyboards as admin_keyboards
 from app.telegram.keyboards.inline_system import build_system_menu
 from app.telegram.utils.admin_registry import get_admin_callback_handler
+from app.telegram.handlers.admin_lm import LMHandlers
+from app.utils.periods import calculate_period_bounds
+
+LM_PERIOD_OPTIONS = (7, 14, 30, 180)
 
 logger = get_watchdog_logger(__name__)
 
@@ -156,6 +163,11 @@ class AdminPanelHandler:
                 )
                 return
             except (BadRequest, TelegramError) as exc:
+                error_text = str(exc)
+                if isinstance(exc, BadRequest) and "message is not modified" in error_text.lower():
+                    logger.debug("Admin screen refresh ignored: message is not modified.")
+                    await query.answer()
+                    return
                 logger.warning("Не удалось отредактировать сообщение админки: %s", exc)
                 message = query.message
                 if message:
@@ -257,6 +269,14 @@ class AdminPanelHandler:
         if action == AdminCB.EXPORT:
             await self._show_export_screen(update)
             return True
+        if action == AdminCB.LM_MENU:
+            sub_action = args[0] if args else None
+            period_key = args[1] if len(args) > 1 else None
+            if sub_action == AdminCB.lm_SUM:
+                await self._show_lm_periods(update, context, period_key)
+            else:
+                await self._show_lm_periods(update, context)
+            return True
         if action == AdminCB.CRITICAL:
             target = args[0] if args else None
             if target:
@@ -353,6 +373,8 @@ class AdminPanelHandler:
         target = update.effective_message
         if target:
             await target.reply_text(message)
+        elif update.callback_query:
+            await update.callback_query.answer(message, show_alert=True)
 
     async def _handle_approvals_flow(
         self,
@@ -393,6 +415,58 @@ class AdminPanelHandler:
             return
         page = self._safe_int(args[1]) if len(args) > 1 else 0
         await self._show_approvals_list(update, page)
+
+    async def _show_lm_periods(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        period_key: Optional[str] = None,
+    ) -> None:
+        lm_repo: Optional[LMRepository] = context.application.bot_data.get("lm_repository")  # type: ignore[assignment]
+        if not lm_repo:
+            await self._reply_feature_unavailable(update, "LM-аналитика временно недоступна.")
+            return
+
+        try:
+            requested_days = int(period_key) if period_key else LM_PERIOD_OPTIONS[0]
+        except (TypeError, ValueError):
+            requested_days = LM_PERIOD_OPTIONS[0]
+        if requested_days not in LM_PERIOD_OPTIONS:
+            requested_days = LM_PERIOD_OPTIONS[0]
+
+        reference_ts = datetime.now()
+        try:
+            summary = await lm_repo.get_lm_period_summary(requested_days, reference=reference_ts)
+        except Exception as exc:
+            logger.exception("Не удалось загрузить LM агрегаты: %s", exc)
+            await self._reply_feature_unavailable(update, "Ошибка загрузки LM-аналитики.")
+            return
+
+        # Синхронизируем числа на кнопках с реальными списками действий.
+        try:
+            period_start, period_end = calculate_period_bounds(requested_days, reference=reference_ts)
+            action_counts = {
+                "complaints": await lm_repo.get_action_count(
+                    "complaints", start_date=period_start, end_date=period_end
+                ),
+                "followup": await lm_repo.get_action_count(
+                    "followup", start_date=period_start, end_date=period_end
+                ),
+                "lost": await lm_repo.get_action_count(
+                    "lost", start_date=period_start, end_date=period_end
+                ),
+                "churn": await lm_repo.get_action_count(
+                    "churn", start_date=period_start, end_date=period_end
+                ),
+            }
+            summary["action_counts"] = action_counts
+        except Exception as exc:
+            logger.warning("Не удалось синхронизировать счётчики списков LM: %s", exc)
+
+        context.user_data["lm:last_period_days"] = requested_days
+        context.user_data["lm:last_period_reference"] = reference_ts.timestamp()
+        screen = render_lm_periods_screen(summary, requested_days, LM_PERIOD_OPTIONS)
+        await self._render_screen(update, screen)
 
     async def _handle_promotion_flow(
         self,
@@ -665,9 +739,7 @@ class AdminPanelHandler:
             "⚠️ Только для Dev и руководства. Команды выполняются мгновенно и могут влиять на прод.\n\n"
             "• 🔍 Состояние бота — проверка доступности БД/пула.\n"
             "• ❌ Последние ошибки — выборка последних записей из логов.\n"
-            "• 🔌 Проверка БД/Mango — базовые SQL/интеграционные тесты.\n"
-            "• 🔄 Синхронизация аналитики — запускает ETL call_scores → call_analytics.\n"
-            "• 🎧 Индексация записей — пересканирование записи в Яндекс.Диск.\n"
+            "• 🔌 Проверка БД — короткий тест соединения и версии MySQL.\n"
             "• 🗑️ Очистить кеш — только Dev, очищает Redis/локальный кеш.\n"
         )
         await safe_edit_message(
@@ -1143,24 +1215,21 @@ def register_admin_panel_handlers(
     handler = AdminPanelHandler(admin_repo, permissions)
     
     # Команда /admin и reply-кнопка
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(r"(?i)^\s*(?:👑\s*)?админ-?панел[ья]\s*$"),
-            handler.admin_command,
-            block=False,
-        ),
-        group=0,
+    reply_handler = MessageHandler(
+        filters.Regex(r"(?i)^\s*(?:👑\s*)?админ-?панел[ья]\s*$"),
+        handler.admin_command,
     )
+    reply_handler.block = False
+    application.add_handler(reply_handler, group=0)
     logger.info("Registered admin reply button handler (regex: админ-панел)")
     application.add_handler(CommandHandler("admin", handler.admin_command))
     
     # Callback handlers
-    application.add_handler(
-        CallbackQueryHandler(
-            handler.handle_callback,
-            pattern=rf"^{AdminCB.PREFIX}:",
-            block=False,
-        )
+    callback_handler = CallbackQueryHandler(
+        handler.handle_callback,
+        pattern=rf"^{AdminCB.PREFIX}:",
     )
+    callback_handler.block = False
+    application.add_handler(callback_handler)
 
     logger.info("Admin panel handlers registered")

@@ -1,0 +1,1018 @@
+
+"""Экраны для работы с LM-метриками."""
+
+import json
+import re
+import html
+from typing import List, Dict, Any, Optional, Tuple
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
+from telegram import InlineKeyboardButton
+
+from app.telegram.ui.admin.screens import Screen
+from app.telegram.utils.callback_lm import LMCB
+from app.telegram.utils.callback_data import AdminCB
+from app.services.lm_rules import METRIC_CONFIG, get_badge, decline_word
+
+MIN_SAMPLE_SIZE = 30
+LM_TRANSCRIPT_SNIPPET_LIMIT = 500
+
+WORD_FORMS = {
+    "call": ("звонок", "звонка", "звонков"),
+    "task": ("задача", "задачи", "задач"),
+    "client": ("клиент", "клиента", "клиентов"),
+}
+
+STATUS_ICONS = {
+    "green": "🟢",
+    "yellow": "🟡",
+    "red": "🔴",
+    "gray": "⚪",
+}
+
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+
+METHODOLOGY_SECTIONS = [
+    {
+        "title": "Response speed score (1–5)",
+        "lines": [
+            "Что: время ожидания клиента до ответа оператора.",
+            "Как: используем call_history.await_sec и ступени &lt;20 / 40 / 60 / 120 секунд.",
+            "Порог: &lt;2 баллов (ожидание >60 c) = красный статус, требуется разбор очереди.",
+        ],
+    },
+    {
+        "title": "Talk time efficiency (0–100)",
+        "lines": [
+            "Что: эффективность использования линии и времени клиента.",
+            "Как: берём talk_duration, нормируем (длинные разговоры ≥60 c режутся капом).",
+            "Порог: &lt;40 баллов означает, что контакты слишком короткие и риск недосказанности высок.",
+        ],
+    },
+    {
+        "title": "Conversion score (0–100)",
+        "lines": [
+            "Что: вероятность записи после звонка.",
+            "Как: outcome='record' → 100, 'lead_no_record' → 50, инфо-звонки → 20, остальное → 0.",
+            "Порог: &lt;60 баллов попадает в светофор «Конверсия» и требует обратной связи оператору.",
+        ],
+    },
+    {
+        "title": "Complaint risk flag / complaint_prob",
+        "lines": [
+            "Что: вероятность эскалации жалобы.",
+            "Как: словари (lm_dictionary_terms) групп A–E + стоп-слова, веса фиксируются в БД; дополнительные факторы — низкий call_score, длительный разговор и категория «Жалоба».",
+            "Порог: complaint_score ≥ 60 или конфликтная комбинация (call_score ≤3 + talk ≥30 c) → список «⚠️ Жалобы». Хиты сохраняются в lm_dictionary_hits.",
+        ],
+    },
+    {
+        "title": "Follow-up needed flag",
+        "lines": [
+            "Что: незакрытый процесс (клиент ждёт действия после звонка).",
+            "Как: outcome ∈ лидовых сценариев, call_category='Лид (без записи)', коды отказов PATIENT_WILL_CLARIFY/CALL_BACK_LATER/THINKING/NO_TIME или технический сбой/non_target при реальном клиенте.",
+            "Порог: flag=true => обязательный перезвон в течение 24 часов и фиксация исхода.",
+        ],
+    },
+    {
+        "title": "Lost opportunity score / count",
+        "lines": [
+            "Что: насколько болезненно упустили целевой звонок, и сколько их в периоде.",
+            "Как: is_target=1 и outcome!='record' (исключая спам) дают базу 60 баллов; +10 за talk_duration ≥30 c, +20 при call_score ≤4, +10 если refusal_reason пустой. Количество фиксируем в summary как lost_opportunity_count.",
+            "Порог: score ≥ 60 заносит звонок в список «💸 Потери», KPI — доля таких звонков от целевых.",
+        ],
+    },
+]
+
+def render_lm_summary_screen(
+    history_id: int,
+    metrics: Dict[str, Any],
+    call_info: Optional[Dict[str, Any]] = None,
+    action_context: Optional[str] = None,
+    period_days: Optional[int] = None
+) -> Screen:
+    """
+    Экрана сводки LM (Level 3.3: Один звонок).
+    action_context: из какого списка пришли (followup, complaints, lost, churn)
+    """
+    from app.services.lm_rules import METRIC_CONFIG, EVIDENCE_RULES, get_badge
+    
+    # 1. Базовая инфо
+    caller = call_info.get('caller_number') or "Звонок" if call_info else "Звонок"
+    date_dt = None
+    if call_info:
+        date_dt = call_info.get('context_start_time_dt') or call_info.get('call_date') or call_info.get('context_start_time')
+    date_str = date_dt.strftime('%d.%m %H:%M') if date_dt else "—"
+    operator = _extract_operator_name(call_info.get('called_info')) or "—"
+    source = call_info.get('utm_source_by_number') or "—"
+    outcome = call_info.get('outcome') or "—"
+    call_score = call_info.get('call_score', "—")
+    talk_duration = call_info.get('talk_duration', 0)
+    
+    # 2. Метрики для светофоров
+    speed = metrics.get('response_speed_score', {})
+    efficiency = metrics.get('talk_time_efficiency', {})
+    conversion = metrics.get('conversion_score', {})
+    churn_lbl = metrics.get('churn_risk_level', {}).get('value_label', 'LOW')
+    complaint_val = metrics.get('complaint_risk_flag', {}).get('value_numeric', 0)
+    followup_data = metrics.get('followup_needed_flag', {}) or {}
+    followup_flag = followup_data.get('value_label') == 'true'
+    followup_reason = ((followup_data.get('value_json') or {}) if followup_data else {}).get('reason')
+
+    speed_icon = get_badge(speed.get('value_numeric', 0), METRIC_CONFIG.get('response_speed_score', {'red': 2, 'yellow': 3}))
+    churn_icon = "🔴" if churn_lbl in ("CRITICAL", "HIGH") else "🟢"
+    complaint_icon = "⚠️" if complaint_val >= 60 else "✅"
+    followup_icon = "📞" if followup_flag else "✅"
+
+    text = (
+        f"🎯 <b>Звонок #{history_id}</b>\n"
+        f"<b>Дата/время:</b> {date_str}\n"
+        f"<b>Оператор:</b> {operator}\n"
+        f"<b>Источник:</b> {source}\n"
+        f"<b>Исход:</b> {outcome}\n"
+        f"<b>Скор:</b> {call_score}\n"
+        f"<b>Длительность:</b> {talk_duration}s\n\n"
+    )
+    
+    metric_reasons: List[str] = []
+    has_evidence = False
+    
+    # Резоны из value_json (приоритет)
+    context_keys = ["complaint_risk_flag", "followup_needed_flag", "lost_opportunity_score"]
+    for ck in context_keys:
+        m_data = metrics.get(ck, {})
+        m_json = m_data.get("value_json") or {}
+        if not m_json:
+            continue
+        reasons = m_json.get("reasons") or m_json.get("dictionary_hits_summary") or []
+        for reason in reasons:
+            clean_reason = str(reason).strip()
+            if clean_reason:
+                metric_reasons.append(f"• {clean_reason}")
+                has_evidence = True
+        hits = m_json.get("hits") or []
+        for hit in hits[:3]:
+            term = hit.get("term")
+            if not term:
+                continue
+            impact = hit.get("impact") or hit.get("weight")
+            snippet = hit.get("snippet")
+            hit_line = f"• Триггер «{term}»"
+            if impact:
+                try:
+                    hit_line += f" (+{float(impact):.0f})"
+                except (TypeError, ValueError):
+                    pass
+            if snippet:
+                hit_line += f": {snippet}"
+            metric_reasons.append(hit_line)
+            has_evidence = True
+        for snippet in (m_json.get("snippets") or [])[:2]:
+            text_snippet = str(snippet).strip()
+            if text_snippet:
+                metric_reasons.append(f"⤷ {text_snippet}")
+                has_evidence = True
+        if ck == "lost_opportunity_score" and m_json.get("loss_category"):
+            metric_reasons.append(f"Категория отказа: {m_json['loss_category']}")
+            has_evidence = True
+        if m_json.get("requires_reason"):
+            metric_reasons.append("⚠️ Причина отказа не заполнена — требуйте заполнения перед закрытием кейса.")
+            has_evidence = True
+        if m_json.get("result_excerpt"):
+            metric_reasons.append(f"📝 Анализ: {m_json['result_excerpt']}")
+            has_evidence = True
+
+    transcript_truncated = False
+
+    # 3. Блок "Почему в списке" и "Что сделать"
+    if action_context and action_context != "none":
+        text += f"📂 <b>Раздел: {action_context.upper()}</b>\n"
+        
+        if not metric_reasons and action_context in EVIDENCE_RULES:
+            item_for_rules = {**call_info} if call_info else {}
+            item_for_rules.update({k: v.get('value_numeric') for k, v in metrics.items() if 'value_numeric' in v})
+            item_for_rules.update({k: v.get('value_label') for k, v in metrics.items() if 'value_label' in v})
+            
+            rules = EVIDENCE_RULES[action_context]
+            for r in rules:
+                try:
+                    if r['condition'](item_for_rules):
+                        metric_reasons.append(f"• {r['text'].format(**item_for_rules)}")
+                except Exception: continue
+
+        if metric_reasons:
+            unique_reasons = []
+            seen = set()
+            for r in metric_reasons:
+                clean_r = str(r).strip()
+                if clean_r and clean_r not in seen:
+                    unique_reasons.append(clean_r)
+                    seen.add(clean_r)
+            text += "<b>Почему в списке:</b>\n" + "\n".join(unique_reasons[:8]) + "\n\n"
+        
+        analysis = call_info.get("result") or call_info.get("operator_result")
+        if analysis:
+            short_analysis = str(analysis)[:400] + ("..." if len(str(analysis)) > 400 else "")
+            text += f"🔍 <b>Анализ звонка:</b>\n<i>{short_analysis}</i>\n\n"
+        refusal_reason_text = (call_info.get("refusal_reason") or call_info.get("refusal_comment") or "").strip()
+        if refusal_reason_text:
+            text += f"🚫 <b>Причина отказа:</b> {html.escape(refusal_reason_text)}\n\n"
+        transcript_text = call_info.get("transcript") or call_info.get("raw_transcript")
+        if transcript_text:
+            snippet_raw = _strip_html(str(transcript_text)).strip()
+            if snippet_raw:
+                snippet = snippet_raw[:LM_TRANSCRIPT_SNIPPET_LIMIT]
+                if len(snippet_raw) > LM_TRANSCRIPT_SNIPPET_LIMIT:
+                    snippet = snippet.rstrip() + "…"
+                    transcript_truncated = True
+                safe_snippet = html.escape(snippet)
+                text += f"📝 <b>Расшифровка (фрагмент):</b>\n<code>{safe_snippet}</code>\n\n"
+                if transcript_truncated:
+                    text += "<i>Текст сокращён. Нажмите «Показать больше», чтобы увидеть полную расшифровку.</i>\n\n"
+
+        mapping = {
+            "followup": "followup_needed_flag",
+            "complaints": "complaint_risk_flag",
+            "lost": "lost_opportunity_score",
+            "churn": "churn_risk_level"
+        }
+        conf = METRIC_CONFIG.get(mapping.get(action_context, ""))
+        if conf:
+            text += f"✅ <b>Что сделать:</b>\n{conf['action_text']}\n\n"
+    elif has_evidence:
+         text += "📌 <b>Особенности звонка:</b>\n" + "\n".join(metric_reasons[:5]) + "\n\n"
+
+    text += (
+        "<b>Индикаторы:</b>\n"
+        f"{speed_icon} Ожидание: {speed.get('value_numeric', 0)}/5\n"
+        f"⚡ Эффективность: {efficiency.get('value_numeric', 0):.1f}\n"
+        f"💰 Конверсия: {conversion.get('value_numeric', 0):.1f}\n"
+        f"{churn_icon} Риск оттока: {churn_lbl}\n"
+        f"{complaint_icon} Риск жалобы: {'ДА' if complaint_val >= 60 else 'НЕТ'}\n"
+        f"{followup_icon} Контроль дозвона: {'НУЖЕН' if followup_flag else 'НЕТ'}\n"
+    )
+    if followup_flag and followup_reason:
+        text += f"{followup_reason}\nSLA: перезвонить в течение 24 часов.\n"
+    
+    # 4. Клавиатура
+    keyboard = []
+
+    bundle_cb = AdminCB.create(
+        AdminCB.CALL,
+        "bundle",
+        history_id,
+        "lm",
+        action_context or "none",
+    )
+    keyboard.append([
+        InlineKeyboardButton(
+            "🎧 Аудио и текст",
+            callback_data=bundle_cb,
+        )
+    ])
+    if transcript_truncated:
+        full_cb = AdminCB.create(
+            AdminCB.CALL,
+            "full_transcript",
+            history_id,
+            "lm",
+            action_context or "none",
+        )
+        keyboard.append([
+            InlineKeyboardButton(
+                "📄 Показать больше",
+                callback_data=full_cb,
+            )
+        ])
+
+    if action_context and action_context != "none":
+        back_callback = LMCB.create(LMCB.ACTION_LIST, action_context, 0)
+    else:
+        back_callback = AdminCB.create(AdminCB.LM_MENU, AdminCB.lm_SUM, period_days or "")
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data=back_callback)])
+
+    return Screen(text=text, keyboard=keyboard, parse_mode="HTML")
+
+def render_lm_action_list_screen(
+    action_type: str,
+    items: List[Dict[str, Any]],
+    page: int = 0,
+    total: int = 0,
+    period_days: Optional[int] = None
+) -> Screen:
+    """
+    Экран списка действий (follow-ups, риски).
+    """
+    titles = {
+        "followup": "📞 Требуют Follow-up",
+        "complaints": "⚠️ Риски жалоб",
+        "churn": "📉 Риски оттока",
+        "lost": "💸 Потерянные возможности",
+    }
+    title = titles.get(action_type, "Список действий")
+    
+    rules = {
+        "followup": "Правило: followup_needed_flag=true — целевой клиент без записи, попросил перезвон или был технический сбой. SLA: 24 часа.",
+        "complaints": "Правило: complaint_score ≥ 60 или конфликт (низкий call_score + длинный разговор).",
+        "churn": "Правило: churn_risk_level ∈ {HIGH, CRITICAL}.",
+        "lost": "Правило: lost_opportunity_score ≥ 60 (высокая ценность потеряна).",
+    }
+
+    text = f"<b>{title}</b>\n"
+    rule_text = rules.get(action_type)
+    if rule_text:
+        text += f"{rule_text}\n"
+
+    if not items:
+        text += "\n<i>Список пуст. Хорошая работа!</i>"
+    else:
+        text += f"Всего элементов: {total}\n\n"
+        for i, item in enumerate(items, 1):
+            h_id = item.get('history_id')
+            created = item.get('call_date') or item.get('created_at')
+            date_str = created.strftime('%d.%m %H:%M') if created else "—"
+            operator = _extract_operator_name(item.get("called_info")) or "—"
+            source = item.get("utm_source_by_number") or "—"
+            outcome = item.get("outcome") or "—"
+            call_score = item.get("call_score", "—")
+            
+            reasons, next_step = _describe_action_item(action_type, item)
+            
+            text += (
+                f"#{h_id} | {date_str} | {operator} | {source}\n"
+                f"Исход: {outcome} | Скор: {call_score}\n"
+                f"Причина: {reasons}\n"
+                f"Действие: {next_step}\n\n"
+            )
+
+    keyboard = []
+    # Элементы списка как кнопки для перехода
+    for item in items:
+        h_id = item.get('history_id')
+        keyboard.append([
+            InlineKeyboardButton(
+                f"🔎 Детали #{h_id}",
+                callback_data=LMCB.create(LMCB.ACTION_SUMMARY, h_id, action_type),
+            )
+        ])
+    
+    # Навигация
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=LMCB.create(LMCB.ACTION_LIST, action_type, page - 1)))
+    if total > (page + 1) * 10:
+        nav_row.append(InlineKeyboardButton("Вперед ➡️", callback_data=LMCB.create(LMCB.ACTION_LIST, action_type, page + 1)))
+    
+    if nav_row:
+        keyboard.append(nav_row)
+        
+    keyboard.append([
+        InlineKeyboardButton("◀️ В сводку LM", callback_data=AdminCB.create(AdminCB.LM_MENU, AdminCB.lm_SUM, period_days or "")),
+        InlineKeyboardButton("🏠 Админка", callback_data=AdminCB.create(AdminCB.BACK))
+    ])
+    
+    return Screen(text=text, keyboard=keyboard, parse_mode="HTML")
+
+
+def render_lm_periods_screen(
+    summary: Dict[str, Any],
+    selected_days: int,
+    available_periods: tuple[int, ...],
+) -> Screen:
+    """
+    Экран агрегированной LM-аналитики в формате сигнальной сводки.
+    """
+    header = "🧠 <b>LM-аналитика</b>\n"
+    if not summary:
+        text = header + "\n<i>Нет накопленных данных по LM метрикам за выбранный период.</i>"
+        keyboard = [
+            [InlineKeyboardButton("🏠 В админ-панель", callback_data=AdminCB.create(AdminCB.DASHBOARD))],
+            [InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))],
+        ]
+        return Screen(text=text, keyboard=keyboard)
+
+    period_label = _format_period_label(summary.get("start_date"), summary.get("end_date"))
+    calls_total = summary.get("call_count", 0)
+    base = summary.get("base", {})
+    target_calls = base.get("target_calls", 0)
+    non_target_calls = base.get("non_target_calls", 0)
+    lost_total = base.get("lost_opportunity_count")
+    updated_at = summary.get("updated_at")
+    coverage = summary.get("coverage")
+
+    metrics = summary.get("metrics", {})
+    flags = summary.get("flags", {})
+    churn = summary.get("churn", {})
+    action_counts = summary.get("action_counts") or {}
+
+    complaint_metric_count = metrics.get("complaint_risk_flag", {}).get("alert_count", 0)
+    followup_metric_count = flags.get("followup_needed_flag", {}).get("true_count", 0)
+    lost_metrics = metrics.get("lost_opportunity_score", {})
+    lost_metric_count = lost_metrics.get("alert_count", 0)
+    churn_metric_high = churn.get("high", 0)
+
+    def _resolve_action_count(key: str, fallback: int) -> int:
+        value = action_counts.get(key)
+        if value is None:
+            return int(fallback or 0)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return int(fallback or 0)
+
+    complaint_count = _resolve_action_count("complaints", complaint_metric_count)
+    followup_count = _resolve_action_count("followup", followup_metric_count)
+    lost_count = _resolve_action_count("lost", lost_metric_count)
+    churn_high = _resolve_action_count("churn", churn_metric_high)
+
+    target_share = round((target_calls / calls_total) * 100, 1) if calls_total else 0.0
+    coverage_line = _build_coverage_text(coverage)
+
+    text_parts = []
+    text_parts.append("🧠 <b>LM-АНАЛИТИКА</b>")
+    text_parts.append(f"<b>Период:</b> {period_label} (последние {selected_days} дн.)")
+    text_parts.append(f"<b>Выборка:</b> {calls_total} звонков | <b>Целевые:</b> {target_calls} ({target_share:.1f}%)")
+    if lost_total is not None:
+        text_parts.append(f"<b>Потери:</b> {lost_total} целевых без записи")
+    text_parts.append(f"<b>Обновлено:</b> {_format_datetime(updated_at)}")
+    text_parts.append("⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯")
+
+    text_parts.append("\n<b>⚡ ГЛАВНОЕ</b>")
+    text_parts.append(_build_headline(summary, calls_total).strip())
+
+    text_parts.append("\n<b>✅ ЧТО СДЕЛАТЬ СЕГОДНЯ</b>")
+    text_parts.append(_build_actions_today_section(complaint_count, followup_count, lost_count, churn_high, calls_total).strip())
+
+    text_parts.append("\n<b>🚦 ИНДИКАТОРЫ</b>")
+    text_parts.append(_build_indicators_block(summary, calls_total).strip())
+
+    text_parts.append("\n<b>📌 КАЧЕСТВО ДАННЫХ</b>")
+    text_parts.append(_build_data_quality_section(summary, coverage_line).strip())
+    loss_section = _build_loss_breakdown_section(summary)
+    if loss_section:
+        text_parts.append("\n<b>💸 ПОТЕРИ</b>")
+        text_parts.append(loss_section.strip())
+    text_parts.append(_build_week_actions_section(summary).strip())
+
+    text_parts.append("\n<b>📂 СПИСКИ ДЛЯ ОБРАБОТКИ</b>")
+    text_parts.append(_build_action_lists_description(complaint_count, followup_count, lost_count, churn_high).strip())
+
+    keyboard: List[List[InlineKeyboardButton]] = []
+    action_buttons: List[InlineKeyboardButton] = []
+    if complaint_count:
+        action_buttons.append(
+            InlineKeyboardButton(
+                f"⚠️ Жалобы ({complaint_count})",
+                callback_data=LMCB.create(LMCB.ACTION_LIST, "complaints", 0),
+            )
+        )
+    if followup_count:
+        action_buttons.append(
+            InlineKeyboardButton(
+                f"📞 Перезвон ({followup_count})",
+                callback_data=LMCB.create(LMCB.ACTION_LIST, "followup", 0),
+            )
+        )
+    if lost_count:
+        action_buttons.append(
+            InlineKeyboardButton(
+                f"💸 Потери ({lost_count})",
+                callback_data=LMCB.create(LMCB.ACTION_LIST, "lost", 0),
+            )
+        )
+    if churn_high:
+        action_buttons.append(
+            InlineKeyboardButton(
+                f"📉 Отток ({churn_high})",
+                callback_data=LMCB.create(LMCB.ACTION_LIST, "churn", 0),
+            )
+        )
+    while action_buttons:
+        keyboard.append(action_buttons[:2])
+        action_buttons = action_buttons[2:]
+
+    period_row: List[InlineKeyboardButton] = []
+    for days in available_periods:
+        label = f"{days} дн."
+        prefix = "✅" if days == selected_days else "📅"
+        period_row.append(
+            InlineKeyboardButton(
+                f"{prefix} {label}",
+                callback_data=AdminCB.create(AdminCB.LM_MENU, AdminCB.lm_SUM, days),
+            )
+        )
+    if period_row:
+        keyboard.append(period_row)
+
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                "📘 Методика расчёта",
+                callback_data=LMCB.create(LMCB.ACTION_METHOD, "period", selected_days),
+            )
+        ]
+    )
+
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                "🔄 Обновить",
+                callback_data=AdminCB.create(AdminCB.LM_MENU, AdminCB.lm_SUM, selected_days),
+            ),
+            InlineKeyboardButton(
+                "⬅️ В LM-меню",
+                callback_data=AdminCB.create(
+                    AdminCB.LM_MENU,
+                    AdminCB.lm_SUM,
+                    available_periods[0] if available_periods else selected_days,
+                ),
+            ),
+        ]
+    )
+    keyboard.append(
+        [
+            InlineKeyboardButton("🏠 В админ-панель", callback_data=AdminCB.create(AdminCB.DASHBOARD)),
+            InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK)),
+        ]
+    )
+
+    text = "\n".join(text_parts)
+    return Screen(text=text, keyboard=keyboard, parse_mode="HTML")
+
+
+def _build_headline(summary: Dict[str, Any], calls_total: int) -> str:
+    metrics = summary.get("metrics", {})
+    flags = summary.get("flags", {})
+    summary_line = []
+
+    if calls_total < MIN_SAMPLE_SIZE:
+        return "⚪ Выборка мала — дождитесь большего периода, прежде чем принимать решения.\n"
+
+    quality_value = metrics.get("normalized_call_score", {}).get("avg")
+    followup_share = _safe_ratio(flags.get("followup_needed_flag", {}).get("true_count"), calls_total)
+    complaint_count = metrics.get("complaint_risk_flag", {}).get("alert_count", 0)
+
+    if quality_value is not None and quality_value < 65:
+        summary_line.append("качество разговоров ниже нормы")
+    if followup_share is not None and followup_share >= 0.10:
+        summary_line.append("много незакрытых фоллоу-апов")
+    if complaint_count:
+        summary_line.append("есть кейсы высокого риска жалобы")
+
+    if not summary_line:
+        return "🟢 Ключевые показатели в норме — держите текущий ритм контроля.\n"
+
+    return "⚠️ " + "; ".join(summary_line) + ".\n"
+
+
+def _build_actions_today_section(
+    complaint_count: int,
+    followup_count: int,
+    lost_count: int,
+    churn_high: int,
+    calls_total: int,
+) -> str:
+    if calls_total < MIN_SAMPLE_SIZE:
+        return "⚪ Слишком мало звонков – дождитесь накопления данных, прежде чем проводить действия.\n"
+
+    entries: List[str] = []
+    if complaint_count:
+        entries.append(
+            f"1) ⚠️ Риск жалобы: {_format_with_word(complaint_count, WORD_FORMS['call'])} — обработать в течение 24 часов, результат фиксировать в карточке звонка."
+        )
+    if followup_count:
+        entries.append(
+            f"{len(entries)+1}) 📞 Перезвон: {_format_with_word(followup_count, WORD_FORMS['call'])} — перезвонить в течение 24 часов и зафиксировать исход (дозвон / перенос / запись)."
+        )
+    if lost_count:
+        entries.append(
+            f"{len(entries)+1}) 💸 Потери: {_format_with_word(lost_count, WORD_FORMS['call'])} — довнести причину отказа и вернуть клиента в воронку."
+        )
+    if churn_high:
+        entries.append(
+            f"{len(entries)+1}) 📉 Риск оттока: {_format_with_word(churn_high, WORD_FORMS['client'])} — назначить ответственного за удержание и отчитаться в течение 48 часов."
+        )
+
+    if not entries:
+        return "Сегодня критичных действий нет — контролируйте дашборд.\n"
+    return "\n".join(entries) + "\n"
+
+
+def _build_week_actions_section(summary: Dict[str, Any]) -> str:
+    coverage = summary.get("coverage") or {}
+    operator_entry = coverage.get("operator") or {}
+    utm_entry = coverage.get("utm") or {}
+    operator_cov = operator_entry.get("percent") or 0.0
+    utm_cov = utm_entry.get("percent") or 0.0
+    refusal_cov = (coverage.get("refusal") or {}).get("percent") or 0.0
+    utm_breakdown = summary.get("utm_breakdown") or []
+    period_days = summary.get("period_days")
+    period_label = f"\nЗа последние {period_days} дн.:\n" if period_days else "\n"
+    notes: List[str] = []
+    if operator_cov < 20:
+        notes.append(
+            f"Операторы заполнены: {operator_cov:.0f}% — сравнение по операторам ограничено."
+        )
+    if utm_cov < 20:
+        notes.append(
+            f"Источник обращения заполнен: {utm_cov:.0f}% — разбор по источникам ограничен."
+        )
+    if refusal_cov < 20:
+        notes.append(
+            f"Причины отказа заполнены: {refusal_cov:.0f}% — аналитика потерь неточна."
+        )
+
+    if notes:
+        return period_label + "\n".join(notes) + "\n"
+
+    if not utm_breakdown:
+        return period_label + "Источник обращения: данных нет.\n"
+
+    def _format_share(value: Any) -> str:
+        try:
+            share_val = float(value)
+        except (TypeError, ValueError):
+            return "0%"
+        if share_val.is_integer():
+            return f"{int(share_val)}%"
+        return f"{share_val:.1f}%"
+
+    lines = [period_label + "Источник обращения"]
+    for item in utm_breakdown:
+        label = item.get("label") or "Не указан"
+        if label.lower() in {"не указан", "не указано"}:
+            continue
+        count = int(item.get("count") or 0)
+        share = _format_share(item.get("share"))
+        lines.append(f"{label}: {count} штук ({share})")
+
+    return "\n".join(lines) + "\n"
+
+
+def _build_indicators_block(summary: Dict[str, Any], calls_total: int) -> str:
+    metrics = summary.get("metrics", {})
+    flags = summary.get("flags", {})
+    churn = summary.get("churn", {})
+    lines: List[str] = []
+
+    quality = metrics.get("normalized_call_score", {})
+    q_value = quality.get("avg")
+    if q_value is not None:
+        status = _status_from_value(q_value, 70, 65)
+        lines.append(
+            f"{STATUS_ICONS[status]} Качество общения: {q_value:.1f}/100 (норма ≥ 70)"
+        )
+
+    conversion = metrics.get("conversion_score", {})
+    c_value = conversion.get("avg")
+    if c_value is not None:
+        status = _status_from_value(c_value, 70, 60)
+        delta = conversion.get("delta")
+        delta_part = f", Δ {delta:+.1f}" if delta is not None and abs(delta) >= 0.5 else ""
+        lines.append(
+            f"{STATUS_ICONS[status]} Conversion score: {c_value:.1f}/100{delta_part} (цель ≥ 70)"
+        )
+
+    followup_total = flags.get("followup_needed_flag", {}).get("total", 0)
+    followup_count = flags.get("followup_needed_flag", {}).get("true_count", 0)
+    followup_share = _safe_ratio(followup_count, followup_total if followup_total else calls_total)
+    if followup_share is not None:
+        status = _status_from_share(followup_share, 0.20, 0.10)
+        lines.append(
+            f"{STATUS_ICONS[status]} Контроль дозвона: {followup_count} звонков ({followup_share*100:.1f}%) — лимит ≤ 20%"
+        )
+
+    complaint_metrics = metrics.get("complaint_risk_flag", {})
+    complaint_avg = complaint_metrics.get("avg")
+    if complaint_avg is not None:
+        if complaint_avg <= 1.0:
+            lines.append(f"ℹ️ Средняя вероятность жалобы: {complaint_avg*100:.1f}%")
+        else:
+            lines.append(f"ℹ️ Средний complaint_score: {complaint_avg:.1f}/100")
+    complaint_count = complaint_metrics.get("alert_count", 0)
+    if calls_total > 0:
+        complaint_share = (complaint_count / calls_total) * 100
+        status = "red" if complaint_count >= 1 else "yellow" if complaint_share >= 0.2 else "green"
+        lines.append(
+            f"{STATUS_ICONS[status]} Высокий риск жалобы: {complaint_count} звонков ({complaint_share:.2f}% выборки)"
+        )
+
+    lost_count = metrics.get("lost_opportunity_score", {}).get("alert_count", 0)
+    lost_share = _safe_ratio(lost_count, calls_total)
+    if lost_share is not None:
+        status = _status_from_share(lost_share, 0.08, 0.15)
+        lines.append(
+            f"{STATUS_ICONS[status]} Потерянные возможности: {lost_count} ({lost_share*100:.1f}% целевых звонков)"
+        )
+
+    churn_high = churn.get("high", 0)
+    if churn_high:
+        lines.append(f"📉 Риск оттока: {churn_high} клиента(ов) требуют контроля удержания.")
+
+    if not lines:
+        return "Нет сигналов выше порогов; держите текущий ритм контроля.\n"
+    return "\n".join(lines) + "\n"
+
+
+def _build_action_lists_description(
+    complaint_count: int,
+    followup_count: int,
+    lost_count: int,
+    churn_high: int,
+) -> str:
+    lines = [
+        f"1. ⚠️ Риск жалобы ({complaint_count})",
+        f"2. 📞 Перезвон ({followup_count}) — SLA 24 часа на дозвон.",
+        f"3. 💸 Потери ({lost_count}) — привести причину отказа и вернуть в работу.",
+        f"4. 📉 Риск оттока ({churn_high})",
+        "⬅️ Назад | 🔄 Обновить",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _build_coverage_text(coverage: Optional[Dict[str, Any]]) -> str:
+    if not coverage:
+        return "н/д"
+    parts = []
+    labels = {
+        "transcript": "транскрипт",
+        "outcome": "исход",
+        "refusal": "причина отказа",
+        "operator": "оператор",
+    }
+    for key, label in labels.items():
+        entry = coverage.get(key) if coverage else None
+        if entry and entry.get("percent") is not None:
+            parts.append(f"{label}={entry['percent']:.1f}%")
+        else:
+            parts.append(f"{label}=н/д")
+    return ", ".join(parts)
+
+
+def _build_data_quality_section(summary: Dict[str, Any], compact_line: str) -> str:
+    coverage = summary.get("coverage") or {}
+    if not coverage:
+        return "Нет данных о заполненности.\n"
+
+    lines = [compact_line]
+    refusal = (coverage.get("refusal") or {}).get("percent") or 0.0
+    operator = (coverage.get("operator") or {}).get("percent") or 0.0
+
+    if refusal < 60:
+        lines.append(f"Причина отказа заполнена на {refusal:.0f}% — анализ потерь ограничен.")
+    if operator < 80:
+        lines.append(f"Данные по операторам заполнены на {operator:.0f}% — сложнее вести разборы качества.")
+
+    bookings = summary.get("bookings") or []
+    if bookings:
+        top_strings = []
+        for row in bookings[:3]:
+            cat = row.get("call_category") or "Без категории"
+            cnt = row.get("cnt") or 0
+            top_strings.append(f"{cat}: {cnt}")
+        if top_strings:
+            lines.append("Записи по каналам за период: " + ", ".join(top_strings))
+
+    if len(lines) == 1:
+        lines.append("Заполнение ключевых полей достаточное — можно смотреть драйверы.")
+    return "\n".join(lines) + "\n"
+
+
+def _build_loss_breakdown_section(summary: Dict[str, Any]) -> str:
+    breakdown = summary.get("loss_breakdown") or []
+    if not breakdown:
+        return ""
+    lines: List[str] = []
+    for item in breakdown[:3]:
+        label = item.get("label") or "Не указано"
+        count = int(item.get("count") or 0)
+        share_val = item.get("share")
+        share_text = ""
+        try:
+            share_float = float(share_val)
+            if share_float > 0:
+                share_text = f" ({share_float:.0f}%)"
+        except (TypeError, ValueError):
+            share_text = ""
+        lines.append(f"{label}: {count}{share_text}")
+    if not lines:
+        return ""
+    return "\n".join(lines) + "\n"
+
+
+def render_lm_methodology_screen(back_callback: Optional[str] = None) -> Screen:
+    """Экран с методикой расчёта LM-метрик."""
+    lines: List[str] = ["📘 <b>Методика расчёта LM</b>", "Каждая метрика — детерминированное правило без ИИ."]
+    for section in METHODOLOGY_SECTIONS:
+        lines.append(f"\n<b>{section['title']}</b>")
+        for detail in section["lines"]:
+            lines.append(f"• {detail}")
+    lines.append("\nСловари и факты срабатывания: таблицы <code>lm_dictionary_terms</code> и <code>lm_dictionary_hits</code>.")
+    keyboard: List[List[InlineKeyboardButton]] = []
+    if back_callback:
+        keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data=back_callback)])
+    return Screen(text="\n".join(lines), keyboard=keyboard)
+
+
+def _format_with_word(count: int, forms: Tuple[str, str, str]) -> str:
+    return f"{count} {forms[_word_form_index(count)]}"
+
+
+def _word_form_index(count: int) -> int:
+    count = abs(count)
+    if 11 <= count % 100 <= 14:
+        return 2
+    last = count % 10
+    if last == 1:
+        return 0
+    if 2 <= last <= 4:
+        return 1
+    return 2
+
+
+_HTML_TAG_RE = re.compile(r"</?[^>]+>")
+
+
+def _strip_html(text: str) -> str:
+    """Удаляет HTML-теги из текста для безопасного отображения."""
+    return _HTML_TAG_RE.sub("", text)
+
+
+def _format_period_label(start: Optional[date], end: Optional[date]) -> str:
+    if not start or not end:
+        return "Недостаточно данных"
+    if start == end:
+        return start.strftime("%d %b %Y")
+    same_month = start.month == end.month and start.year == end.year
+    if same_month:
+        return f"{start.strftime('%d')}–{end.strftime('%d %b %Y')}"
+    return f"{start.strftime('%d %b')}–{end.strftime('%d %b %Y')}"
+
+
+def _format_datetime(value: Optional[Any]) -> str:
+    if not value:
+        return "н/д"
+    try:
+        if isinstance(value, datetime):
+            dt = value
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.astimezone(MOSCOW_TZ)
+            return f"{dt.strftime('%d %b %Y %H:%M:%S')} MSK"
+        return str(value)
+    except Exception:
+        return str(value)
+
+
+def _format_share(count: int, total: int) -> str:
+    if not total:
+        return ""
+    percent = (count / total) * 100
+    return f" ({percent:.0f}%)"
+
+
+def _format_score(value: Optional[Any], *, precision: int = 1) -> str:
+    if value is None:
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    fmt = f"{{:.{precision}f}}"
+    text = fmt.format(number)
+    if precision == 0:
+        return text.split(".")[0]
+    return text.rstrip("0").rstrip(".")
+
+
+def _format_percent(value: Optional[Any]) -> str:
+    if value is None:
+        return "—"
+    try:
+        number = float(value) * 100
+    except (TypeError, ValueError):
+        return "—"
+    return f"{number:.0f}%"
+
+
+def _format_delta_suffix(value: Optional[Any], *, precision: int = 1) -> str:
+    if value is None:
+        return ""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if abs(number) < 10 ** (-precision):
+        return ""
+    fmt = f"{{:+.{precision}f}}"
+    text = fmt.format(number)
+    if precision == 0:
+        text = text.split(".")[0]
+    return f" ({text} к прошлому периоду)"
+
+
+def _status_from_value(value: Optional[Any], green_from: float, yellow_from: float) -> str:
+    if value is None:
+        return "gray"
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return "gray"
+    if numeric >= green_from:
+        return "green"
+    if numeric >= yellow_from:
+        return "yellow"
+    return "red"
+
+
+def _status_from_share(value: Optional[Any], green_limit: float, yellow_limit: float) -> str:
+    if value is None:
+        return "gray"
+    if value <= green_limit:
+        return "green"
+    if value <= yellow_limit:
+        return "yellow"
+    return "red"
+
+
+def _safe_ratio(count: Optional[int], total: int) -> Optional[float]:
+    if not total:
+        return None
+    try:
+        return float(count or 0) / total
+    except ZeroDivisionError:
+        return None
+
+
+def _describe_action_item(action_type: str, item: Dict[str, Any]) -> Tuple[str, str]:
+    """
+    Возвращает (причины, действие) для элемента списка действий.
+    """
+    from app.services.lm_rules import EVIDENCE_RULES, METRIC_CONFIG
+    
+    rules = EVIDENCE_RULES.get(action_type, [])
+    found_reasons: List[str] = []
+
+    meta_payload = item.get('value_json')
+    if isinstance(meta_payload, str):
+        try:
+            meta_payload = json.loads(meta_payload)
+        except (json.JSONDecodeError, TypeError):
+            meta_payload = None
+    if isinstance(meta_payload, dict):
+        meta_reasons = meta_payload.get('reasons') or []
+        if meta_reasons:
+            found_reasons.extend(meta_reasons[:2])
+        elif meta_payload.get('reason'):
+            found_reasons.append(meta_payload['reason'])
+        hits = meta_payload.get('hits') or []
+        for hit in hits[:1]:
+            term = hit.get("term")
+            snippet = hit.get("snippet")
+            if term:
+                line = f"Триггер «{term}»"
+                if snippet:
+                    line += f": {snippet}"
+                found_reasons.append(line)
+        snippets = meta_payload.get("snippets") or []
+        if snippets:
+            found_reasons.append(f"⤷ {snippets[0]}")
+        if meta_payload.get("loss_category"):
+            found_reasons.append(f"Категория: {meta_payload['loss_category']}")
+        if meta_payload.get("requires_reason"):
+            found_reasons.append("⚠️ Требуется заполнить причину отказа.")
+    
+    for r in rules:
+        if len(found_reasons) >= 2:
+            break
+        try:
+            if r['condition'](item):
+                reason_text = r['text'].format(**item)
+                found_reasons.append(reason_text)
+        except Exception:
+            continue
+                
+    reasons = "; ".join(found_reasons) if found_reasons else "другие критерии"
+    
+    mapping = {
+        "followup": "followup_needed_flag",
+        "complaints": "complaint_risk_flag",
+        "lost": "lost_opportunity_score",
+        "churn": "churn_risk_level"
+    }
+    
+    conf_key = mapping.get(action_type)
+    action_text = METRIC_CONFIG.get(conf_key, {}).get("action_text", "Разобрать кейс.")
+    
+    return reasons, action_text
+
+
+def _extract_operator_name(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    name = raw.strip()
+    if not name:
+        return None
+    digits = re.sub(r"\D+", "", name)
+    if digits and len(digits) >= 7:
+        return None
+    return name

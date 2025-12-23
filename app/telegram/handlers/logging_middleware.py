@@ -40,18 +40,13 @@ def register_logging_handlers(application: Application) -> None:
     Регистрирует лёгкие лог-фильтры, которые фиксируют текстовые кнопки
     и callback-и до того, как те попадут в основной роутинг.
     """
-    application.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            _log_text,
-            block=False,
-        ),
-        group=-1,
+    text_logger = MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        _log_text,
     )
-    application.add_handler(
-        CallbackQueryHandler(
-            _log_callback,
-            block=False,
-        ),
-        group=-1,
-    )
+    text_logger.block = False
+    application.add_handler(text_logger, group=-1)
+
+    callback_logger = CallbackQueryHandler(_log_callback)
+    callback_logger.block = False
+    application.add_handler(callback_logger, group=-1)

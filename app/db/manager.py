@@ -79,8 +79,15 @@ class DatabaseManager:
     ) -> str:
         error_type, error_code, message = self._extract_db_error_details(error)
         resolved_category = category or self._classify_db_error(error_code, message)
+        
+        # Для критических ошибок схемы или специфичных кодов (1054 - Unknown column)
+        # принудительно выводим контекст в текст сообщения для удобства.
+        log_msg = f"Ошибка выполнения SQL-запроса ({resolved_category}): {message}"
+        if error_code == 1054 or resolved_category == "schema_error":
+            log_msg = f"КРИТИЧЕСКАЯ ОШИБКА СХЕМЫ (1054): {message}\nSQL: {query}\nParams: {repr(params)}"
+        
         logger.error(
-            "Ошибка выполнения SQL-запроса",
+            log_msg,
             extra={
                 "error_type": error_type,
                 "error_code": error_code,

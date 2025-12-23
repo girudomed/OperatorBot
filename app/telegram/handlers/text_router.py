@@ -72,8 +72,9 @@ class TextRouter:
     @staticmethod
     def get_handler():
         """Возвращает сконфигурированный MessageHandler."""
-        return MessageHandler(
+        handler = MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             TextRouter.handle_text,
-            block=False
         )
+        handler.block = False
+        return handler

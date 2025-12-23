@@ -12,3 +12,8 @@ class Screen:
     keyboard: List[List[InlineKeyboardButton]]
     parse_mode: str = "HTML"
 
+    @property
+    def markup(self) -> "InlineKeyboardMarkup":
+        from telegram import InlineKeyboardMarkup
+        return InlineKeyboardMarkup(self.keyboard)
+

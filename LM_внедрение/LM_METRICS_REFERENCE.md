@@ -1,6 +1,8 @@
-# LM Metrics Reference
+# LM Metrics Reference (Official SST v1912)
 
-This document provides a comprehensive reference for all LM (Learning/Logic Model) analytics metrics calculated by the OperatorBot system.
+> [!IMPORTANT]
+> Данный документ является «единым источником истины» (Single Source of Truth) для всех LM-метрик версии v1912. 
+> Все изменения в коде `LMService.py` должны соответствовать этому документу.
 
 ## Overview
 

@@ -4,7 +4,8 @@ Unit tests for LM Repository.
 
 import pytest
 from unittest.mock import Mock, AsyncMock, MagicMock
-from datetime import datetime
+from typing import Dict
+from datetime import datetime, date
 import json
 
 from app.db.repositories.lm_repository import LMRepository
@@ -309,6 +310,162 @@ class TestLMRepository:
         assert 'conversion_score' in result
         assert result['conversion_score']['avg'] == 75.0
         assert result['conversion_score']['count'] == 10
+
+    @pytest.mark.asyncio
+    async def test_get_weekly_metrics(self, lm_repo, mock_db_manager):
+        """Test aggregated metrics grouped by week."""
+        mock_rows = [
+            {
+                'period_key': '2024-W12',
+                'period_start': date(2024, 3, 18),
+                'period_end': date(2024, 3, 24),
+                'metric_group': 'conversion',
+                'metric_code': 'conversion_score',
+                'avg_value': 70,
+                'min_value': 50,
+                'max_value': 90,
+                'count_value': 5,
+            },
+            {
+                'period_key': '2024-W12',
+                'period_start': date(2024, 3, 18),
+                'period_end': date(2024, 3, 24),
+                'metric_group': 'quality',
+                'metric_code': 'talk_time_efficiency',
+                'avg_value': 4.2,
+                'min_value': 3.9,
+                'max_value': 4.8,
+                'count_value': 5,
+            },
+        ]
+        mock_db_manager.execute_with_retry.return_value = mock_rows
+
+        result = await lm_repo.get_weekly_metrics(metric_groups=['conversion', 'quality'], weeks=2)
+
+        assert len(result) == 1
+        period = result[0]
+        assert period['period_key'] == '2024-W12'
+        assert period['metrics']['conversion']['conversion_score']['avg'] == 70.0
+        assert period['metrics']['quality']['talk_time_efficiency']['count'] == 5
+
+    @pytest.mark.asyncio
+    async def test_get_lm_period_summary(self, lm_repo, mock_db_manager, monkeypatch):
+        """Ensure period summary aggregates metrics, flags и дельты."""
+        metric_payloads = {
+            'conversion_score': [
+                {'avg_value': 60, 'sample_count': 120},
+                {'avg_value': 64, 'sample_count': 100},
+            ],
+            'lost_opportunity_score': [
+                {'avg_value': 42, 'sample_count': 120, 'above_threshold': 18},
+                {'avg_value': 30, 'sample_count': 100, 'above_threshold': 10},
+            ],
+            'cross_sell_potential': [
+                {'avg_value': 55, 'sample_count': 120, 'above_threshold': 6},
+                {'avg_value': 40, 'sample_count': 100, 'above_threshold': 3},
+            ],
+            'normalized_call_score': [
+                {'avg_value': 75.5, 'sample_count': 120},
+                {'avg_value': 70.0, 'sample_count': 100},
+            ],
+            'conversion_prob_forecast': [
+                {'avg_value': 0.57, 'sample_count': 120},
+                {'avg_value': 0.60, 'sample_count': 100},
+            ],
+            'second_call_prob': [
+                {'avg_value': 0.38, 'sample_count': 120},
+                {'avg_value': 0.30, 'sample_count': 100},
+            ],
+            'complaint_risk_flag': [
+                {'avg_value': 65, 'sample_count': 120, 'above_threshold': 9},
+                {'avg_value': 40, 'sample_count': 100, 'above_threshold': 4},
+            ],
+            'complaint_prob': [
+                {'avg_value': 0.2, 'sample_count': 120, 'above_threshold': 7},
+                {'avg_value': 0.1, 'sample_count': 100, 'above_threshold': 5},
+            ],
+            'script_risk_index': [
+                {'avg_value': 35, 'sample_count': 120, 'above_threshold': 9, 'medium_band_count': 11},
+                {'avg_value': 32, 'sample_count': 100, 'above_threshold': 4, 'medium_band_count': 8},
+            ],
+        }
+        call_counts: Dict[str, int] = {}
+
+        async def fake_fetch(metric_code, start_date, end_date, threshold=None, medium_band=None):
+            idx = call_counts.get(metric_code, 0)
+            call_counts[metric_code] = idx + 1
+            return metric_payloads.get(metric_code, [{}]*2)[min(idx, 1)]
+
+        monkeypatch.setattr(lm_repo, "_fetch_period_numeric", fake_fetch)
+
+        flag_rows = [
+            {
+                'metric_code': 'followup_needed_flag',
+                'true_count': 12,
+                'sample_count': 120,
+            },
+            {
+                'metric_code': 'complaint_risk_flag',
+                'true_count': 3,
+                'sample_count': 120,
+            },
+        ]
+        churn_rows = [
+            {
+                'value_label': 'HIGH',
+                'count_value': 5,
+            }
+        ]
+        bookings = [
+            {'call_category': '2ГИС', 'cnt': 20},
+            {'call_category': 'Yandex', 'cnt': 15},
+        ]
+        utm_rows = [
+            {'source_label': 'Гугл карты', 'cnt': 60},
+            {'source_label': 'Яндекс карты', 'cnt': 30},
+        ]
+        mock_db_manager.execute_with_retry.side_effect = [
+            flag_rows,
+            churn_rows,
+            {
+                'total_cnt': 200,
+                'target_cnt': 150,
+                'lost_cnt': 40,
+                'transcript_cnt': 160,
+                'outcome_cnt': 180,
+                'refusal_cnt': 50,
+                'operator_cnt': 200,
+                'utm_cnt': 190,
+            },
+            utm_rows,
+            [
+                {'loss_group': 'Цена / дорого', 'cnt': 10},
+                {'loss_group': 'Не указано', 'cnt': 5},
+            ],
+            bookings,
+        ]
+
+        summary = await lm_repo.get_lm_period_summary(days=7)
+
+        assert summary['call_count'] == 200
+        assert summary['base']['target_calls'] == 150
+        assert summary['base']['non_target_calls'] == 50
+        assert summary['base']['lost_opportunity_count'] == 40
+        assert summary['metrics']['conversion_score']['avg'] == 60
+        assert summary['metrics']['conversion_score']['delta'] == -4
+        assert summary['metrics']['lost_opportunity_score']['alert_count'] == 18
+        assert summary['metrics']['complaint_risk_flag']['alert_count'] == 9
+        assert summary['flags']['followup_needed_flag']['true_count'] == 12
+        assert summary['churn']['high'] == 5
+        assert summary['updated_at'] is not None
+        assert summary['coverage']['transcript']['count'] == 160
+        assert summary['coverage']['outcome']['percent'] == 90.0
+        assert summary['bookings'][0]['call_category'] == '2ГИС'
+        assert summary['loss_breakdown'][0]['label'] == 'Цена / дорого'
+        assert summary['loss_breakdown'][0]['count'] == 10
+        assert summary['utm_breakdown'][0]['label'] == 'Гугл карты'
+        assert summary['utm_breakdown'][0]['count'] == 60
+        assert summary['utm_breakdown'][0]['share'] == 30.0
 
     @pytest.mark.asyncio
     async def test_delete_lm_values_by_call(self, lm_repo, mock_db_manager):

@@ -15,6 +15,7 @@ import os
 import re
 from typing import Optional
 
+import httpx
 from telegram import BotCommand, Update
 from telegram.error import TelegramError
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, TypeHandler, filters
@@ -36,6 +37,7 @@ from app.utils.error_handlers import (
 
 from app.db.manager import DatabaseManager
 from app.db.repositories.lm_repository import LMRepository
+from app.db.repositories.lm_dictionary_repository import LMDictionaryRepository
 from app.db.utils_schema import validate_schema
 from app.db.repositories.users import UserRepository
 from app.telegram.middlewares.permissions import PermissionsManager
@@ -47,6 +49,7 @@ from app.services.call_lookup import CallLookupService
 from app.services.yandex import YandexDiskCache, YandexDiskClient
 from app.services.weekly_quality import WeeklyQualityService
 from app.services.reports import ReportService
+from app.services.lm_service import LMService
 
 # Хендлеры
 from app.telegram.handlers.auth import setup_auth_handlers
@@ -265,6 +268,8 @@ async def main():
         # 2. Инициализация сервисов
         permissions_manager = PermissionsManager(db_manager)
         lm_repo = LMRepository(db_manager)
+        dictionary_repo = LMDictionaryRepository(db_manager)
+        lm_service = LMService(lm_repo, dictionary_repository=dictionary_repo)
         user_repo = UserRepository(db_manager)
         call_lookup_service = CallLookupService(db_manager, lm_repo)
         yandex_disk_client = YandexDiskClient.from_env()
@@ -285,11 +290,19 @@ async def main():
         notification_service = NotificationService()  # Existing service
 
         # 3. Инициализация приложения Telegram
+        telegram_transport = httpx.AsyncHTTPTransport(retries=3)
+        telegram_limits = httpx.Limits(max_keepalive_connections=0, max_connections=20)
         request = HTTPXRequest(
-            connect_timeout=10,
+            connect_timeout=15,
             read_timeout=70,
             write_timeout=30,
-            pool_timeout=10,
+            pool_timeout=15,
+            http_version="1.1",
+            httpx_kwargs={
+                "http2": False,
+                "transport": telegram_transport,
+                "limits": telegram_limits,
+            },
         )
         application = (
             ApplicationBuilder()
@@ -317,14 +330,12 @@ async def main():
         context_handler = TypeHandler(Update, user_context_injector)
         context_handler.block = False  # Не блокируем последующие MessageHandler-ы с reply-кнопок
         application.add_handler(context_handler, group=-2)
-        application.add_handler(
-            MessageHandler(
-                filters.TEXT & ~filters.COMMAND,
-                debug_incoming,
-                block=False,
-            ),
-            group=99,
+        debug_handler = MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            debug_incoming,
         )
+        debug_handler.block = False
+        application.add_handler(debug_handler, group=99)
         
         # Вспомогательные лог-хендлеры
         register_logging_handlers(application)
@@ -378,7 +389,7 @@ async def main():
         
         # LM Metrics
         from app.telegram.handlers.admin_lm import register_admin_lm_handlers
-        register_admin_lm_handlers(application, lm_repo, permissions_manager)
+        register_admin_lm_handlers(application, lm_repo, permissions_manager, lm_service)
         
         # Call Lookup (/call_lookup)
         register_call_lookup_handlers(
@@ -461,11 +472,11 @@ async def main():
         logger.info("Webhook удален (если был), переключаемся на Polling.")
         
         await application.updater.start_polling(
-            timeout=50,
+            timeout=30,
             read_timeout=70,
             write_timeout=30,
-            connect_timeout=10,
-            pool_timeout=10,
+            connect_timeout=15,
+            pool_timeout=15,
         )
         logger.info("Бот запущен и готов к работе (Polling).")
         await stop_event.wait()

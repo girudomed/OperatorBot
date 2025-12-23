@@ -33,12 +33,10 @@ async def _send_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 def register_manual_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("manual", _send_manual))
-    application.add_handler(
-        MessageHandler(
-            filters.Regex(r"(?i)^\s*(?:📘\s*)?мануал\s*$"),
-            _send_manual,
-            block=False,
-        ),
-        group=0,
+    manual_button_handler = MessageHandler(
+        filters.Regex(r"(?i)^\s*(?:📘\s*)?мануал\s*$"),
+        _send_manual,
     )
+    manual_button_handler.block = False
+    application.add_handler(manual_button_handler, group=0)
     application.bot_data["manual_text_handler"] = _send_manual

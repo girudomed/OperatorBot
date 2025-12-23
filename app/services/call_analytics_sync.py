@@ -60,7 +60,7 @@ class CallAnalyticsSyncService:
                 SELECT COUNT(*) as count
                 FROM call_scores cs
                 WHERE NOT EXISTS (
-                    SELECT 1 FROM mangoapi_db.call_analytics ca 
+                    SELECT 1 FROM call_analytics ca 
                     WHERE ca.call_scores_id = cs.id
                 )
             """
@@ -200,11 +200,11 @@ class CallAnalyticsSyncService:
                     {ml_score_pred_expr},
                     {ml_p_complaint_expr},
                     NOW()
-                FROM mangoapi_db.call_history ch
-                INNER JOIN mangoapi_db.call_scores cs ON cs.history_id = ch.history_id
+                FROM call_history ch
+                INNER JOIN call_scores cs ON cs.history_id = ch.history_id
                 WHERE {history_timestamp_field} >= %s
                   AND NOT EXISTS (
-                      SELECT 1 FROM mangoapi_db.call_analytics ca 
+                      SELECT 1 FROM call_analytics ca 
                       WHERE ca.call_scores_id = cs.id
                   )
                 ORDER BY {history_timestamp_field} ASC
@@ -293,7 +293,7 @@ class CallAnalyticsSyncService:
                     cs.ml_score_pred,
                     cs.ml_p_complaint,
                     NOW()
-                FROM mangoapi_db.call_scores cs
+                FROM call_scores cs
                 WHERE NOT EXISTS (
                     SELECT 1 FROM call_analytics ca 
                     WHERE ca.call_scores_id = cs.id

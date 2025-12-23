@@ -256,14 +256,15 @@ class DevMessagesHandler:
     
     def get_handlers(self):
         """Возвращает handlers для регистрации (без callback'ов adm:*)."""
+        message_handler = MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            self._combined_message_handler,
+        )
+        message_handler.block = False
         return [
             CommandHandler('message_dev', self.message_dev_command),
             CommandHandler('cancel', self.cancel_command),
-            MessageHandler(
-                filters.TEXT & ~filters.COMMAND,
-                self._combined_message_handler,
-                block=False,
-            )
+            message_handler,
         ]
     
     async def _combined_message_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):

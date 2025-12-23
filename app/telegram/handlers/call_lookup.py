@@ -31,6 +31,7 @@ from app.services.yandex import YandexDiskCache, YandexDiskClient, YandexDiskRec
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.telegram.utils.messages import safe_edit_message
 from app.telegram.utils.callback_data import AdminCB
+from app.telegram.utils.callback_lm import LMCB
 from app.logging_config import get_watchdog_logger
 from app.telegram.utils.state import reset_feature_states
 from app.utils.error_handlers import log_async_exceptions
@@ -146,6 +147,23 @@ class _CallLookupHandlers:
         )
         self._call_details_key = "call_lookup_last_details"
         self._analysis_chunks_key = "call_lookup_analysis_chunks"
+
+    async def _send_usage_hint(
+        self,
+        message: Message,
+        context: CallbackContext,
+        *,
+        default_period: str = "monthly",
+    ) -> None:
+        """Показ подсказки по использованию поиска."""
+        if not message:
+            return
+        await self._prompt_lookup_start(
+            context,
+            message.chat_id,
+            message.from_user,
+            default_period=default_period,
+        )
 
     @staticmethod
     def _generate_error_code() -> str:
@@ -318,6 +336,8 @@ class _CallLookupHandlers:
         history_id: int,
         *,
         transcript_truncated: bool,
+        origin: Optional[str] = None,
+        origin_context: Optional[str] = None,
     ) -> InlineKeyboardMarkup:
         rows: List[List[InlineKeyboardButton]] = []
         action_row: List[InlineKeyboardButton] = []
@@ -330,15 +350,33 @@ class _CallLookupHandlers:
             )
         if action_row:
             rows.append(action_row)
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    "⬅️ Назад к списку",
-                    callback_data=AdminCB.create(AdminCB.CALL, "back", history_id),
-                )
-            ]
-        )
+        
+        rows.append([
+            InlineKeyboardButton(
+                "📊 LM Аналитика",
+                callback_data=LMCB.create(LMCB.SUMMARY, history_id)
+            )
+        ])
+        
+        back_button = self._build_back_button(history_id, origin, origin_context)
+        if back_button:
+            rows.append([back_button])
         return InlineKeyboardMarkup(rows)
+
+    def _build_back_button(
+        self,
+        history_id: int,
+        origin: Optional[str],
+        origin_context: Optional[str],
+    ) -> Optional[InlineKeyboardButton]:
+        if origin == "lm":
+            target_context = origin_context if origin_context not in (None, "none") else None
+            callback = LMCB.create(LMCB.ACTION_SUMMARY, history_id, target_context or "")
+            return InlineKeyboardButton("⬅️ Назад в LM", callback_data=callback)
+        return InlineKeyboardButton(
+            "⬅️ Назад к списку",
+            callback_data=AdminCB.create(AdminCB.CALL, "back", history_id),
+        )
 
     def _call_card_keyboard(
         self,
@@ -599,7 +637,7 @@ class _CallLookupHandlers:
                 [
                     InlineKeyboardButton(
                         "📅 Выбрать другой период",
-                        callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "ask", period),
+                        callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "intro", period),
                     )
                 ]
             )
@@ -614,15 +652,18 @@ class _CallLookupHandlers:
             recording_id = item.get("recording_id")
             score = item.get("score")
             score_display = (
-                f"{score:.2f}" if isinstance(score, (int, float)) else (score if score is not None else "—")
+                f"{score:.1f}" if isinstance(score, (int, float)) else (score if score is not None else "—")
             )
 
             lines.append("")
-            lines.append(f"{offset + idx}. #{history_id} • {call_time} • {duration} • Score: {score_display}")
-            lines.append(f"Кто звонил: {caller}")
-            lines.append(f"Кому звонили: {called}")
+            lines.append(f"🕒 {call_time}")
+            lines.append(f"📱 {caller}")
+            lines.append(f"⏱ {duration}")
+            lines.append(f"👤 Кто звонил: {caller}")
+            lines.append(f"🏢 Кому звонили: {called}")
+            lines.append(f"⭐ Score: {score_display}")
             if recording_id:
-                lines.append(f"recording_id: {recording_id}")
+                lines.append(f"🎧 recording_id: {recording_id}")
 
             if history_id:
                 keyboard_rows.append(
@@ -658,7 +699,7 @@ class _CallLookupHandlers:
             [
                 InlineKeyboardButton(
                     "📅 Сменить период",
-                    callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "ask", period),
+                    callback_data=AdminCB.create(AdminCB.CALL_LOOKUP, "intro", period),
                 )
             ]
         )
@@ -837,23 +878,6 @@ class _CallLookupHandlers:
 
         await self._send_usage_hint(message, context)
     
-    async def _send_usage_hint(
-        self,
-        message: Message,
-        context: CallbackContext,
-        *,
-        default_period: str = "monthly",
-    ) -> None:
-        if not message:
-            return
-        await self._prompt_lookup_start(
-            context,
-            message.chat_id,
-            message.from_user,
-            default_period=default_period,
-        )
-
-    @log_async_exceptions
     async def handle_callback(self, update: Update, context: CallbackContext) -> None:
         query = update.callback_query
         user = update.effective_user
@@ -1161,6 +1185,8 @@ class _CallLookupHandlers:
             history_id = int(args[1]) if len(args) > 1 else 0
         except ValueError:
             history_id = 0
+        origin = args[2] if len(args) > 2 else None
+        origin_context = args[3] if len(args) > 3 else None
         if history_id <= 0:
             await query.answer("Некорректный ID", show_alert=True)
             return
@@ -1182,13 +1208,13 @@ class _CallLookupHandlers:
             if not await self._acquire_busy(context, notifier=query):
                 return
             try:
-                await self._handle_call_bundle(update, context, history_id, user)
+                await self._handle_call_bundle(update, context, history_id, user, origin=origin, origin_context=origin_context)
             finally:
                 self._release_busy(context)
-        elif sub_action == "full":
-            await self._handle_call_full_transcript(update, context, history_id)
+        elif sub_action in ("full", "full_transcript"):
+            await self._handle_call_full_transcript(update, context, history_id, origin=origin, origin_context=origin_context)
         elif sub_action == "transcript":
-            await self._handle_call_transcript_preview(update, context, history_id, user)
+            await self._handle_call_transcript_preview(update, context, history_id, user, origin=origin, origin_context=origin_context)
         elif sub_action == "analysis":
             await self._handle_call_analysis(update, context, history_id, user)
         elif sub_action == "analysis_more":
@@ -1233,6 +1259,7 @@ class _CallLookupHandlers:
         )
         await self._send_call_card(context, chat_id, details_payload)
         self._store_call_details(context, chat_id, history_id, details_payload)
+        context.user_data["lm:last_history_id"] = history_id
         self._clear_analysis_chunks(context, chat_id, history_id)
 
     async def _handle_call_audio_retry(
@@ -1255,21 +1282,8 @@ class _CallLookupHandlers:
         context: CallbackContext,
         history_id: int,
         user: User,
-    ) -> None:
-        chat_id = self._resolve_chat_id(update, user)
-        details = await self._ensure_call_details(context, chat_id, history_id)
-        if not details:
-            await self._safe_send_message(context, chat_id, "Звонок не найден.")
-            return
-        await self._send_call_transcript(context, chat_id, history_id, details, user)
-        await self._send_call_audio(context, chat_id, history_id, details, user)
-
-    async def _handle_call_transcript_preview(
-        self,
-        update: Update,
-        context: CallbackContext,
-        history_id: int,
-        user: User,
+        origin: Optional[str] = None,
+        origin_context: Optional[str] = None,
     ) -> None:
         chat_id = self._resolve_chat_id(update, user)
         details = await self._ensure_call_details(context, chat_id, history_id)
@@ -1282,6 +1296,33 @@ class _CallLookupHandlers:
             history_id,
             details,
             user,
+            origin=origin,
+            origin_context=origin_context,
+        )
+        await self._send_call_audio(context, chat_id, history_id, details, user)
+
+    async def _handle_call_transcript_preview(
+        self,
+        update: Update,
+        context: CallbackContext,
+        history_id: int,
+        user: User,
+        origin: Optional[str] = None,
+        origin_context: Optional[str] = None,
+    ) -> None:
+        chat_id = self._resolve_chat_id(update, user)
+        details = await self._ensure_call_details(context, chat_id, history_id)
+        if not details:
+            await self._safe_send_message(context, chat_id, "Звонок не найден.")
+            return
+        await self._send_call_transcript(
+            context,
+            chat_id,
+            history_id,
+            details,
+            user,
+            origin=origin,
+            origin_context=origin_context,
         )
 
     async def _handle_call_full_transcript(
@@ -1289,6 +1330,8 @@ class _CallLookupHandlers:
         update: Update,
         context: CallbackContext,
         history_id: int,
+        origin: Optional[str] = None,
+        origin_context: Optional[str] = None,
     ) -> None:
         chat_id = self._resolve_chat_id(update, update.effective_user)
         details = await self._ensure_call_details(context, chat_id, history_id)
@@ -1296,7 +1339,14 @@ class _CallLookupHandlers:
         if not transcript:
             await self._safe_send_message(context, chat_id, "Полная расшифровка отсутствует.")
             return
-        await self._send_full_transcript(context, chat_id, history_id, transcript)
+        await self._send_full_transcript(
+            context,
+            chat_id,
+            history_id,
+            transcript,
+            origin=origin,
+            origin_context=origin_context,
+        )
         logger.info(
             "[CALL_LOOKUP] transcript_status=sent_full history_id=%s",
             history_id,
@@ -1865,6 +1915,9 @@ class _CallLookupHandlers:
         history_id: int,
         details: Dict[str, Any],
         user: User,
+        *,
+        origin: Optional[str] = None,
+        origin_context: Optional[str] = None,
     ) -> Tuple[str, bool]:
         transcript = details.get("transcript")
         truncated = False
@@ -1885,6 +1938,8 @@ class _CallLookupHandlers:
         reply_markup = self._call_actions_keyboard(
             history_id,
             transcript_truncated=truncated,
+            origin=origin,
+            origin_context=origin_context,
         )
         await self._safe_send_message(
             context,
@@ -1906,18 +1961,19 @@ class _CallLookupHandlers:
         chat_id: int,
         history_id: int,
         transcript: str,
+        *,
+        origin: Optional[str] = None,
+        origin_context: Optional[str] = None,
     ) -> None:
         chunks = self._split_text(transcript, limit=3800)
+        back_button = self._build_back_button(history_id, origin, origin_context)
         for index, chunk in enumerate(chunks):
             reply_markup = None
             if index + 1 < len(chunks):
                 reply_markup = InlineKeyboardMarkup(
                     [
                         [
-                            InlineKeyboardButton(
-                                "⬅️ Назад к списку",
-                                callback_data=AdminCB.create(AdminCB.CALL, "back", history_id),
-                            )
+                            back_button
                         ]
                     ]
                 )
@@ -1925,10 +1981,7 @@ class _CallLookupHandlers:
                 reply_markup = InlineKeyboardMarkup(
                     [
                         [
-                            InlineKeyboardButton(
-                                "⬅️ Назад к списку",
-                                callback_data=AdminCB.create(AdminCB.CALL, "back", history_id),
-                            )
+                            back_button
                         ]
                     ]
                 )

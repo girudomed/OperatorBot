@@ -280,6 +280,7 @@ class YandexDiskClient:
             async with httpx.AsyncClient(
                 timeout=self.timeout,
                 follow_redirects=True,
+                transport=httpx.AsyncHTTPTransport(retries=3),
             ) as client:
                 resp = await client.get(href)
         except httpx.HTTPError as exc:
@@ -313,6 +314,7 @@ class YandexDiskClient:
         try:
             async with httpx.AsyncClient(
                 timeout=self.timeout,
+                transport=httpx.AsyncHTTPTransport(retries=3),
             ) as client:
                 resp = await client.get(
                     self.DOWNLOAD_URL,
@@ -420,7 +422,10 @@ class YandexDiskClient:
             recording_id or "*",
         )
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(
+                timeout=self.timeout,
+                transport=httpx.AsyncHTTPTransport(retries=3),
+            ) as client:
                 resp = await client.get(self.LIST_URL, params=params, headers=headers)
         except httpx.HTTPError as exc:
             logger.warning("[YDisk] Ошибка получения списка %s: %s", recording_id or "*", exc, exc_info=True)

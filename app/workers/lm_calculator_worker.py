@@ -11,6 +11,7 @@ import asyncio
 
 from app.db.manager import DatabaseManager
 from app.db.repositories.lm_repository import LMRepository
+from app.db.repositories.lm_dictionary_repository import LMDictionaryRepository
 from app.services.lm_service import LMService
 from app.logging_config import get_watchdog_logger
 
@@ -23,7 +24,8 @@ class LMCalculatorWorker:
     def __init__(self, db_manager: DatabaseManager):
         self.db_manager = db_manager
         self.lm_repo = LMRepository(db_manager)
-        self.lm_service = LMService(self.lm_repo)
+        self.dictionary_repo = LMDictionaryRepository(db_manager)
+        self.lm_service = LMService(self.lm_repo, dictionary_repository=self.dictionary_repo)
     
     async def process_recent_calls(
         self,

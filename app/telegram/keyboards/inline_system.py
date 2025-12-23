@@ -7,15 +7,13 @@ from app.telegram.utils.callback_data import AdminCB
 
 def build_system_menu(
     include_cache_reset: bool = False,
-    back_callback: str = AdminCB.create(AdminCB.BACK),
+    back_callback: str = "system_back",
 ) -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("🔍 Состояние бота", callback_data="system_status")],
         [InlineKeyboardButton("❌ Последние ошибки", callback_data="system_errors")],
         [InlineKeyboardButton("📄 Логи", callback_data="system_logs")],
-        [InlineKeyboardButton("🔌 Проверка БД/Mango", callback_data="system_check")],
-        [InlineKeyboardButton("🔄 Синхронизация аналитики", callback_data="system_sync")],
-        [InlineKeyboardButton("🎧 Индексация записей", callback_data="system_yandex_index")],
+        [InlineKeyboardButton("🔌 Проверка БД", callback_data="system_check")],
     ]
     if include_cache_reset:
         keyboard.append(
