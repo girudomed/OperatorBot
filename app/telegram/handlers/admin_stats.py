@@ -5,6 +5,7 @@
 """
 
 from datetime import datetime, timedelta
+from typing import Dict, Any, Optional
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, Application
@@ -57,13 +58,41 @@ class AdminStatsHandler:
             await self._show_period_summary(query, period_key=args[1])
             return
 
-        await self._show_period_picker(query)
+        pending_count = await self._safe_count(self.admin_repo.get_pending_users)
+        admin_count = await self._safe_count(self.admin_repo.get_admins)
+        period_previews = await self._collect_period_previews()
 
-    async def _show_period_picker(self, query) -> None:
+        await self._show_period_picker(
+            query,
+            pending_count=pending_count,
+            admin_count=admin_count,
+            period_previews=period_previews,
+        )
+
+    async def _show_period_picker(
+        self,
+        query,
+        *,
+        pending_count: int = 0,
+        admin_count: int = 0,
+        period_previews: Optional[Dict[str, Optional[Dict[str, Any]]]] = None,
+    ) -> None:
         text = (
             "📈 <b>Статистика системы</b>\n"
             "Выберите интересующий период, чтобы открыть детализацию качества."
         )
+        preview_lines = []
+        for label, key, _ in self._period_configs():
+            summary = (period_previews or {}).get(key)
+            if summary:
+                preview_lines.append(
+                    f"{label}: {summary.get('total_calls', 0)} звонков, ⭐ {summary.get('avg_score', 0):.1f}"
+                )
+            else:
+                preview_lines.append(f"{label}: нет данных")
+        if preview_lines:
+            text += "\n\n" + "\n".join(preview_lines)
+        text += f"\n\n👥 Админов: {admin_count}\n⏳ Заявок в очереди: {pending_count}"
         keyboard = []
         row: list[InlineKeyboardButton] = []
         for idx, (label, key, _) in enumerate(self._period_configs()):
@@ -150,6 +179,31 @@ class AdminStatsHandler:
             f"♻️ Отмен: {summary.get('cancellations', 0)}",
         ]
         return "\n".join(lines)
+
+    async def _safe_count(self, coro_factory) -> int:
+        try:
+            items = await coro_factory()
+            if items is None:
+                return 0
+            return len(items)
+        except Exception as exc:
+            logger.error("Failed to fetch admin stats count: %s", exc)
+            return 0
+
+    async def _collect_period_previews(self) -> Dict[str, Optional[Dict[str, Any]]]:
+        previews: Dict[str, Optional[Dict[str, Any]]] = {}
+        today = datetime.now().date()
+        for _, key, days in self._period_configs():
+            start_date = today if days == 1 else today - timedelta(days=days - 1)
+            try:
+                previews[key] = await self.metrics.calculate_quality_summary(
+                    start_date=start_date.isoformat(),
+                    end_date=today.isoformat(),
+                )
+            except Exception as exc:
+                logger.warning("Failed to load preview for %s: %s", key, exc)
+                previews[key] = None
+        return previews
 
 
 def register_admin_stats_handlers(

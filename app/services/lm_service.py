@@ -1017,20 +1017,20 @@ class LMService:
         Рассчитывает уровень риска оттока (SST v1912).
         """
         if call_score is None:
-            return ('low', 0.0)
+            return ('LOW', 0.0)
             
         outcome = str(call_score.get('outcome') or '')
         refusal = call_score.get('refusal_reason')
         is_complaint = 'жалоба' in str(call_score.get('call_category') or '').lower()
         
         if refusal and is_complaint:
-            return ('critical', 100.0)
+            return ('CRITICAL', 100.0)
         if refusal or outcome == 'cancel':
-            return ('high', 70.0)
+            return ('HIGH', 70.0)
         if is_complaint:
-            return ('high', 90.0)
+            return ('HIGH', 90.0)
             
-        return ('low', 10.0)
+        return ('LOW', 10.0)
 
     def _calculate_followup_needed(
         self,

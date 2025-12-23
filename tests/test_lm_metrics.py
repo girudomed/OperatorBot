@@ -210,7 +210,7 @@ class TestLMMetricsCalculations(unittest.TestCase):
         complaint_call['call_category'] = 'Жалоба'
         
         level, score = self.lm_service._calculate_churn_risk(complaint_call)
-        self.assertEqual(level, 'high')
+        self.assertEqual(level, 'HIGH')
         self.assertEqual(score, 90.0)
     
     def test_churn_risk_cancellation(self):
@@ -220,7 +220,7 @@ class TestLMMetricsCalculations(unittest.TestCase):
         cancel_call['outcome'] = 'cancel'
         
         level, score = self.lm_service._calculate_churn_risk(cancel_call)
-        self.assertEqual(level, 'high')  # 70 >= 70
+        self.assertEqual(level, 'HIGH')  # 70 >= 70
         self.assertEqual(score, 70.0)
     
     def test_churn_risk_booked(self):
@@ -228,7 +228,7 @@ class TestLMMetricsCalculations(unittest.TestCase):
         level, score = self.lm_service._calculate_churn_risk(
             self.test_call_score
         )
-        self.assertEqual(level, 'low')
+        self.assertEqual(level, 'LOW')
         self.assertEqual(score, 10.0)
     
     def test_complaint_risk_direct(self):

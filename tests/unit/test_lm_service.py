@@ -170,14 +170,14 @@ class TestLMService:
         """Test churn risk for complaint."""
         call_score = {'call_category': 'Жалоба', 'outcome': '', 'refusal_reason': None}
         level, score = lm_service._calculate_churn_risk(call_score)
-        assert level == 'high'
+        assert level == 'HIGH'
         assert score == 90.0
 
     def test_churn_risk_booking(self, lm_service):
         """Test churn risk for successful booking."""
         call_score = {'call_category': 'Запись на услугу (успешная)', 'outcome': 'record', 'refusal_reason': None}
         level, score = lm_service._calculate_churn_risk(call_score)
-        assert level == 'low'
+        assert level == 'LOW'
         assert score == 10.0
 
     def test_complaint_gate_service_not_provided(self, lm_service, sample_call_history):
