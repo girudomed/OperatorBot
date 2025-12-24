@@ -990,6 +990,10 @@ class AdminPanelHandler:
             alert_text="Недавно запускали выгрузку. Подождите пару секунд.",
         ):
             return
+        try:
+            await query.answer("Готовлю файл, это может занять несколько секунд…", show_alert=False)
+        except TelegramError:
+            logger.debug("Не удалось ответить на callback перед выгрузкой", exc_info=True)
         guard = self._get_job_guard(context)
         guard_key = f"job:call_export:{days}"
         if not await guard.acquire(guard_key):
@@ -1042,7 +1046,10 @@ class AdminPanelHandler:
             logger.exception("Не удалось отправить выгрузку: %s", exc)
             await query.answer("Отправка файла не удалась", show_alert=True)
             return
-        await query.answer("Файл отправлен ✅")
+        try:
+            await query.answer("Файл отправлен ✅")
+        except TelegramError:
+            logger.debug("Callback уже был закрыт во время отправки файла", exc_info=True)
 
     async def _open_report_flow(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
