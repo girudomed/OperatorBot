@@ -112,6 +112,34 @@ class TestLMService:
         score = lm_service._calculate_conversion_score(call_score)
         assert score == 50.0
 
+    def test_lost_opportunity_only_lead_no_record_counts(self, lm_service, sample_call_history):
+        """Losses should count только для целевых lead_no_record."""
+        call_score = {
+            'is_target': 1,
+            'outcome': 'lead_no_record',
+            'call_category': 'Лид (без записи)',
+            'call_score': 6.0,
+            'refusal_reason': '',
+            'result': ''
+        }
+        score, meta = lm_service._calculate_lost_opportunity(sample_call_history, call_score)
+        assert score > 0
+        assert "lead_no_record" in " ".join(meta.get('reasons', []))
+
+    def test_lost_opportunity_ignores_cancellations_and_info(self, lm_service, sample_call_history):
+        """Целевой звонок с иным исходом не должен попадать в потери."""
+        call_score = {
+            'is_target': 1,
+            'outcome': 'cancelled_by_patient',
+            'call_category': 'Отмена записи',
+            'call_score': 6.0,
+            'refusal_reason': '',
+            'result': ''
+        }
+        score, meta = lm_service._calculate_lost_opportunity(sample_call_history, call_score)
+        assert score == 0
+        assert meta == {}
+
     # ===== Quality Metrics Tests =====
 
     def test_calculate_quality_metrics(self, lm_service, sample_call_history, sample_call_score):

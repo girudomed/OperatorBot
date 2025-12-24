@@ -659,7 +659,7 @@ def _build_indicators_block(summary: Dict[str, Any], calls_total: int) -> str:
     if q_value is not None:
         status = _status_from_value(q_value, 70, 65)
         lines.append(
-            f"{STATUS_ICONS[status]} Качество общения: {q_value:.1f}/100 (норма ≥ 70)"
+            f"{STATUS_ICONS[status]} Качество общения = AVG(call_score) × 10: {q_value:.1f}/100 (норма ≥ 70)"
         )
 
     conversion = metrics.get("conversion_score", {})

@@ -914,11 +914,8 @@ class LMService:
         reasons = []
         score = 0.0
 
-        if is_target == 1 and outcome != 'record':
-            reasons.append(f"Целевой звонок без записи (исход: {outcome_raw or '—'})")
-            score += 60.0
-        elif category_raw == 'Лид (без записи)' and outcome != 'record':
-            reasons.append("Лид без записи")
+        if is_target == 1 and outcome == 'lead_no_record':
+            reasons.append("Целевой лид без записи (outcome=lead_no_record)")
             score += 60.0
 
         if score == 0.0:

@@ -6,6 +6,7 @@
 
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timedelta, date
+from zoneinfo import ZoneInfo
 import json
 import aiomysql
 
@@ -15,6 +16,7 @@ from app.logging_config import get_watchdog_logger
 from app.utils.periods import calculate_period_bounds
 
 logger = get_watchdog_logger(__name__)
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
 LM_SCORE_METRICS = (
@@ -352,6 +354,7 @@ class LMRepository:
             WHERE lv.metric_code = %s
               AND COALESCE(ch.context_start_time_dt, cs.call_date, lv.created_at) >= %s
               AND COALESCE(ch.context_start_time_dt, cs.call_date, lv.created_at) < %s
+              AND COALESCE(ch.talk_duration, cs.talk_duration, 0) >= 10
         """
         params.extend([metric_code, start_date, end_date])
         row = await self.db_manager.execute_with_retry(
@@ -382,23 +385,25 @@ class LMRepository:
         total_query = """
             SELECT
                 COUNT(*) AS total_cnt,
-                SUM(CASE WHEN is_target = 1 THEN 1 ELSE 0 END) AS target_cnt,
+                SUM(CASE WHEN cs.is_target = 1 THEN 1 ELSE 0 END) AS target_cnt,
                 SUM(
                     CASE
-                        WHEN is_target = 1
-                             AND (outcome IS NULL OR outcome <> 'record')
-                             AND (call_category IS NULL OR call_category NOT IN ('Спам', 'Спам, реклама', 'Реклама', 'Автоинформатор'))
+                        WHEN cs.is_target = 1
+                             AND (cs.outcome IS NULL OR cs.outcome <> 'record')
+                             AND (cs.call_category IS NULL OR cs.call_category NOT IN ('Спам', 'Спам, реклама', 'Реклама', 'Автоинформатор'))
                         THEN 1 ELSE 0
                     END
                 ) AS lost_cnt,
-                SUM(CASE WHEN transcript IS NOT NULL AND transcript <> '' THEN 1 ELSE 0 END) AS transcript_cnt,
-                SUM(CASE WHEN outcome IS NOT NULL AND outcome <> '' THEN 1 ELSE 0 END) AS outcome_cnt,
-                SUM(CASE WHEN refusal_reason IS NOT NULL AND refusal_reason <> '' THEN 1 ELSE 0 END) AS refusal_cnt,
-                SUM(CASE WHEN called_info IS NOT NULL AND called_info <> '' THEN 1 ELSE 0 END) AS operator_cnt,
-                SUM(CASE WHEN utm_source_by_number IS NOT NULL AND utm_source_by_number <> '' THEN 1 ELSE 0 END) AS utm_cnt
-            FROM call_scores
-            WHERE call_date >= %s
-              AND call_date < %s
+                SUM(CASE WHEN cs.transcript IS NOT NULL AND cs.transcript <> '' THEN 1 ELSE 0 END) AS transcript_cnt,
+                SUM(CASE WHEN cs.outcome IS NOT NULL AND cs.outcome <> '' THEN 1 ELSE 0 END) AS outcome_cnt,
+                SUM(CASE WHEN cs.refusal_reason IS NOT NULL AND cs.refusal_reason <> '' THEN 1 ELSE 0 END) AS refusal_cnt,
+                SUM(CASE WHEN cs.called_info IS NOT NULL AND cs.called_info <> '' THEN 1 ELSE 0 END) AS operator_cnt,
+                SUM(CASE WHEN cs.utm_source_by_number IS NOT NULL AND cs.utm_source_by_number <> '' THEN 1 ELSE 0 END) AS utm_cnt
+            FROM call_scores cs
+            LEFT JOIN call_history ch ON ch.history_id = cs.history_id
+            WHERE cs.call_date >= %s
+              AND cs.call_date < %s
+              AND COALESCE(ch.talk_duration, cs.talk_duration, 0) >= 10
         """
 
         coverage = {
@@ -451,6 +456,7 @@ class LMRepository:
             WHERE call_date >= %s
               AND call_date < %s
               AND utm_source_by_number IS NOT NULL
+              AND COALESCE(talk_duration, 0) >= 10
             GROUP BY source_label
             ORDER BY cnt DESC
             LIMIT 10
@@ -512,6 +518,7 @@ class LMRepository:
                   AND is_target = 1
                   AND (outcome IS NULL OR outcome <> 'record')
                   AND (call_category IS NULL OR call_category NOT IN ({loss_placeholder}))
+                  AND COALESCE(talk_duration, 0) >= 10
             ) t
             GROUP BY loss_group
             ORDER BY cnt DESC
@@ -546,6 +553,7 @@ class LMRepository:
             WHERE outcome = 'record'
               AND call_date >= %s
               AND call_date < %s
+              AND COALESCE(talk_duration, 0) >= 10
             GROUP BY call_category
             ORDER BY cnt DESC
             LIMIT 5
@@ -729,6 +737,11 @@ class LMRepository:
             "churn": {},
             "call_count": 0,
         }
+        logger.info(
+            "[LM] Period resolved: start=%s end=%s (MSK)",
+            current_start.astimezone(MOSCOW_TZ),
+            (current_end - timedelta(seconds=1)).astimezone(MOSCOW_TZ),
+        )
 
         metric_specs: Dict[str, Dict[str, Any]] = {
             code: {"threshold": LM_METRIC_THRESHOLDS.get(code)}
@@ -780,6 +793,7 @@ class LMRepository:
                 WHERE lv.metric_code IN ({placeholders})
                   AND COALESCE(ch.context_start_time_dt, cs.call_date, lv.created_at) >= %s
                   AND COALESCE(ch.context_start_time_dt, cs.call_date, lv.created_at) < %s
+                  AND COALESCE(ch.talk_duration, cs.talk_duration, 0) >= 10
                 GROUP BY lv.metric_code
             """
             flag_rows = await self.db_manager.execute_with_retry(
@@ -809,6 +823,7 @@ class LMRepository:
                 WHERE lv.metric_code = %s
                   AND COALESCE(ch.context_start_time_dt, cs.call_date, lv.created_at) >= %s
                   AND COALESCE(ch.context_start_time_dt, cs.call_date, lv.created_at) < %s
+                  AND COALESCE(ch.talk_duration, cs.talk_duration, 0) >= 10
                 GROUP BY lv.value_label
             """
             churn_rows = await self.db_manager.execute_with_retry(
