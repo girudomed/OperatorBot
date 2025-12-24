@@ -66,6 +66,35 @@ def export_keyboard() -> InlineKeyboard:
     ]
 
 
+def call_export_keyboard() -> InlineKeyboard:
+    return [
+        [
+            InlineKeyboardButton(
+                "14 дней",
+                callback_data=AdminCB.create(AdminCB.CALL_EXPORT, 14),
+            ),
+            InlineKeyboardButton(
+                "30 дней",
+                callback_data=AdminCB.create(AdminCB.CALL_EXPORT, 30),
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "60 дней",
+                callback_data=AdminCB.create(AdminCB.CALL_EXPORT, 60),
+            ),
+            InlineKeyboardButton(
+                "180 дней",
+                callback_data=AdminCB.create(AdminCB.CALL_EXPORT, 180),
+            ),
+        ],
+        [
+            InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK)),
+            InlineKeyboardButton("🏠 В дашборд", callback_data=AdminCB.create(AdminCB.DASHBOARD)),
+        ],
+    ]
+
+
 def dangerous_ops_keyboard() -> InlineKeyboard:
     return [
         [
@@ -128,6 +157,12 @@ def main_menu_keyboard(
             InlineKeyboardButton(
                 "📘 Мануал",
                 callback_data=AdminCB.create(AdminCB.MANUAL),
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "⬇️ Выгрузка",
+                callback_data=AdminCB.create(AdminCB.CALL_EXPORT),
             ),
         ],
         [

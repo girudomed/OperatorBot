@@ -87,6 +87,7 @@ class AdminCB:
     # Feature Modules
     CALL_LOOKUP = "cl"
     REPORTS = "rep"
+    CALL_EXPORT = "cxp"
 
     @classmethod
     def create(cls, action: str, *args) -> str:

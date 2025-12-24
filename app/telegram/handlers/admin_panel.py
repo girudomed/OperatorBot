@@ -57,11 +57,13 @@ from app.telegram.ui.admin.screens.promotions import (
     render_promotion_detail_screen,
 )
 from app.telegram.ui.admin.screens.lm_screens import render_lm_periods_screen
+from app.telegram.ui.admin.screens.call_export import render_call_export_screen
 from app.telegram.ui.admin import keyboards as admin_keyboards
 from app.telegram.keyboards.inline_system import build_system_menu
 from app.telegram.utils.admin_registry import get_admin_callback_handler
 from app.telegram.handlers.admin_lm import LMHandlers
 from app.utils.periods import calculate_period_bounds
+from app.services.call_export import CallExportService, EXPORT_PERIOD_OPTIONS
 
 LM_PERIOD_OPTIONS = (7, 14, 30, 180)
 
@@ -268,6 +270,9 @@ class AdminPanelHandler:
             return True
         if action == AdminCB.EXPORT:
             await self._show_export_screen(update)
+            return True
+        if action == AdminCB.CALL_EXPORT:
+            await self._handle_call_export_action(args, update, context)
             return True
         if action == AdminCB.LM_MENU:
             sub_action = args[0] if args else None
@@ -708,6 +713,9 @@ class AdminPanelHandler:
     async def _show_export_screen(self, update: Update) -> None:
         await self._render_screen(update, render_export_screen())
 
+    async def _show_call_export_screen(self, update: Update) -> None:
+        await self._render_screen(update, render_call_export_screen())
+
     async def _show_dangerous_ops_screen(self, update: Update) -> None:
         await self._render_screen(update, render_dangerous_ops_screen())
 
@@ -957,6 +965,84 @@ class AdminPanelHandler:
             text=report_text,
             reply_markup=keyboard,
         )
+
+    async def _handle_call_export_action(
+        self,
+        args: List[str],
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> None:
+        query = update.callback_query
+        if not query:
+            return
+        if not args:
+            await self._show_call_export_screen(update)
+            return
+        days = self._safe_int(args[0])
+        if days not in EXPORT_PERIOD_OPTIONS:
+            await query.answer("Неизвестный диапазон", show_alert=True)
+            return
+        if await self._rate_limit(
+            query,
+            context,
+            f"call_export_{days}",
+            cooldown=6.0,
+            alert_text="Недавно запускали выгрузку. Подождите пару секунд.",
+        ):
+            return
+        guard = self._get_job_guard(context)
+        guard_key = f"job:call_export:{days}"
+        if not await guard.acquire(guard_key):
+            await query.answer("Эта выгрузка уже готовится", show_alert=True)
+            return
+        try:
+            await self._run_call_export(update, context, days)
+        finally:
+            guard.release(guard_key)
+
+    async def _run_call_export(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        days: int,
+    ) -> None:
+        query = update.callback_query
+        if not query:
+            return
+        service = context.application.bot_data.get("call_export_service")
+        if not isinstance(service, CallExportService):
+            await query.answer("Сервис выгрузки недоступен", show_alert=True)
+            return
+        try:
+            buffer, filename, total_rows, (start_dt, end_dt) = await service.build_export(days)
+        except Exception as exc:  # pragma: no cover - зависит от БД
+            logger.exception("call_export failed: %s", exc)
+            await query.answer("Не удалось подготовить файл", show_alert=True)
+            return
+        buffer.name = filename
+        chat_id = (
+            query.message.chat_id if query.message else update.effective_chat.id if update.effective_chat else None
+        )
+        if chat_id is None:
+            await query.answer("Ошибка определения чата", show_alert=True)
+            return
+        caption = (
+            f"Выгрузка звонков за {days} дн.\n"
+            f"Период: {start_dt:%d.%m.%Y} — {end_dt:%d.%m.%Y}\n"
+            f"Строк: {total_rows}"
+        )
+        try:
+            await context.bot.send_document(
+                chat_id=chat_id,
+                document=buffer,
+                filename=filename,
+                caption=caption,
+            )
+        except TelegramError as exc:
+            logger.exception("Не удалось отправить выгрузку: %s", exc)
+            await query.answer("Отправка файла не удалась", show_alert=True)
+            return
+        await query.answer("Файл отправлен ✅")
 
     async def _open_report_flow(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE

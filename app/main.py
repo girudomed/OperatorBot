@@ -50,6 +50,7 @@ from app.utils.action_guard import ActionGuard
 from app.services.call_lookup import CallLookupService
 from app.services.yandex import YandexDiskCache, YandexDiskClient
 from app.services.weekly_quality import WeeklyQualityService
+from app.services.call_export import CallExportService
 from app.services.reports import ReportService
 from app.services.lm_service import LMService
 
@@ -312,6 +313,7 @@ async def main():
             file_ttl_seconds=int(os.getenv("YDISK_TG_FILE_TTL", "0") or 0) or None,
         )
         weekly_quality_service = WeeklyQualityService(db_manager)
+        call_export_service = CallExportService(db_manager)
         report_service = ReportService(db_manager)
         rate_limiter = RateLimiter()
         action_guard = ActionGuard()
@@ -352,6 +354,7 @@ async def main():
         application.bot_data["db_manager"] = db_manager
         application.bot_data["report_service"] = report_service
         application.bot_data["weekly_quality_service"] = weekly_quality_service
+        application.bot_data["call_export_service"] = call_export_service
         application.bot_data["permissions_manager"] = permissions_manager
         application.bot_data["admin_repo"] = admin_repo
         application.bot_data["user_repository"] = user_repo
