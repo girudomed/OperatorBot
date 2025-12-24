@@ -204,7 +204,7 @@ class DatabaseManager:
                 
                     if fetchone:
                         result = await cursor.fetchone()
-                        logger.info("[DB] fetchone result=%s", result)
+                        logger.info("[DB] fetchone result=%r", result)
                         if commit and connection:
                             await connection.commit()
                         return result if isinstance(result, dict) else {}
