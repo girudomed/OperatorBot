@@ -32,7 +32,7 @@ METRIC_CONFIG = {
         "unit": "баллов",
     },
     "followup_needed_flag": {
-        "name": "Контроль дозвона",
+        "name": "Нужно перезвонить",
         "red_share": 0.40,
         "yellow_share": 0.20,
         "min_n": 30,
@@ -76,7 +76,7 @@ EVIDENCE_RULES = {
         {
             "id": "lead_category_no_booking",
             "condition": lambda item: item.get('call_category') == 'Лид (без записи)' and item.get('outcome') != 'record',
-            "text": "Лид без записи — нужен дозвон."
+            "text": "Лид без записи — нужно перезвонить."
         },
         {
             "id": "tech_fail",

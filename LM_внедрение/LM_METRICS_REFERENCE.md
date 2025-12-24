@@ -145,7 +145,7 @@ Early warning metrics for customer churn and complaints.
   - Booked: 10.0 (low)
   - Default: 30.0 (medium)
 - **Use Case**: Prioritize customer retention efforts
-- **Example**: 'high' risk = needs immediate follow-up
+- **Example**: 'high' risk = needs immediate «Нужно перезвонить»
 
 #### complaint_risk_flag
 - **Type**: Boolean (true/false) + Numeric (0-100)
@@ -161,13 +161,13 @@ Early warning metrics for customer churn and complaints.
 
 #### followup_needed_flag
 - **Type**: Boolean (true/false) + Numeric (1.0/0.0)
-- **Calculation**: Whether follow-up call is needed
+- **Calculation**: Whether the «Нужно перезвонить» flag must be set
 - **Formula**:
   - Outcome = 'lead_no_record': true
   - Category in ['Жалоба', 'Лид (без записи)']: true
   - Default: false
-- **Use Case**: Schedule follow-up calls
-- **Example**: true = operator should call back
+- **Use Case**: Schedule «Нужно перезвонить» actions
+- **Example**: true = оператор обязан перезвонить
 
 ---
 

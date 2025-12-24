@@ -8,6 +8,7 @@ Worker для фоновогорасчета LM метрик.
 from typing import List, Optional
 from datetime import datetime, timedelta
 import asyncio
+import os
 
 from app.db.manager import DatabaseManager
 from app.db.repositories.lm_repository import LMRepository
@@ -53,14 +54,7 @@ class LMCalculatorWorker:
         
         query = """
         SELECT 
-            ch.history_id,
-            ch.call_date,
-            ch.talk_duration,
-            ch.call_type,
-            ch.called_info,
-            ch.caller_info,
-            ch.caller_number,
-            ch.called_number
+            ch.*
         FROM call_history ch
         WHERE ch.context_start_time >= %s
         ORDER BY ch.context_start_time DESC
@@ -161,14 +155,7 @@ class LMCalculatorWorker:
         
         history_query = f"""
         SELECT 
-            ch.history_id,
-            ch.call_date,
-            ch.talk_duration,
-            ch.call_type,
-            ch.called_info,
-            ch.caller_info,
-            ch.caller_number,
-            ch.called_number
+            ch.*
         FROM call_history ch
         WHERE ch.history_id IN ({history_ids_str})
         """
@@ -243,14 +230,7 @@ class LMCalculatorWorker:
         # Build query with date filters
         query = """
         SELECT 
-            ch.history_id,
-            ch.call_date,
-            ch.talk_duration,
-            ch.call_type,
-            ch.called_info,
-            ch.caller_info,
-            ch.caller_number,
-            ch.called_number
+            ch.*
         FROM call_history ch
         WHERE 1=1
         """
@@ -302,20 +282,50 @@ class LMCalculatorWorker:
         return total_processed
 
 
-# Entry point for running worker manually or via cron
+# Entry point for running worker manually или как сервис
+async def _run_continuously(
+    worker: LMCalculatorWorker,
+    *,
+    hours_back: int,
+    batch_size: int,
+    interval_seconds: int,
+) -> None:
+    """Запускает worker в бесконечном цикле с паузами."""
+    while True:
+        try:
+            await worker.process_recent_calls(hours_back=hours_back, batch_size=batch_size)
+        except Exception as exc:  # pragma: no cover - защитный контур
+            logger.exception("LM worker iteration failed: %s", exc)
+        await asyncio.sleep(max(interval_seconds, 5))
+
+
 async def main():
-    """Точка входа для запуска worker."""
-    from app.config import DB_CONFIG
+    """CLI entrypoint: запускает LM worker один раз или в цикле."""
+    hours_back = int(os.getenv("LM_WORKER_HOURS_BACK", "24"))
+    batch_size = int(os.getenv("LM_WORKER_BATCH_SIZE", "200"))
+    interval_seconds = int(os.getenv("LM_WORKER_INTERVAL_SECONDS", "900"))
+    backfill_days = int(os.getenv("LM_WORKER_BACKFILL_DAYS", "0"))
     
-    db_manager = DatabaseManager(DB_CONFIG)
-    await db_manager.initialize()
-    
+    db_manager = DatabaseManager()
+    await db_manager.create_pool()
     worker = LMCalculatorWorker(db_manager)
     
-    # Process recent calls (last 24 hours)
-    await worker.process_recent_calls(hours_back=24)
-    
-    await db_manager.close()
+    try:
+        if backfill_days > 0:
+            start_from = datetime.now() - timedelta(days=backfill_days)
+            logger.info("Running LM backfill for last %s days", backfill_days)
+            await worker.backfill_all_calls(start_date=start_from)
+        if interval_seconds <= 0:
+            await worker.process_recent_calls(hours_back=hours_back, batch_size=batch_size)
+        else:
+            await _run_continuously(
+                worker,
+                hours_back=hours_back,
+                batch_size=batch_size,
+                interval_seconds=interval_seconds,
+            )
+    finally:
+        await db_manager.close_pool()
 
 
 if __name__ == "__main__":

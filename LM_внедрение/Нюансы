@@ -15,7 +15,7 @@ conversion – conversion_score, lost_opportunity_score, cross_sell_potential и
 
 quality – предполагаются метрики “покрытие чек-листа” и “risks” по скрипту (например checklist_coverage, script_risk_score). В текущем коде этих названий нет, значит они не реализованы или не подключены.
 
-risk – churn_risk_level, complaint_risk_flag, followup_needed_flag. 方法 get_risk_summary агрегирует количество high/medium/low по value_label и флаги жалоб/фоллоу-апов.
+risk – churn_risk_level, complaint_risk_flag, followup_needed_flag. 方法 get_risk_summary агрегирует количество high/medium/low по value_label и флаги жалоб/«Нужно перезвонить».
 
 forecast – conversion_prob_forecast, second_call_prob, complaint_prob. В карточке рассчитываются проценты и выводятся статусы.
 

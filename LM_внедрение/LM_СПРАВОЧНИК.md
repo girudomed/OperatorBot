@@ -32,7 +32,7 @@
 |-------------|----------|----------|
 | `churn_risk_level` | low/medium/high + 0-100 | Риск оттока. 90 = жалоба, 70 = отмена, 10 = записался |
 | `complaint_risk_flag` | true/false + 0-100 | Риск жалобы. true при score >= 50 |
-| `followup_needed_flag` | true/false + 0/1 | Нужен ли follow-up. true для лидов без записи |
+| `followup_needed_flag` | true/false + 0/1 | Флаг «Нужно перезвонить». true для лидов без записи |
 
 ### Прогнозные метрики (forecast)
 
@@ -183,7 +183,7 @@ complaint_risk = 100 если категория='Жалоба'
                 10 иначе
                 flag=true если >= 50
 
-followup_needed = true если outcome='lead_no_record'
+followup_needed = true если outcome='lead_no_record' (показываем «Нужно перезвонить»)
                  true если категория in ['Жалоба', 'Лид (без записи)']
              false иначе
 ```
@@ -270,7 +270,7 @@ GROUP BY metric_code;
 ### Для планирования работы
 
 Используйте:
-- `followup_needed_flag` - список для дозвонов
+- `followup_needed_flag` - список «Нужно перезвонить»
 - `churn_risk_level` = 'high' - retention работа
 - `complaint_risk_flag` = true - превентивная работа
 - `queue_impact_index` - планирование нагрузки

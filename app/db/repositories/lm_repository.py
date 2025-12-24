@@ -1225,7 +1225,7 @@ class LMRepository:
 
     async def get_followup_calls(self, limit: int = 10) -> List[Dict[str, Any]]:
         """
-        Получает звонки, требующие фоллоу-ап.
+        Получает звонки, помеченные как «Нужно перезвонить».
         
         Returns:
             Список звонков с флагом followup_needed=true
@@ -1434,4 +1434,4 @@ class LMRepository:
         """
 
         row = await self.db_manager.execute_with_retry(query, tuple(params) if params else None, fetchone=True)
-        return row['total'] if row else 0
+        return int((row or {}).get('total') or 0)

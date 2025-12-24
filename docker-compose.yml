@@ -36,3 +36,24 @@ services:
       - .:/app
       - ./config:/app/config
     restart: "no"
+
+  lm_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: operabot:latest
+    container_name: lm_worker
+    command: ["bash", "-lc", "python -m app.workers.lm_calculator_worker"]
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app
+      - LM_WORKER_INTERVAL_SECONDS=${LM_WORKER_INTERVAL_SECONDS:-900}
+      - LM_WORKER_HOURS_BACK=${LM_WORKER_HOURS_BACK:-24}
+      - LM_WORKER_BATCH_SIZE=${LM_WORKER_BATCH_SIZE:-200}
+      - LM_WORKER_BACKFILL_DAYS=${LM_WORKER_BACKFILL_DAYS:-0}
+    volumes:
+      - .:/app
+    depends_on:
+      - app
+    restart: unless-stopped

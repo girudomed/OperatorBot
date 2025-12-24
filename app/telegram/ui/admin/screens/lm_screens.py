@@ -66,7 +66,7 @@ METHODOLOGY_SECTIONS = [
         ],
     },
     {
-        "title": "Follow-up needed flag",
+        "title": "Флаг «Нужно перезвонить»",
         "lines": [
             "Что: незакрытый процесс (клиент ждёт действия после звонка).",
             "Как: outcome ∈ лидовых сценариев, call_category='Лид (без записи)', коды отказов PATIENT_WILL_CLARIFY/CALL_BACK_LATER/THINKING/NO_TIME или технический сбой/non_target при реальном клиенте.",
@@ -248,7 +248,7 @@ def render_lm_summary_screen(
         f"💰 Конверсия: {conversion.get('value_numeric', 0):.1f}\n"
         f"{churn_icon} Риск оттока: {churn_lbl}\n"
         f"{complaint_icon} Риск жалобы: {'ДА' if complaint_val >= 60 else 'НЕТ'}\n"
-        f"{followup_icon} Контроль дозвона: {'НУЖЕН' if followup_flag else 'НЕТ'}\n"
+        f"{followup_icon} Нужно перезвонить: {'НУЖЕН' if followup_flag else 'НЕТ'}\n"
     )
     if followup_flag and followup_reason:
         text += f"{followup_reason}\nSLA: перезвонить в течение 24 часов.\n"
@@ -300,21 +300,21 @@ def render_lm_action_list_screen(
     period_days: Optional[int] = None
 ) -> Screen:
     """
-    Экран списка действий (follow-ups, риски).
+    Экран списка действий («Нужно перезвонить», риски).
     """
     titles = {
-        "followup": "📞 Требуют Follow-up",
-        "complaints": "⚠️ Риски жалоб",
-        "churn": "📉 Риски оттока",
-        "lost": "💸 Потерянные возможности",
+        "followup": "📞 Нужно перезвонить",
+        "complaints": "⚠️ Возможные жалобы",
+        "churn": "📉 Риск ухода клиентов",
+        "lost": "💸 Потерянные обращения",
     }
     title = titles.get(action_type, "Список действий")
     
     rules = {
-        "followup": "Правило: followup_needed_flag=true — целевой клиент без записи, попросил перезвон или был технический сбой. SLA: 24 часа.",
-        "complaints": "Правило: complaint_score ≥ 60 или конфликт (низкий call_score + длинный разговор).",
-        "churn": "Правило: churn_risk_level ∈ {HIGH, CRITICAL}.",
-        "lost": "Правило: lost_opportunity_score ≥ 60 (высокая ценность потеряна).",
+        "followup": "Клиент или оператор ждёт возвращения к разговору. SLA: 24 часа.",
+        "complaints": "Есть явные признаки недовольства в диалоге.",
+        "churn": "Клиенты с высоким риском ухода — требуется удержание.",
+        "lost": "Целевые обращения без записи — нужно вернуть в воронку.",
     }
 
     text = f"<b>{title}</b>\n"
@@ -393,8 +393,6 @@ def render_lm_periods_screen(
     period_label = _format_period_label(summary.get("start_date"), summary.get("end_date"))
     calls_total = summary.get("call_count", 0)
     base = summary.get("base", {})
-    target_calls = base.get("target_calls", 0)
-    non_target_calls = base.get("non_target_calls", 0)
     lost_total = base.get("lost_opportunity_count")
     updated_at = summary.get("updated_at")
     coverage = summary.get("coverage")
@@ -405,10 +403,17 @@ def render_lm_periods_screen(
     action_counts = summary.get("action_counts") or {}
 
     complaint_metric_count = metrics.get("complaint_risk_flag", {}).get("alert_count", 0)
-    followup_metric_count = flags.get("followup_needed_flag", {}).get("true_count", 0)
-    lost_metrics = metrics.get("lost_opportunity_score", {})
+    followup_metrics = flags.get("followup_needed_flag", {}) or {}
+    followup_metric_count = followup_metrics.get("true_count", 0)
+    followup_total = followup_metrics.get("total") or 0
+    lost_metrics = metrics.get("lost_opportunity_score", {}) or {}
     lost_metric_count = lost_metrics.get("alert_count", 0)
+    lost_fact = base.get("lost_opportunity_count")
+    if lost_fact is None:
+        lost_fact = lost_metrics.get("count")
+    lost_fact = int(lost_fact or 0)
     churn_metric_high = churn.get("high", 0)
+    churn_total = sum(int(v or 0) for v in churn.values()) if churn else 0
 
     def _resolve_action_count(key: str, fallback: int) -> int:
         value = action_counts.get(key)
@@ -424,13 +429,12 @@ def render_lm_periods_screen(
     lost_count = _resolve_action_count("lost", lost_metric_count)
     churn_high = _resolve_action_count("churn", churn_metric_high)
 
-    target_share = round((target_calls / calls_total) * 100, 1) if calls_total else 0.0
     coverage_line = _build_coverage_text(coverage)
 
     text_parts = []
     text_parts.append("🧠 <b>LM-АНАЛИТИКА</b>")
+    text_parts.append("ℹ️ Дашборд отвечает на вопрос «что происходит». LM — «почему это произошло и что делать».")
     text_parts.append(f"<b>Период:</b> {period_label} (последние {selected_days} дн.)")
-    text_parts.append(f"<b>Выборка:</b> {calls_total} звонков | <b>Целевые:</b> {target_calls} ({target_share:.1f}%)")
     if lost_total is not None:
         text_parts.append(f"<b>Потери:</b> {lost_total} целевых без записи")
     text_parts.append(f"<b>Обновлено:</b> {_format_datetime(updated_at)}")
@@ -440,13 +444,25 @@ def render_lm_periods_screen(
     text_parts.append(_build_headline(summary, calls_total).strip())
 
     text_parts.append("\n<b>✅ ЧТО СДЕЛАТЬ СЕГОДНЯ</b>")
-    text_parts.append(_build_actions_today_section(complaint_count, followup_count, lost_count, churn_high, calls_total).strip())
+    text_parts.append(
+        _build_actions_today_section(
+            complaint_count,
+            followup_count,
+            followup_total,
+            lost_count,
+            lost_fact,
+            churn_high,
+            churn_total,
+            calls_total,
+        ).strip()
+    )
+
+    text_parts.append("\n<b>📌 КАЧЕСТВО ДАННЫХ</b>")
+    text_parts.append(_build_data_quality_section(summary, coverage_line).strip())
 
     text_parts.append("\n<b>🚦 ИНДИКАТОРЫ</b>")
     text_parts.append(_build_indicators_block(summary, calls_total).strip())
 
-    text_parts.append("\n<b>📌 КАЧЕСТВО ДАННЫХ</b>")
-    text_parts.append(_build_data_quality_section(summary, coverage_line).strip())
     loss_section = _build_loss_breakdown_section(summary)
     if loss_section:
         text_parts.append("\n<b>💸 ПОТЕРИ</b>")
@@ -454,28 +470,38 @@ def render_lm_periods_screen(
     text_parts.append(_build_week_actions_section(summary).strip())
 
     text_parts.append("\n<b>📂 СПИСКИ ДЛЯ ОБРАБОТКИ</b>")
-    text_parts.append(_build_action_lists_description(complaint_count, followup_count, lost_count, churn_high).strip())
+    text_parts.append(
+        _build_action_lists_description(
+            complaint_count,
+            followup_count,
+            followup_total,
+            lost_count,
+            lost_fact,
+            churn_high,
+            churn_total,
+        ).strip()
+    )
 
     keyboard: List[List[InlineKeyboardButton]] = []
     action_buttons: List[InlineKeyboardButton] = []
     if complaint_count:
         action_buttons.append(
             InlineKeyboardButton(
-                f"⚠️ Жалобы ({complaint_count})",
+                f"⚠️ Возможные жалобы ({complaint_count})",
                 callback_data=LMCB.create(LMCB.ACTION_LIST, "complaints", 0),
             )
         )
     if followup_count:
         action_buttons.append(
             InlineKeyboardButton(
-                f"📞 Перезвон ({followup_count})",
+                f"📞 Нужно перезвонить ({followup_count})",
                 callback_data=LMCB.create(LMCB.ACTION_LIST, "followup", 0),
             )
         )
     if lost_count:
         action_buttons.append(
             InlineKeyboardButton(
-                f"💸 Потери ({lost_count})",
+                f"💸 Потерянные обращения ({lost_count})",
                 callback_data=LMCB.create(LMCB.ACTION_LIST, "lost", 0),
             )
         )
@@ -519,18 +545,13 @@ def render_lm_periods_screen(
                 callback_data=AdminCB.create(AdminCB.LM_MENU, AdminCB.lm_SUM, selected_days),
             ),
             InlineKeyboardButton(
-                "⬅️ В LM-меню",
-                callback_data=AdminCB.create(
-                    AdminCB.LM_MENU,
-                    AdminCB.lm_SUM,
-                    available_periods[0] if available_periods else selected_days,
-                ),
+                "⬅️ В админ-панель",
+                callback_data=AdminCB.create(AdminCB.DASHBOARD),
             ),
         ]
     )
     keyboard.append(
         [
-            InlineKeyboardButton("🏠 В админ-панель", callback_data=AdminCB.create(AdminCB.DASHBOARD)),
             InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK)),
         ]
     )
@@ -554,7 +575,7 @@ def _build_headline(summary: Dict[str, Any], calls_total: int) -> str:
     if quality_value is not None and quality_value < 65:
         summary_line.append("качество разговоров ниже нормы")
     if followup_share is not None and followup_share >= 0.10:
-        summary_line.append("много незакрытых фоллоу-апов")
+        summary_line.append("много незакрытых задач «Нужно перезвонить»")
     if complaint_count:
         summary_line.append("есть кейсы высокого риска жалобы")
 
@@ -567,8 +588,11 @@ def _build_headline(summary: Dict[str, Any], calls_total: int) -> str:
 def _build_actions_today_section(
     complaint_count: int,
     followup_count: int,
+    followup_total: int,
     lost_count: int,
+    lost_total: int,
     churn_high: int,
+    churn_total: int,
     calls_total: int,
 ) -> str:
     if calls_total < MIN_SAMPLE_SIZE:
@@ -577,19 +601,19 @@ def _build_actions_today_section(
     entries: List[str] = []
     if complaint_count:
         entries.append(
-            f"1) ⚠️ Риск жалобы: {_format_with_word(complaint_count, WORD_FORMS['call'])} — обработать в течение 24 часов, результат фиксировать в карточке звонка."
+            f"1) ⚠️ Возможные жалобы: {_format_with_word(complaint_count, WORD_FORMS['call'])} — обработать в течение 24 часов и зафиксировать результат."
         )
     if followup_count:
         entries.append(
-            f"{len(entries)+1}) 📞 Перезвон: {_format_with_word(followup_count, WORD_FORMS['call'])} — перезвонить в течение 24 часов и зафиксировать исход (дозвон / перенос / запись)."
+            f"{len(entries)+1}) 📞 Нужно перезвонить: факт {followup_total}, к обработке {followup_count} — перезвонить ≤24 ч и закрыть вопрос."
         )
     if lost_count:
         entries.append(
-            f"{len(entries)+1}) 💸 Потери: {_format_with_word(lost_count, WORD_FORMS['call'])} — довнести причину отказа и вернуть клиента в воронку."
+            f"{len(entries)+1}) 💸 Потерянные обращения: факт {lost_total}, к обработке {lost_count} — довнести причину отказа и вернуть клиента в воронку."
         )
     if churn_high:
         entries.append(
-            f"{len(entries)+1}) 📉 Риск оттока: {_format_with_word(churn_high, WORD_FORMS['client'])} — назначить ответственного за удержание и отчитаться в течение 48 часов."
+            f"{len(entries)+1}) 📉 Риск ухода: факт {churn_total}, к обработке {churn_high} — назначить ответственного за удержание и отчитаться в течение 48 часов."
         )
 
     if not entries:
@@ -651,79 +675,124 @@ def _build_week_actions_section(summary: Dict[str, Any]) -> str:
 def _build_indicators_block(summary: Dict[str, Any], calls_total: int) -> str:
     metrics = summary.get("metrics", {})
     flags = summary.get("flags", {})
-    churn = summary.get("churn", {})
-    lines: List[str] = []
+    churn = summary.get("churn", {}) or {}
+    base = summary.get("base", {}) or {}
+    blocks: List[str] = []
 
+    def _status_phrase(code: str) -> Optional[str]:
+        return {
+            "green": "в норме",
+            "yellow": "ниже нормы",
+            "red": "критично",
+        }.get(code)
+
+    def _add_block(
+        title: str,
+        description: str,
+        *,
+        status: Optional[str] = None,
+        icon: Optional[str] = None,
+        fallback: Optional[str] = None,
+    ) -> None:
+        symbol = icon or STATUS_ICONS.get(status or "", "⚪")
+        status_text = _status_phrase(status) if status else None
+        if fallback:
+            status_text = fallback
+        header = f"{symbol} {title}"
+        if status_text:
+            header += f" — {status_text}"
+        block_lines = [header, description]
+        blocks.append("\n".join(block_lines))
+
+    # Качество общения
     quality = metrics.get("normalized_call_score", {})
     q_value = quality.get("avg")
-    if q_value is not None:
+    if q_value is None:
+        _add_block("Качество общения", "Средняя оценка разговоров", icon="⚪", fallback="данных недостаточно")
+    else:
         status = _status_from_value(q_value, 70, 65)
-        lines.append(
-            f"{STATUS_ICONS[status]} Качество общения = AVG(call_score) × 10: {q_value:.1f}/100 (норма ≥ 70)"
-        )
+        _add_block("Качество общения", "Средняя оценка разговоров", status=status, icon=STATUS_ICONS.get(status))
 
+    # Записи с обращений
     conversion = metrics.get("conversion_score", {})
     c_value = conversion.get("avg")
-    if c_value is not None:
+    if c_value is None:
+        _add_block("Записи с обращений", "Сколько целевых звонков дошли до записи", icon="⚪", fallback="данных недостаточно")
+    else:
         status = _status_from_value(c_value, 70, 60)
-        delta = conversion.get("delta")
-        delta_part = f", Δ {delta:+.1f}" if delta is not None and abs(delta) >= 0.5 else ""
-        lines.append(
-            f"{STATUS_ICONS[status]} Conversion score: {c_value:.1f}/100{delta_part} (цель ≥ 70)"
-        )
+        _add_block("Записи с обращений", "Сколько целевых звонков дошли до записи", status=status, icon=STATUS_ICONS.get(status))
 
-    followup_total = flags.get("followup_needed_flag", {}).get("total", 0)
-    followup_count = flags.get("followup_needed_flag", {}).get("true_count", 0)
-    followup_share = _safe_ratio(followup_count, followup_total if followup_total else calls_total)
-    if followup_share is not None:
-        status = _status_from_share(followup_share, 0.20, 0.10)
-        lines.append(
-            f"{STATUS_ICONS[status]} Контроль дозвона: {followup_count} звонков ({followup_share*100:.1f}%) — лимит ≤ 20%"
-        )
-
-    complaint_metrics = metrics.get("complaint_risk_flag", {})
-    complaint_avg = complaint_metrics.get("avg")
-    if complaint_avg is not None:
-        if complaint_avg <= 1.0:
-            lines.append(f"ℹ️ Средняя вероятность жалобы: {complaint_avg*100:.1f}%")
-        else:
-            lines.append(f"ℹ️ Средний complaint_score: {complaint_avg:.1f}/100")
+    # Риск жалоб
+    complaint_metrics = metrics.get("complaint_risk_flag", {}) or {}
     complaint_count = complaint_metrics.get("alert_count", 0)
-    if calls_total > 0:
-        complaint_share = (complaint_count / calls_total) * 100
-        status = "red" if complaint_count >= 1 else "yellow" if complaint_share >= 0.2 else "green"
-        lines.append(
-            f"{STATUS_ICONS[status]} Высокий риск жалобы: {complaint_count} звонков ({complaint_share:.2f}% выборки)"
-        )
+    complaint_sample = complaint_metrics.get("count") or calls_total
+    if not complaint_sample:
+        _add_block("Риск жалоб", "Звонки с признаками недовольства", icon="⚪", fallback="данных недостаточно")
+    elif complaint_sample < MIN_SAMPLE_SIZE:
+        _add_block("Риск жалоб", "Звонки с признаками недовольства", icon="⚪", fallback="недостаточно данных")
+    else:
+        status = "red" if complaint_count else "green"
+        status_text = "есть сигналы" if complaint_count else "в норме"
+        _add_block("Риск жалоб", "Звонки с признаками недовольства", status=status, icon="⚠️", fallback=status_text)
 
+    # Требуют перезвона
+    followup_meta = flags.get("followup_needed_flag", {}) or {}
+    followup_total = int(followup_meta.get("total") or 0)
+    followup_count = int(followup_meta.get("true_count") or 0)
+    followup_denominator = followup_total if followup_total else calls_total
+    followup_share = _safe_ratio(followup_count, followup_denominator)
+    if followup_share is None:
+        _add_block("Требуют перезвона", "Клиент ждал обратной связи", icon="📞", fallback="данных недостаточно")
+    else:
+        status = _status_from_share(followup_share, 0.20, 0.10)
+        _add_block("Требуют перезвона", "Клиент ждал обратной связи", status=status, icon="📞")
+
+    # Потерянные обращения
+    lost_total = base.get("lost_opportunity_count")
+    if lost_total is None:
+        lost_total = metrics.get("lost_opportunity_score", {}).get("count", 0)
+    lost_total = int(lost_total or 0)
     lost_count = metrics.get("lost_opportunity_score", {}).get("alert_count", 0)
-    lost_share = _safe_ratio(lost_count, calls_total)
-    if lost_share is not None:
+    lost_denominator = lost_total if lost_total else calls_total
+    lost_share = _safe_ratio(lost_count, lost_denominator) if lost_denominator else None
+    if lost_share is None:
+        _add_block("Потерянные обращения", "Целевые звонки без записи", icon="💸", fallback="данных недостаточно")
+    else:
         status = _status_from_share(lost_share, 0.08, 0.15)
-        lines.append(
-            f"{STATUS_ICONS[status]} Потерянные возможности: {lost_count} ({lost_share*100:.1f}% целевых звонков)"
-        )
+        _add_block("Потерянные обращения", "Целевые звонки без записи", status=status, icon="💸")
 
-    churn_high = churn.get("high", 0)
-    if churn_high:
-        lines.append(f"📉 Риск оттока: {churn_high} клиента(ов) требуют контроля удержания.")
+    # Риск ухода клиентов
+    churn_counts = {k: int(v or 0) for k, v in churn.items()}
+    churn_total = sum(churn_counts.values())
+    churn_high = churn_counts.get("high", 0) + churn_counts.get("critical", 0)
+    if churn_total == 0:
+        _add_block("Риск ухода клиентов", "Клиенты с признаками оттока", icon="📉", fallback="данных недостаточно")
+    else:
+        if churn_high > 0:
+            status = "red"
+        elif churn_counts.get("medium", 0) > 0:
+            status = "yellow"
+        else:
+            status = "green"
+        _add_block("Риск ухода клиентов", "Клиенты с признаками оттока", status=status, icon="📉")
 
-    if not lines:
-        return "Нет сигналов выше порогов; держите текущий ритм контроля.\n"
-    return "\n".join(lines) + "\n"
+    return "\n\n".join(blocks) + "\n"
 
 
 def _build_action_lists_description(
     complaint_count: int,
     followup_count: int,
+    followup_total: int,
     lost_count: int,
+    lost_total: int,
     churn_high: int,
+    churn_total: int,
 ) -> str:
     lines = [
-        f"1. ⚠️ Риск жалобы ({complaint_count})",
-        f"2. 📞 Перезвон ({followup_count}) — SLA 24 часа на дозвон.",
-        f"3. 💸 Потери ({lost_count}) — привести причину отказа и вернуть в работу.",
-        f"4. 📉 Риск оттока ({churn_high})",
+        f"1. ⚠️ Возможные жалобы ({complaint_count})",
+        f"2. 📞 Нужно перезвонить: факт {followup_total}, к обработке {followup_count}.",
+        f"3. 💸 Потерянные обращения: факт {lost_total}, к обработке {lost_count}.",
+        f"4. 📉 Риск ухода: факт {churn_total}, к обработке {churn_high}.",
         "⬅️ Назад | 🔄 Обновить",
     ]
     return "\n".join(lines) + "\n"
@@ -751,16 +820,17 @@ def _build_coverage_text(coverage: Optional[Dict[str, Any]]) -> str:
 def _build_data_quality_section(summary: Dict[str, Any], compact_line: str) -> str:
     coverage = summary.get("coverage") or {}
     if not coverage:
-        return "Нет данных о заполненности.\n"
+        return "<b>⚠️ Нет данных о заполненности — аналитика ограничена.</b>\n"
 
-    lines = [compact_line]
+    warning_lines: List[str] = []
+    info_lines: List[str] = [compact_line]
     refusal = (coverage.get("refusal") or {}).get("percent") or 0.0
     operator = (coverage.get("operator") or {}).get("percent") or 0.0
 
     if refusal < 60:
-        lines.append(f"Причина отказа заполнена на {refusal:.0f}% — анализ потерь ограничен.")
+        warning_lines.append(f"Причина отказа заполнена на {refusal:.0f}% — анализ потерь ограничен.")
     if operator < 80:
-        lines.append(f"Данные по операторам заполнены на {operator:.0f}% — сложнее вести разборы качества.")
+        warning_lines.append(f"Данные по операторам заполнены на {operator:.0f}% — сложнее вести разборы качества.")
 
     bookings = summary.get("bookings") or []
     if bookings:
@@ -770,11 +840,19 @@ def _build_data_quality_section(summary: Dict[str, Any], compact_line: str) -> s
             cnt = row.get("cnt") or 0
             top_strings.append(f"{cat}: {cnt}")
         if top_strings:
-            lines.append("Записи по каналам за период: " + ", ".join(top_strings))
+            info_lines.append("Записи по каналам за период: " + ", ".join(top_strings))
 
-    if len(lines) == 1:
-        lines.append("Заполнение ключевых полей достаточное — можно смотреть драйверы.")
-    return "\n".join(lines) + "\n"
+    if warning_lines:
+        return (
+            "<b>⚠️ ВНИМАНИЕ: данные ограничены</b>\n"
+            + "\n".join(warning_lines)
+            + ("\n" + "\n".join(info_lines) if info_lines else "")
+            + "\n"
+        )
+
+    if len(info_lines) == 1:
+        info_lines.append("Заполнение ключевых полей достаточное — можно смотреть драйверы.")
+    return "\n".join(info_lines) + "\n"
 
 
 def _build_loss_breakdown_section(summary: Dict[str, Any]) -> str:
@@ -953,12 +1031,14 @@ def _describe_action_item(action_type: str, item: Dict[str, Any]) -> Tuple[str, 
     found_reasons: List[str] = []
 
     meta_payload = item.get('value_json')
+    meta_dict: Optional[Dict[str, Any]] = None
     if isinstance(meta_payload, str):
         try:
             meta_payload = json.loads(meta_payload)
         except (json.JSONDecodeError, TypeError):
             meta_payload = None
     if isinstance(meta_payload, dict):
+        meta_dict = meta_payload
         meta_reasons = meta_payload.get('reasons') or []
         if meta_reasons:
             found_reasons.extend(meta_reasons[:2])
@@ -991,6 +1071,23 @@ def _describe_action_item(action_type: str, item: Dict[str, Any]) -> Tuple[str, 
         except Exception:
             continue
                 
+    if action_type == "followup":
+        source_bits: List[str] = []
+        reason_codes = set((meta_dict or {}).get("reason_codes") or [])
+        if "OPERATOR_WILL_CLARIFY" in reason_codes:
+            source_bits.append("оператор обещал уточнить")
+        refusal_group = item.get("refusal_group")
+        if refusal_group:
+            source_bits.append(f"группа отказа: {refusal_group}")
+        result_text = str(item.get("result") or "").strip()
+        if result_text:
+            snippet = result_text[:120]
+            if len(result_text) > 120:
+                snippet = snippet.rstrip() + "…"
+            source_bits.append(f"result: {snippet}")
+        if source_bits:
+            found_reasons.append("Источник: " + " | ".join(source_bits))
+
     reasons = "; ".join(found_reasons) if found_reasons else "другие критерии"
     
     mapping = {
@@ -1002,6 +1099,12 @@ def _describe_action_item(action_type: str, item: Dict[str, Any]) -> Tuple[str, 
     
     conf_key = mapping.get(action_type)
     action_text = METRIC_CONFIG.get(conf_key, {}).get("action_text", "Разобрать кейс.")
+    if action_type == "followup":
+        sla_hours = None
+        if meta_dict:
+            sla_hours = meta_dict.get("sla_hours")
+        sla_value = int(sla_hours) if isinstance(sla_hours, (int, float)) else 24
+        action_text = f"{action_text} (SLA ≤ {sla_value} ч.)"
     
     return reasons, action_text
 

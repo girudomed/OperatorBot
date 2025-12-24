@@ -208,6 +208,19 @@ COMPLAINT_EXPECTATION_KEYWORDS = [
     "информация расходится",
 ]
 
+TECHNICAL_CALL_KEYWORDS = [
+    "сбой",
+    "техническ",
+    "не слыш",
+    "оборвал",
+    "связь пропала",
+    "пропал звук",
+    "плохо слыш",
+    "отвал",
+    "трубка молчит",
+    "гудки слышны",
+]
+
 COMPLAINT_PASSIVE_PHRASES = [
     "ладно, понятно",
     "ясно, спасибо",
@@ -475,6 +488,38 @@ class LMService:
         # Падение на одной строке — пробуем разбить по фразам.
         sentences = [seg.strip() for seg in re.split(r"[.!?]", transcript) if seg.strip()]
         return len(sentences)
+
+    def _is_service_not_provided(self, call_score: Optional[CallRecord], transcript: str) -> bool:
+        """Определяет, что клиенту отказали из-за отсутствия услуги."""
+        if not call_score:
+            return False
+        refusal_code = str(call_score.get("refusal_category_code") or "").strip().upper()
+        if refusal_code == "SERVICE_NOT_PROVIDED":
+            return True
+        refusal_reason = str(call_score.get("refusal_reason") or "").strip()
+        ai_result = str(call_score.get("result") or "").strip()
+        reason_text = " ".join(part for part in (refusal_reason, ai_result) if part)
+        normalized = self._classify_followup_reason("", reason_text or None, transcript=transcript)
+        return normalized == "SERVICE_NOT_PROVIDED"
+
+    def _is_technical_call(
+        self,
+        call_history: Optional[CallHistoryRecord],
+        call_score: Optional[CallRecord],
+        transcript_lower: str,
+    ) -> bool:
+        """Определяет, что звонок относится к техническим сбоям."""
+        def _normalize(value: Optional[str]) -> str:
+            return str(value or "").lower()
+
+        call_type = _normalize(call_history.get("call_type") if call_history else None)
+        category = _normalize(call_score.get("call_category") if call_score else None)
+        if "сбой" in call_type or "сбой" in category or "техн" in call_type:
+            return True
+        if transcript_lower:
+            if any(keyword in transcript_lower for keyword in TECHNICAL_CALL_KEYWORDS):
+                return True
+        return False
 
     def _complaint_gate_reason(
         self,
@@ -873,7 +918,7 @@ class LMService:
         refusal_reason: Optional[str],
         transcript: Optional[str] = None,
     ) -> Optional[str]:
-        """Возвращает нормализованный код причины отказа для follow-up."""
+        """Возвращает нормализованный код причины отказа для флага «Нужно перезвонить»."""
         code = (refusal_code or "").strip().upper()
         if code:
             return code
@@ -1035,7 +1080,7 @@ class LMService:
         call_score: Optional[CallRecord]
     ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """
-        Определяет, нужен ли follow-up, и возвращает детализированный контекст.
+        Определяет, нужно ли перезванивать, и возвращает детализированный контекст.
         """
         if not call_score:
             return False, None
@@ -1166,6 +1211,15 @@ class LMService:
         transcript_lower = transcript.lower()
         talk_duration = self._get_float(call_history, "talk_duration", 0.0) if call_history else self._get_float(call_score, "talk_duration", 0.0)
         replica_count = self._count_transcript_replicas(transcript)
+        service_not_provided_flag = self._is_service_not_provided(call_score, transcript)
+        technical_call_flag = self._is_technical_call(call_history, call_score, transcript_lower)
+
+        def _attach_flags(context: Dict[str, Any]) -> Dict[str, Any]:
+            if service_not_provided_flag:
+                context["service_not_provided_flag"] = True
+            if technical_call_flag:
+                context["technical_call_flag"] = True
+            return context
 
         gate_result = self._complaint_gate_reason(
             call_history,
@@ -1177,7 +1231,23 @@ class LMService:
         )
         if gate_result:
             code, message = gate_result
-            return 0.0, False, {"reasons": [message], "gate": True, "gate_code": code}
+            return 0.0, False, _attach_flags({"reasons": [message], "gate": True, "gate_code": code})
+
+        if technical_call_flag:
+            return 0.0, False, _attach_flags(
+                {
+                    "reasons": ["Технический сбой/качество связи — не считаем жалобой."],
+                    "technical_filter": True,
+                }
+            )
+
+        if service_not_provided_flag:
+            return 0.0, False, _attach_flags(
+                {
+                    "reasons": ["Услуга отсутствует/не предоставляется — конфликт не фиксируем."],
+                    "service_filter": True,
+                }
+            )
 
         reasons: List[str] = []
         rule_hits: List[str] = []
@@ -1231,6 +1301,18 @@ class LMService:
         if anti_phrase and "complaint_phrase" not in core_hits and "expectation_violation" not in core_hits:
             return 0.0, False, {"reasons": [f"Диалог завершён нейтрально («{anti_phrase}») — жалобы нет."], "core_signals": signals}
 
+        has_negative = signals.get("negative_emotion", {}).get("hit")
+        has_responsibility = signals.get("complaint_phrase", {}).get("hit") or signals.get("expectation_violation", {}).get("hit")
+        if not has_negative or not has_responsibility:
+            return 0.0, False, _attach_flags(
+                {
+                    "reasons": [
+                        "Жалоба не подтверждена: нет сочетания эмоционального негатива и претензии к клинике/оператору."
+                    ],
+                    "core_signals": signals,
+                }
+            )
+
         signal_weights = {
             "complaint_phrase": 70,
             "negative_emotion": 30,
@@ -1279,7 +1361,7 @@ class LMService:
         }
         if result_excerpt:
             context["result_excerpt"] = result_excerpt[:500]
-        return score, True, context
+        return score, True, _attach_flags(context)
 
     async def _persist_dictionary_hits(
         self,
@@ -1409,9 +1491,11 @@ class LMService:
         followup_payload = None
         if flw_flag:
             followup_payload = dict(flw_context or {})
-            followup_payload.setdefault('reason', (flw_context or {}).get('reason', "Требуется follow-up"))
+            followup_payload.setdefault('reason', (flw_context or {}).get('reason', "Нужно перезвонить"))
             followup_payload.setdefault('sla_hours', 24)
-        return [
+        technical_flag = bool((compl_meta or {}).get("technical_call_flag"))
+        service_flag = bool((compl_meta or {}).get("service_not_provided_flag"))
+        risk_metrics = [
             {'metric_code': 'churn_risk_level', 'metric_group': 'risk', 'value_label': churn_lbl.upper(), 'value_numeric': churn_val},
             {
                 'metric_code': 'complaint_risk_flag',
@@ -1428,6 +1512,23 @@ class LMService:
                 'value_json': followup_payload,
             }
         ]
+        risk_metrics.append(
+            {
+                'metric_code': 'technical_call_flag',
+                'metric_group': 'risk',
+                'value_label': 'true' if technical_flag else 'false',
+                'value_numeric': 1.0 if technical_flag else 0.0,
+            }
+        )
+        risk_metrics.append(
+            {
+                'metric_code': 'service_not_provided_flag',
+                'metric_group': 'risk',
+                'value_label': 'true' if service_flag else 'false',
+                'value_numeric': 1.0 if service_flag else 0.0,
+            }
+        )
+        return risk_metrics
 
     def calculate_forecast_metrics(self, h_rec, s_rec, complaint_context: Optional[Tuple[float, bool, Dict[str, Any]]] = None):
         if complaint_context is None:

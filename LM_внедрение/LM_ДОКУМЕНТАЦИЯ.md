@@ -92,7 +92,7 @@ LM вычисляет метрики в 6 категориях:
 | **Операционные** | `operational` | 3 | Нагрузка, скорость, эффективность |
 | **Конверсионные** | `conversion` | 3 | Бизнес-метрики, конверсия, потери |
 | **Качество** | `quality` | 3 | Оценка работы операторов |
-| **Риски** | `risk` | 3 | Риск оттока, жалобы, follow-up |
+| **Риски** | `risk` | 3 | Риск оттока, жалобы, «Нужно перезвонить» |
 | **Прогнозы** | `forecast` | 3 | Вероятности будущих событий |
 | **Вспомогательные** | `aux` | 2+ | Метаданные LM |
 
@@ -132,7 +132,7 @@ LM вычисляет метрики в 6 категориях:
 |:-----------:|----------------|--------------------|-------------|
 | `churn_risk_level` | `_calculate_churn_risk`<br>`call_category`, `outcome`, `refusal_reason` → score+label | LM Service<br>Retention squad обрабатывает high-risk | Telegram алерт «Риск оттока»<br>CRM лейбл `LM_churn_high` |
 | `complaint_risk_flag` | `_calculate_complaint_risk`<br>`call_category` + `call_score` → флаг/скор | LM Service<br>Служба качества | Бот жалоб<br>Ежедневный отчёт «Complaint watch» |
-| `followup_needed_flag` | `_calculate_followup_needed`<br>`outcome` + лидовые категории | LM Service<br>Отдел обзвона | Task-бот follow-up<br>Вкладка «Задачи» |
+| `followup_needed_flag` | `_calculate_followup_needed`<br>`outcome` + лидовые категории | LM Service<br>Отдел обзвона | Task-бот «Нужно перезвонить»<br>Вкладка «Задачи» |
 
 ### Forecast
 

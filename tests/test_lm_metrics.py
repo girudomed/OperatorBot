@@ -263,7 +263,7 @@ class TestLMMetricsCalculations(unittest.TestCase):
         self.assertIn("Нет признаков", " ".join(context.get("reasons", [])))
     
     def test_followup_needed_lead(self):
-        """Тест: лид без записи требует фоллоу-ап."""
+        """Тест: лид без записи требует пометки «Нужно перезвонить»."""
         lead_call = self.test_call_score.copy()
         lead_call['outcome'] = 'lead_no_record'
         
@@ -273,7 +273,7 @@ class TestLMMetricsCalculations(unittest.TestCase):
         self.assertIn("reason", context)
     
     def test_followup_not_needed_booked(self):
-        """Тест: запись не требует фоллоу-ап."""
+        """Тест: запись не требует пометки «Нужно перезвонить»."""
         flag, context = self.lm_service._calculate_followup_needed(
             self.test_call_history,
             self.test_call_score
@@ -282,7 +282,7 @@ class TestLMMetricsCalculations(unittest.TestCase):
         self.assertIsNone(context)
     
     def test_followup_reason_refusal_code(self):
-        """Тест: код отказа из списка => follow-up c причиной."""
+        """Тест: код отказа из списка → «Нужно перезвонить» с причиной."""
         call = self.test_call_score.copy()
         call['refusal_category_code'] = 'PATIENT_WILL_CLARIFY'
         call['refusal_reason'] = 'Пациент уточнит и подумает'

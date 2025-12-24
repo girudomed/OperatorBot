@@ -62,7 +62,6 @@ class CallRecord(TypedDict, total=False):
 class CallHistoryRecord(TypedDict, total=False):
     """Запись из таблицы call_history."""
     id: int
-    call_date: datetime
     talk_duration: Optional[int]
     call_type: Optional[str]
     called_info: Optional[str]
@@ -273,7 +272,7 @@ class LMQualityMetric(TypedDict):
 
 
 class LMRiskMetric(TypedDict, total=False):
-    """Метрика риска LM (отток, жалобы, фоллоу-ап)."""
+    """Метрика риска LM (отток, жалобы, «Нужно перезвонить»)."""
     metric_code: str  # churn_risk_level, complaint_risk_flag, followup_needed_flag
     metric_group: str  # 'risk'
     value_numeric: float  # 0-100 для churn_risk, 0-100 для complaint, 0/1 для followup

@@ -39,7 +39,7 @@ ADMIN_CALLBACKS = {
     "admin:lm:risk": "Метрики рисков",
     "admin:lm:forecast": "Прогнозные метрики",
     "admin:lm:summary": "Сводка метрик",
-    "admin:lm:followup_list": "Список звонков для фоллоу-апа",
+    "admin:lm:followup_list": "Список звонков «Нужно перезвонить»",
 }
 
 # Проверка что все handlers зарегистрированы

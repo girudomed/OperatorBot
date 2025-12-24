@@ -185,14 +185,16 @@ class TestLMService:
         """Test risk metrics calculation."""
         metrics = lm_service.calculate_risk_metrics(sample_call_history, sample_call_score)
         
-        # Should return 3 risk metrics
-        assert len(metrics) == 3
+        # Should return 5 risk metrics (complaints + доп. флаги)
+        assert len(metrics) == 5
         assert all(m['metric_group'] == 'risk' for m in metrics)
         
         metric_codes = [m['metric_code'] for m in metrics]
         assert 'churn_risk_level' in metric_codes
         assert 'complaint_risk_flag' in metric_codes
         assert 'followup_needed_flag' in metric_codes
+        assert 'technical_call_flag' in metric_codes
+        assert 'service_not_provided_flag' in metric_codes
 
     def test_churn_risk_complaint(self, lm_service):
         """Test churn risk for complaint."""
@@ -220,6 +222,7 @@ class TestLMService:
         assert flag is False
         assert context.get('gate') is True
         assert 'SERVICE_NOT_PROVIDED' in str(context.get('reasons'))
+        assert context.get('service_not_provided_flag') is True
 
     def test_complaint_gate_service_not_provided_transcript(self, lm_service, sample_call_history):
         """Фраза в разговоре про отсутствие услуги должна снимать жалобу."""
@@ -232,6 +235,44 @@ class TestLMService:
         assert flag is False
         assert context.get('gate') is True
         assert 'услуга отсутствует' in " ".join(context.get('reasons', []))
+        assert context.get('service_not_provided_flag') is True
+
+    def test_complaint_service_not_provided_flag_sets_metric(self, lm_service, sample_call_history):
+        """Флаг service_not_provided должен передаваться в risk-метрики."""
+        call_score = {
+            'call_category': 'Лид (без записи)',
+            'outcome': 'lead_no_record',
+            'transcript': 'Устанавливаете холтер? К сожалению, услуга не предоставляется.',
+        }
+        complaint_context = lm_service._calculate_complaint_risk(sample_call_history, call_score)
+        metrics = lm_service.calculate_risk_metrics(sample_call_history, call_score, complaint_context)
+        service_metric = next(m for m in metrics if m['metric_code'] == 'service_not_provided_flag')
+        assert service_metric['value_numeric'] == 1.0
+        assert complaint_context[2].get('service_not_provided_flag') is True
+
+    def test_complaint_technical_call_flag(self, lm_service, sample_call_history):
+        """Технические сбои не должны повышать complaint_score."""
+        call_score = {
+            'call_category': 'Лид (без записи)',
+            'outcome': 'lead_no_record',
+            'transcript': 'Алло? Плохо слышно, связь пропала, перезвоню позже.',
+        }
+        score, flag, context = lm_service._calculate_complaint_risk(sample_call_history, call_score)
+        assert score == 0.0
+        assert flag is False
+        assert context.get('technical_call_flag') is True
+
+    def test_complaint_technical_flag_metric(self, lm_service, sample_call_history):
+        """Risk-метрики должны включать technical_call_flag."""
+        call_score = {
+            'call_category': 'Лид (без записи)',
+            'outcome': 'lead_no_record',
+            'transcript': 'Связь пропала, ничего не слышно.',
+        }
+        complaint_context = lm_service._calculate_complaint_risk(sample_call_history, call_score)
+        metrics = lm_service.calculate_risk_metrics(sample_call_history, call_score, complaint_context)
+        tech_metric = next(m for m in metrics if m['metric_code'] == 'technical_call_flag')
+        assert tech_metric['value_numeric'] == 1.0
 
     def test_complaint_core_signal_required(self, lm_service, sample_call_history):
         """Без претензионных фраз жалоба не ставится."""
@@ -244,12 +285,29 @@ class TestLMService:
         assert flag is False
         assert "Нет признаков" in " ".join(context.get('reasons', []))
 
+    def test_complaint_requires_negative_and_responsibility(self, lm_service, sample_call_history):
+        """Жалоба требует негатив + претензию."""
+        # expectation only
+        call_score = {
+            'call_category': 'Лид (без записи)',
+            'outcome': 'lead_no_record',
+            'transcript': 'Вы обещали записать меня сегодня? Запись сорвалась.',
+        }
+        score, flag, context = lm_service._calculate_complaint_risk(sample_call_history, call_score)
+        assert flag is False
+        assert "Жалоба не подтверждена" in " ".join(context.get('reasons', []))
+        # negative only
+        call_score['transcript'] = 'Что за сервис? Ужасно разговариваете.'
+        score, flag, context = lm_service._calculate_complaint_risk(sample_call_history, call_score)
+        assert flag is False
+        assert "Жалоба не подтверждена" in " ".join(context.get('reasons', []))
+
     def test_complaint_threat_phrase(self, lm_service, sample_call_history):
         """Явная угроза должна включать жалобу."""
         call_score = {
             'call_category': 'Лид (без записи)',
             'outcome': 'lead_no_record',
-            'transcript': 'Вы обязаны сделать как обещали. Я буду жаловаться руководству.',
+            'transcript': 'Вы обязаны сделать как обещали. Это ужас, буду жаловаться руководству.',
             'utm_source_by_number': 'ПроДокторов'
         }
         score, flag, context = lm_service._calculate_complaint_risk(sample_call_history, call_score)
@@ -259,7 +317,7 @@ class TestLMService:
         assert any("жал" in reason.lower() for reason in context.get('reasons', []))
 
     def test_followup_needed_lead(self, lm_service, sample_call_history):
-        """Test follow-up flag for lead without booking."""
+        """Флаг «Нужно перезвонить» обязателен для лида без записи."""
         call_score = {'outcome': 'lead_no_record', 'call_category': 'Лид (без записи)'}
         needed, context = lm_service._calculate_followup_needed(sample_call_history, call_score)
         assert needed is True
@@ -267,14 +325,14 @@ class TestLMService:
         assert "reason" in context
 
     def test_followup_not_needed_booking(self, lm_service, sample_call_history):
-        """Test follow-up flag for successful booking."""
+        """Флаг «Нужно перезвонить» не ставится при успешной записи."""
         call_score = {'outcome': 'record', 'call_category': 'Запись на услугу (успешная)'}
         needed, context = lm_service._calculate_followup_needed(sample_call_history, call_score)
         assert needed is False
         assert context is None
 
     def test_followup_service_not_provided_ai_reason(self, lm_service, sample_call_history):
-        """AI-анализ с причиной 'услуга не предоставляется' должен снимать follow-up."""
+        """AI-анализ с причиной 'услуга не предоставляется' снимает «Нужно перезвонить»."""
         call_score = {
             'outcome': 'lead_no_record',
             'call_category': 'Лид (без записи)',
@@ -286,7 +344,7 @@ class TestLMService:
         assert context is None
 
     def test_followup_service_not_provided_transcript(self, lm_service, sample_call_history):
-        """Фраза в транскрипте про отсутствие услуги снимает follow-up."""
+        """Фраза в транскрипте про отсутствие услуги снимает «Нужно перезвонить»."""
         call_score = {
             'outcome': 'lead_no_record',
             'call_category': 'Лид (без записи)',
@@ -298,7 +356,7 @@ class TestLMService:
         assert context is None
 
     def test_followup_cancelled_patient_not_needed(self, lm_service, sample_call_history):
-        """Отмена пациентом с отсутствующей услугой не должна попадать в follow-up."""
+        """Отмена пациентом с отсутствующей услугой не должна помечаться «Нужно перезвонить»."""
         call_score = {
             'outcome': 'cancelled_by_patient ',
             'call_category': 'Отмена записи',
