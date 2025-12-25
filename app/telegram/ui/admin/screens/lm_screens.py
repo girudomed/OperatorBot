@@ -360,8 +360,6 @@ def render_lm_action_list_screen(
         if pruned:
             remaining = len(entry_chunks) - added
             text = text.rstrip() + f"\n…и ещё {remaining} записей, откройте следующую страницу."
-    else:
-        text = text_header
 
     keyboard = []
     # Элементы списка как кнопки для перехода
