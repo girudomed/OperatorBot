@@ -317,15 +317,17 @@ def render_lm_action_list_screen(
         "lost": "Целевые обращения без записи — нужно вернуть в воронку.",
     }
 
-    text = f"<b>{title}</b>\n"
+    text_header = f"<b>{title}</b>\n"
     rule_text = rules.get(action_type)
     if rule_text:
-        text += f"{rule_text}\n"
+        text_header += f"{rule_text}\n"
 
     if not items:
-        text += "\n<i>Список пуст. Хорошая работа!</i>"
+        text_header += "\n<i>Список пуст. Хорошая работа!</i>"
+        text = text_header
     else:
-        text += f"Всего элементов: {total}\n\n"
+        text_header += f"Всего элементов: {total}\n\n"
+        entry_chunks: List[str] = []
         for i, item in enumerate(items, 1):
             h_id = item.get('history_id')
             created = item.get('call_date') or item.get('created_at')
@@ -339,12 +341,27 @@ def render_lm_action_list_screen(
             
             reasons = _shorten_text(reasons, 320)
             next_step = _shorten_text(next_step, 220)
-            text += (
+            entry_chunks.append(
                 f"#{h_id} | {date_str} | {operator} | {source}\n"
                 f"Исход: {outcome} | Скор: {call_score}\n"
                 f"Причина: {reasons}\n"
                 f"Действие: {next_step}\n\n"
             )
+        MAX_TEXT = 3500
+        text = text_header
+        pruned = False
+        added = 0
+        for chunk in entry_chunks:
+            if len(text) + len(chunk) > MAX_TEXT:
+                pruned = True
+                break
+            text += chunk
+            added += 1
+        if pruned:
+            remaining = len(entry_chunks) - added
+            text = text.rstrip() + f"\n…и ещё {remaining} записей, откройте следующую страницу."
+    else:
+        text = text_header
 
     keyboard = []
     # Элементы списка как кнопки для перехода
