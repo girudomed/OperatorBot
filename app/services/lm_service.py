@@ -295,6 +295,18 @@ LOST_SPAM_CATEGORIES = {
     "робот",
 }
 
+LOSS_TARGET_PROBLEM_OUTCOMES = {
+    "no_interest",
+    "refusal",
+    "refused",
+    "cancel",
+    "cancelled",
+    "cancelled_by_patient",
+    "cancelled_by_operator",
+    "lost",
+    "not_converted",
+}
+
 LOSS_REASON_CODE_MAP = {
     "PRICE": "Цена / дорого",
     "EXPENSIVE": "Цена / дорого",
@@ -958,16 +970,24 @@ class LMService:
 
         reasons = []
         score = 0.0
+        manual_reason_required = False
 
-        if is_target == 1 and outcome == 'lead_no_record':
-            reasons.append("Целевой лид без записи (outcome=lead_no_record)")
-            score += 60.0
+        if is_target == 1 and outcome == 'record':
+            return 0.0, {}
 
-        if score == 0.0:
+        if is_target == 1 and outcome != 'record':
+            if outcome == 'lead_no_record':
+                reasons.append("Целевой лид без записи (outcome=lead_no_record)")
+                score += 60.0
+                manual_reason_required = True
+            else:
+                reasons.append(f"Целевой лид потерян (outcome={outcome_raw or '—'})")
+                score += 70.0
+        else:
             return 0.0, {}
 
         snippets: List[str] = []
-        if talk_duration >= 30:
+        if score > 0.0 and talk_duration >= 30:
             reasons.append(f"Предметный разговор ({talk_duration:.0f} сек)")
             score += 10.0
         if call_score_value <= 4.0:
@@ -976,7 +996,7 @@ class LMService:
         
         if refusal_code:
             reasons.append(f"Код отказа: {refusal_code}")
-        elif not refusal_reason and not ai_result:
+        elif manual_reason_required and not refusal_reason and not ai_result:
             reasons.append("Причина отказа не заполнена оператором")
             score += 10.0
 
@@ -1301,8 +1321,16 @@ class LMService:
         if anti_phrase and "complaint_phrase" not in core_hits and "expectation_violation" not in core_hits:
             return 0.0, False, {"reasons": [f"Диалог завершён нейтрально («{anti_phrase}») — жалобы нет."], "core_signals": signals}
 
+        complaint_signal = signals.get("complaint_phrase") or {}
+        negative_signal = signals.get("negative_emotion") or {}
+        if complaint_signal.get("hit") and not negative_signal.get("hit"):
+            negative_signal.setdefault("reason", "Прямая претензия автоматически фиксирует негатив.")
+            if complaint_signal.get("snippet") and "snippet" not in negative_signal:
+                negative_signal["snippet"] = complaint_signal.get("snippet")
+            negative_signal["hit"] = True
+            signals["negative_emotion"] = negative_signal
         has_negative = signals.get("negative_emotion", {}).get("hit")
-        has_responsibility = signals.get("complaint_phrase", {}).get("hit") or signals.get("expectation_violation", {}).get("hit")
+        has_responsibility = complaint_signal.get("hit") or signals.get("expectation_violation", {}).get("hit")
         if not has_negative or not has_responsibility:
             return 0.0, False, _attach_flags(
                 {
