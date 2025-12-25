@@ -337,6 +337,8 @@ def render_lm_action_list_screen(
             
             reasons, next_step = _describe_action_item(action_type, item)
             
+            reasons = _shorten_text(reasons, 320)
+            next_step = _shorten_text(next_step, 220)
             text += (
                 f"#{h_id} | {date_str} | {operator} | {source}\n"
                 f"Исход: {outcome} | Скор: {call_score}\n"
@@ -1107,6 +1109,17 @@ def _describe_action_item(action_type: str, item: Dict[str, Any]) -> Tuple[str, 
         action_text = f"{action_text} (SLA ≤ {sla_value} ч.)"
     
     return reasons, action_text
+
+
+def _shorten_text(value: Optional[str], limit: int = 220) -> str:
+    """Обрезает текст до указанной длины для списков LM."""
+    if not value:
+        return "—"
+    text = str(value).strip()
+    if len(text) <= limit:
+        return text
+    trimmed = text[: limit - 1].rstrip()
+    return trimmed + "…"
 
 
 def _extract_operator_name(raw: Optional[str]) -> Optional[str]:
