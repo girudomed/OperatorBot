@@ -295,18 +295,6 @@ LOST_SPAM_CATEGORIES = {
     "робот",
 }
 
-LOSS_TARGET_PROBLEM_OUTCOMES = {
-    "no_interest",
-    "refusal",
-    "refused",
-    "cancel",
-    "cancelled",
-    "cancelled_by_patient",
-    "cancelled_by_operator",
-    "lost",
-    "not_converted",
-}
-
 LOSS_REASON_CODE_MAP = {
     "PRICE": "Цена / дорого",
     "EXPENSIVE": "Цена / дорого",
@@ -968,21 +956,23 @@ class LMService:
         refusal_code = str(call_score.get('refusal_category_code') or '').strip()
         ai_result = str(call_score.get('result') or '').strip()
 
-        reasons = []
+        LOSS_CRITICAL_OUTCOMES = {"no_interest", "refusal", "refused", "lost", "not_converted"}
+        LOSS_IGNORED_OUTCOMES = {"cancel", "cancelled", "cancelled_by_patient", "cancelled_by_operator", "info_only"}
+
+        reasons: List[str] = []
         score = 0.0
         manual_reason_required = False
 
-        if is_target == 1 and outcome == 'record':
+        if is_target != 1 or outcome == 'record' or outcome in LOSS_IGNORED_OUTCOMES:
             return 0.0, {}
 
-        if is_target == 1 and outcome != 'record':
-            if outcome == 'lead_no_record':
-                reasons.append("Целевой лид без записи (outcome=lead_no_record)")
-                score += 60.0
-                manual_reason_required = True
-            else:
-                reasons.append(f"Целевой лид потерян (outcome={outcome_raw or '—'})")
-                score += 70.0
+        if outcome == 'lead_no_record':
+            reasons.append("Целевой лид без записи (outcome=lead_no_record)")
+            score += 60.0
+            manual_reason_required = True
+        elif outcome in LOSS_CRITICAL_OUTCOMES:
+            reasons.append(f"Целевой лид потерян (outcome={outcome_raw or '—'})")
+            score += 70.0
         else:
             return 0.0, {}
 
