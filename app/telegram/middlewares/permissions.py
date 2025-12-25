@@ -34,12 +34,25 @@ Role = str
 Status = Literal['pending', 'approved', 'blocked']
 
 # Настройка прав приложения по умолчанию (fallback, если не удалось загрузить из БД)
+SUPERADMIN_DEFAULT_PERMS: Set[str] = {
+    'call_lookup',
+    'weekly_quality',
+    'admin_panel',
+    'user_management',
+    'manage_roles',
+    'report',
+    'all_stats',
+    'debug',
+    'commands',
+}
+
 DEFAULT_APP_PERMISSIONS: Dict[str, Set[str]] = {
     'operator': {'call_lookup', 'weekly_quality', 'report'},
     'admin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'report', 'all_stats', 'commands'},
     'head_of_registry': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats', 'commands'},
     'marketing_director': {'call_lookup', 'weekly_quality', 'report', 'all_stats', 'commands'},
-    'superadmin': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats', 'debug', 'commands'},
+    'superadmin': set(SUPERADMIN_DEFAULT_PERMS),
+    'stadmin': set(SUPERADMIN_DEFAULT_PERMS),
     'developer': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats', 'debug', 'commands'},
     'founder': {'call_lookup', 'weekly_quality', 'admin_panel', 'user_management', 'manage_roles', 'report', 'all_stats', 'debug', 'commands'},
 }
@@ -111,11 +124,12 @@ DEFAULT_ROLE_MATRIX: Dict[int, Dict[str, Any]] = {
 }
 
 DEFAULT_TOP_PRIVILEGE_SLUGS = {'developer', 'founder'}
-DEFAULT_SUPERADMIN_SLUGS = {'superadmin'}
+DEFAULT_SUPERADMIN_SLUGS = {'superadmin', 'stadmin'}
 DEFAULT_EXCLUDE_SLUGS = {
     'developer',
     'founder',
     'superadmin',
+    'stadmin',
     'head_of_registry',
     'marketing_director',
 }

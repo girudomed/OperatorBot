@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from app.db.repositories.admin import AdminRepository
-from app.telegram.middlewares.permissions import PermissionsManager
+from app.telegram.middlewares.permissions import PermissionsManager, DEFAULT_APP_PERMISSIONS
 
 
 class TestPermissionsManager:
@@ -95,6 +95,25 @@ class TestPermissionsManager:
         
         can_promote = await permissions.can_promote(123, 'superadmin')
         assert can_promote is False
+
+    @pytest.mark.asyncio
+    async def test_can_promote_stadmin_behaves_like_super(self, permissions, mock_db):
+        """Старшие админы (stadmin) считаются супер-админами для прав."""
+        matrix = dict(permissions._role_matrix)
+        matrix[99] = {
+            "slug": "stadmin",
+            "display_name": "Senior Admin",
+            "can_view_own_stats": True,
+            "can_view_all_stats": True,
+            "can_manage_users": True,
+            "can_debug": True,
+            "app_permissions": set(DEFAULT_APP_PERMISSIONS["superadmin"]),
+        }
+        permissions._set_role_matrix(matrix)
+        mock_db.execute_with_retry.return_value = {'role_id': 99, 'status': 'approved'}
+
+        assert await permissions.can_promote(777, 'admin') is True
+        assert await permissions.can_promote(777, 'superadmin') is True
 
     @pytest.mark.asyncio
     async def test_can_access_admin_panel_for_admin(self, permissions, mock_db):
