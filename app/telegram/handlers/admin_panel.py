@@ -22,7 +22,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes,
     Application,
-    MessageHandler, 
+    MessageHandler as _MessageHandler,
     filters,
 )
 
@@ -68,6 +68,12 @@ from app.services.call_export import CallExportService, EXPORT_PERIOD_OPTIONS
 LM_PERIOD_OPTIONS = (7, 14, 30, 180)
 
 logger = get_watchdog_logger(__name__)
+
+
+def MessageHandler(*args, **kwargs):
+    """Совместимость: игнорируем group, если его ошибочно передали."""
+    kwargs.pop("group", None)
+    return _MessageHandler(*args, **kwargs)
 
 class AdminPanelHandler:
     """Основной хендлер админ-панели."""

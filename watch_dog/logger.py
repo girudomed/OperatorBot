@@ -49,6 +49,13 @@ def setup_watchdog():
     console_handler.addFilter(sensitive_filter)
     root_logger.addHandler(console_handler)
 
+    # 1.1 Error Console Handler (stderr)
+    error_console_handler = logging.StreamHandler(sys.stderr)
+    error_console_handler.setLevel(logging.ERROR)
+    error_console_handler.setFormatter(formatter)
+    error_console_handler.addFilter(sensitive_filter)
+    root_logger.addHandler(error_console_handler)
+
     # 2. File Handler (Main Log)
     main_log_path = os.path.join(log_dir, MAIN_LOG_FILE)
     file_handler = RotatingFileHandler(

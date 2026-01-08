@@ -536,6 +536,7 @@ async def main():
                     logger.warning("Updater stop skipped: %s", exc)
             if 'workers_started' in locals() and workers_started:
                 await stop_workers(application)
+        if getattr(application, "running", False):
             await application.stop()
             await application.shutdown()
 
