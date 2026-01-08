@@ -2,6 +2,8 @@
 import logging
 import os
 import sys
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from logging.handlers import RotatingFileHandler
 
 from .config import (
@@ -39,6 +41,7 @@ def setup_watchdog():
 
     # Форматтер
     formatter = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
+    formatter.converter = lambda *args: datetime.now(ZoneInfo("Europe/Moscow")).timetuple()
     
     # Фильтр чувствительных данных
     sensitive_filter = SensitiveDataFilter()
