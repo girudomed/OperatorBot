@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import html
 from collections import deque
+from datetime import datetime, timedelta
 import re
 from functools import partial
 from pathlib import Path
 from typing import Optional, Iterable, Deque
 from io import BytesIO
+from zoneinfo import ZoneInfo
 
 from telegram import Update
 from telegram.ext import (
@@ -56,6 +58,8 @@ class SystemMenuHandler:
     ALLOWED_ROLES = {"founder", "head_of_registry"}
     MAX_LOG_LINES = 40
     MAX_LOG_BYTES = 5 * 1024 * 1024
+    ERROR_LOOKBACK_DAYS = 10
+    TIMESTAMP_FMT = "%Y-%m-%d %H:%M:%S"
 
     def __init__(
         self,
@@ -250,6 +254,8 @@ class SystemMenuHandler:
                 continue
             try:
                 last_stamp = ""
+                cutoff = datetime.now(ZoneInfo("Europe/Moscow")) - timedelta(days=self.ERROR_LOOKBACK_DAYS)
+                cutoff_naive = cutoff.replace(tzinfo=None)
                 for line in self._read_log_lines(path):
                     normalized = line.rstrip()
                     if not normalized:
@@ -257,6 +263,8 @@ class SystemMenuHandler:
                     ts_match = self.TIMESTAMP_RE.match(normalized)
                     if ts_match:
                         last_stamp = ts_match.group(0)
+                        if not self._is_recent_timestamp(last_stamp, cutoff_naive):
+                            continue
                     lower = normalized.lower()
                     if level_re.search(normalized):
                         bucket.append(f"[{path.name}] {normalized}")
@@ -299,6 +307,13 @@ class SystemMenuHandler:
             except UnicodeDecodeError:
                 continue
         return data.decode("utf-8", errors="replace")
+
+    def _is_recent_timestamp(self, timestamp: str, cutoff: datetime) -> bool:
+        try:
+            dt = datetime.strptime(timestamp, self.TIMESTAMP_FMT)
+        except ValueError:
+            return True
+        return dt >= cutoff
 
     @log_async_exceptions
     async def handle_last_errors_command(
