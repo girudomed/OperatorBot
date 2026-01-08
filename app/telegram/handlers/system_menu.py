@@ -194,21 +194,49 @@ class SystemMenuHandler:
         log_text = None
         log_path = None
         candidates = [path for path in self.LOG_PATHS if path.exists()]
+        if not candidates:
+            return "📄 Логи недоступны (файлы не найдены)."
+
         candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        main_candidate = None
+        error_candidates = []
         for candidate in candidates:
+            name = candidate.name.lower()
+            if "error" in name:
+                error_candidates.append(candidate)
+            elif main_candidate is None:
+                main_candidate = candidate
+
+        parts = []
+        if main_candidate:
             try:
-                lines = self._read_log_lines(candidate)
+                lines = self._read_log_lines(main_candidate)
+                tail = (
+                    lines[-self.MAX_LOG_LINES :]
+                    if len(lines) > self.MAX_LOG_LINES
+                    else lines
+                )
+                parts.append(f"===== {main_candidate.name} =====")
+                parts.extend(tail)
+                log_path = main_candidate
             except Exception as exc:
-                logger.warning("Не удалось прочитать лог %s: %s", candidate, exc)
-                continue
-            log_path = candidate
-            tail = (
-                lines[-self.MAX_LOG_LINES :]
-                if len(lines) > self.MAX_LOG_LINES
-                else lines
-            )
-            log_text = "\n".join(tail)
-            break
+                logger.warning("Не удалось прочитать лог %s: %s", main_candidate, exc)
+
+        for err_path in error_candidates:
+            try:
+                lines = self._read_log_lines(err_path)
+                tail = (
+                    lines[-self.MAX_LOG_LINES :]
+                    if len(lines) > self.MAX_LOG_LINES
+                    else lines
+                )
+                parts.append(f"===== {err_path.name} =====")
+                parts.extend(tail)
+            except Exception as exc:
+                logger.warning("Не удалось прочитать лог %s: %s", err_path, exc)
+
+        if parts:
+            log_text = "\n".join(parts)
         if not log_text:
             return "📄 Логи недоступны (файлы не найдены)."
         await self._send_logs_file(query, log_text, log_path)
