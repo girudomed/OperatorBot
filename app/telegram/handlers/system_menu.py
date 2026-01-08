@@ -55,6 +55,7 @@ class SystemMenuHandler:
     TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
     ALLOWED_ROLES = {"founder", "head_of_registry"}
     MAX_LOG_LINES = 40
+    MAX_LOG_BYTES = 5 * 1024 * 1024
 
     def __init__(
         self,
@@ -191,7 +192,6 @@ class SystemMenuHandler:
         return "❌ <b>Последние ошибки</b>:\n" + "\n".join(errors)
 
     async def _send_logs(self, query) -> str:
-        log_text = None
         log_path = None
         candidates = [path for path in self.LOG_PATHS if path.exists()]
         if not candidates:
@@ -207,40 +207,27 @@ class SystemMenuHandler:
             elif main_candidate is None:
                 main_candidate = candidate
 
-        parts = []
+        sent_files = 0
         if main_candidate:
             try:
-                lines = self._read_log_lines(main_candidate)
-                tail = (
-                    lines[-self.MAX_LOG_LINES :]
-                    if len(lines) > self.MAX_LOG_LINES
-                    else lines
-                )
-                parts.append(f"===== {main_candidate.name} =====")
-                parts.extend(tail)
+                tail_text = self._read_log_tail_text(main_candidate, self.MAX_LOG_BYTES)
                 log_path = main_candidate
+                await self._send_logs_file(query, tail_text, log_path)
+                sent_files += 1
             except Exception as exc:
                 logger.warning("Не удалось прочитать лог %s: %s", main_candidate, exc)
 
         for err_path in error_candidates:
             try:
-                lines = self._read_log_lines(err_path)
-                tail = (
-                    lines[-self.MAX_LOG_LINES :]
-                    if len(lines) > self.MAX_LOG_LINES
-                    else lines
-                )
-                parts.append(f"===== {err_path.name} =====")
-                parts.extend(tail)
+                tail_text = self._read_log_tail_text(err_path, self.MAX_LOG_BYTES)
+                await self._send_logs_file(query, tail_text, err_path)
+                sent_files += 1
             except Exception as exc:
                 logger.warning("Не удалось прочитать лог %s: %s", err_path, exc)
 
-        if parts:
-            log_text = "\n".join(parts)
-        if not log_text:
+        if not sent_files:
             return "📄 Логи недоступны (файлы не найдены)."
-        await self._send_logs_file(query, log_text, log_path)
-        return "📄 Файл с логами отправлен отдельным сообщением."
+        return f"📄 Отправлено файлов логов: {sent_files}."
 
     def _grep_logs(
         self,
@@ -294,14 +281,22 @@ class SystemMenuHandler:
             caption=caption,
         )
     def _read_log_lines(self, path: Path) -> list[str]:
+        text = self._decode_log_bytes(path.read_bytes())
+        return text.splitlines()
+
+    def _read_log_tail_text(self, path: Path, max_bytes: int) -> str:
         data = path.read_bytes()
+        if len(data) > max_bytes:
+            data = data[-max_bytes:]
+        return self._decode_log_bytes(data)
+
+    def _decode_log_bytes(self, data: bytes) -> str:
         for encoding in ("utf-8", "cp1251", "latin-1"):
             try:
-                text = data.decode(encoding)
-                return text.splitlines()
+                return data.decode(encoding)
             except UnicodeDecodeError:
                 continue
-        return data.decode("utf-8", errors="replace").splitlines()
+        return data.decode("utf-8", errors="replace")
 
     @log_async_exceptions
     async def handle_last_errors_command(
