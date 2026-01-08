@@ -254,6 +254,7 @@ class SystemMenuHandler:
                 continue
             try:
                 last_stamp = ""
+                include_current = True
                 cutoff = datetime.now(ZoneInfo("Europe/Moscow")) - timedelta(days=self.ERROR_LOOKBACK_DAYS)
                 cutoff_naive = cutoff.replace(tzinfo=None)
                 for line in self._read_log_lines(path):
@@ -263,9 +264,12 @@ class SystemMenuHandler:
                     ts_match = self.TIMESTAMP_RE.match(normalized)
                     if ts_match:
                         last_stamp = ts_match.group(0)
-                        if not self._is_recent_timestamp(last_stamp, cutoff_naive):
+                        include_current = self._is_recent_timestamp(last_stamp, cutoff_naive)
+                        if not include_current:
                             continue
                     lower = normalized.lower()
+                    if not include_current:
+                        continue
                     if level_re.search(normalized):
                         bucket.append(f"[{path.name}] {normalized}")
                     elif include_tracebacks and tb_keyword in lower:
