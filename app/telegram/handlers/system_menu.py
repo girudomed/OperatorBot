@@ -242,8 +242,10 @@ class SystemMenuHandler:
         existing.sort(key=lambda path: path.stat().st_mtime, reverse=True)
         if not existing:
             return bucket
-        # Смотрим только самый свежий лог, чтобы не подтягивать старые ошибки.
-        for path in existing[:1]:
+        error_paths = [path for path in existing if "error" in path.name.lower()]
+        target_paths = error_paths or existing[:1]
+        # Если есть errors.log, смотрим его; иначе берём самый свежий лог.
+        for path in target_paths:
             if not path.exists():
                 continue
             try:
