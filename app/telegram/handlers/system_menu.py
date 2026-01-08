@@ -36,6 +36,7 @@ from app.telegram.utils.logging import describe_user
 from app.utils.error_handlers import log_async_exceptions
 from app.telegram.middlewares.permissions import PermissionsManager
 from app.telegram.keyboards.inline_system import build_system_menu
+from watch_dog.config import LOG_DIR, MAIN_LOG_FILE, ERROR_LOG_FILE
 
 logger = get_watchdog_logger(__name__)
 
@@ -44,10 +45,12 @@ class SystemMenuHandler:
     """Отвечает за вывод системного меню и обработку его действий."""
 
     LOG_PATHS = [
-        Path("logs/app.log"),
-        Path("logs/logs.log"),
+        Path(LOG_DIR) / MAIN_LOG_FILE,
+        Path(LOG_DIR) / ERROR_LOG_FILE,
         Path("logs/operabot.log"),
         Path("logs/errors.log"),
+        Path("logs/app.log"),
+        Path("logs/logs.log"),
     ]
     TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
     ALLOWED_ROLES = {"founder", "head_of_registry"}
