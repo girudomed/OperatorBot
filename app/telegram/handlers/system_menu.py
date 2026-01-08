@@ -225,7 +225,10 @@ class SystemMenuHandler:
         bucket: Deque[str] = deque(maxlen=limit)
         existing = [path for path in paths if path.exists()]
         existing.sort(key=lambda path: path.stat().st_mtime, reverse=True)
-        for path in existing:
+        if not existing:
+            return bucket
+        # Смотрим только самый свежий лог, чтобы не подтягивать старые ошибки.
+        for path in existing[:1]:
             if not path.exists():
                 continue
             try:
