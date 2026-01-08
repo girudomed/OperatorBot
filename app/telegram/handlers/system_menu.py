@@ -190,21 +190,22 @@ class SystemMenuHandler:
     async def _send_logs(self, query) -> str:
         log_text = None
         log_path = None
-        for candidate in self.LOG_PATHS:
-            if candidate.exists():
-                try:
-                    lines = candidate.read_text(encoding="utf-8", errors="ignore").splitlines()
-                except Exception as exc:
-                    logger.warning("Не удалось прочитать лог %s: %s", candidate, exc)
-                    continue
-                log_path = candidate
-                tail = (
-                    lines[-self.MAX_LOG_LINES :]
-                    if len(lines) > self.MAX_LOG_LINES
-                    else lines
-                )
-                log_text = "\n".join(tail)
-                break
+        candidates = [path for path in self.LOG_PATHS if path.exists()]
+        candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        for candidate in candidates:
+            try:
+                lines = self._read_log_lines(candidate)
+            except Exception as exc:
+                logger.warning("Не удалось прочитать лог %s: %s", candidate, exc)
+                continue
+            log_path = candidate
+            tail = (
+                lines[-self.MAX_LOG_LINES :]
+                if len(lines) > self.MAX_LOG_LINES
+                else lines
+            )
+            log_text = "\n".join(tail)
+            break
         if not log_text:
             return "📄 Логи недоступны (файлы не найдены)."
         await self._send_logs_file(query, log_text, log_path)
@@ -219,25 +220,26 @@ class SystemMenuHandler:
         patterns = ("error", "exception")
         tb_keyword = "traceback"
         bucket: Deque[str] = deque(maxlen=limit)
-        for path in paths:
+        existing = [path for path in paths if path.exists()]
+        existing.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        for path in existing:
             if not path.exists():
                 continue
             try:
                 last_stamp = ""
-                with path.open("r", encoding="utf-8", errors="ignore") as handler:
-                    for line in handler:
-                        normalized = line.rstrip()
-                        if not normalized:
-                            continue
-                        ts_match = self.TIMESTAMP_RE.match(normalized)
-                        if ts_match:
-                            last_stamp = ts_match.group(0)
-                        lower = normalized.lower()
-                        if any(pattern in lower for pattern in patterns):
-                            bucket.append(f"[{path.name}] {normalized}")
-                        elif include_tracebacks and tb_keyword in lower:
-                            prefix = f"{last_stamp} | " if last_stamp and not ts_match else ""
-                            bucket.append(f"[{path.name}] {prefix}{normalized}")
+                for line in self._read_log_lines(path):
+                    normalized = line.rstrip()
+                    if not normalized:
+                        continue
+                    ts_match = self.TIMESTAMP_RE.match(normalized)
+                    if ts_match:
+                        last_stamp = ts_match.group(0)
+                    lower = normalized.lower()
+                    if any(pattern in lower for pattern in patterns):
+                        bucket.append(f"[{path.name}] {normalized}")
+                    elif include_tracebacks and tb_keyword in lower:
+                        prefix = f"{last_stamp} | " if last_stamp and not ts_match else ""
+                        bucket.append(f"[{path.name}] {prefix}{normalized}")
             except Exception as exc:
                 logger.warning("Не удалось прочитать лог %s: %s", path, exc)
         return bucket
@@ -257,6 +259,15 @@ class SystemMenuHandler:
             filename=filename,
             caption=caption,
         )
+    def _read_log_lines(self, path: Path) -> list[str]:
+        data = path.read_bytes()
+        for encoding in ("utf-8", "cp1251", "latin-1"):
+            try:
+                text = data.decode(encoding)
+                return text.splitlines()
+            except UnicodeDecodeError:
+                continue
+        return data.decode("utf-8", errors="replace").splitlines()
 
     @log_async_exceptions
     async def handle_last_errors_command(
