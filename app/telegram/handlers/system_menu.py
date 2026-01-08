@@ -220,7 +220,7 @@ class SystemMenuHandler:
         limit: int,
         include_tracebacks: bool = True,
     ) -> Deque[str]:
-        patterns = ("error", "exception")
+        level_re = re.compile(r" - (ERROR|CRITICAL|EXCEPTION) - ", re.IGNORECASE)
         tb_keyword = "traceback"
         bucket: Deque[str] = deque(maxlen=limit)
         existing = [path for path in paths if path.exists()]
@@ -241,7 +241,7 @@ class SystemMenuHandler:
                     if ts_match:
                         last_stamp = ts_match.group(0)
                     lower = normalized.lower()
-                    if any(pattern in lower for pattern in patterns):
+                    if level_re.search(normalized):
                         bucket.append(f"[{path.name}] {normalized}")
                     elif include_tracebacks and tb_keyword in lower:
                         prefix = f"{last_stamp} | " if last_stamp and not ts_match else ""
