@@ -15,6 +15,7 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
 )
+from telegram.error import BadRequest
 from typing import List, Optional
 
 from telegram.ext import (
@@ -481,7 +482,10 @@ async def registration_guard_callback(update: Update, context: CallbackContext, 
             query.data,
             describe_user(user),
         )
-        await query.answer("Сначала зарегистрируйтесь через /start → /register.", show_alert=True)
+        try:
+            await query.answer("Сначала зарегистрируйтесь через /start → /register.", show_alert=True)
+        except BadRequest:
+            pass
         raise HandlerStop()
     if status == 'pending':
         logger.info(
@@ -489,7 +493,10 @@ async def registration_guard_callback(update: Update, context: CallbackContext, 
             query.data,
             describe_user(user),
         )
-        await query.answer("Ваша заявка ещё не одобрена.", show_alert=True)
+        try:
+            await query.answer("Ваша заявка ещё не одобрена.", show_alert=True)
+        except BadRequest:
+            pass
         raise HandlerStop()
     if status == 'blocked':
         logger.info(
@@ -497,7 +504,10 @@ async def registration_guard_callback(update: Update, context: CallbackContext, 
             query.data,
             describe_user(user),
         )
-        await query.answer("Доступ заблокирован. Свяжитесь с администратором.", show_alert=True)
+        try:
+            await query.answer("Доступ заблокирован. Свяжитесь с администратором.", show_alert=True)
+        except BadRequest:
+            pass
         raise HandlerStop()
 
     logger.debug(
@@ -545,14 +555,20 @@ async def help_bug_callback(
     user = update.effective_user
     if not query or not user:
         return
-    await query.answer()
+    try:
+        await query.answer()
+    except BadRequest:
+        pass
 
     status = await permissions.get_user_status(user.id)
     if status != "approved" and not (
         permissions.is_supreme_admin(user.id, user.username)
         or permissions.is_dev_admin(user.id, user.username)
     ):
-        await query.answer("Доступно только утверждённым пользователям.", show_alert=True)
+        try:
+            await query.answer("Доступно только утверждённым пользователям.", show_alert=True)
+        except BadRequest:
+            pass
         return
 
     # Reset other active text input modes e.g. call_lookup

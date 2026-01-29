@@ -19,6 +19,7 @@ from io import BytesIO
 from zoneinfo import ZoneInfo
 
 from telegram import Update
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -109,10 +110,16 @@ class SystemMenuHandler:
         if not query or not user:
             return
 
-        await query.answer()
+        try:
+            await query.answer()
+        except BadRequest:
+            pass
 
         if not await self._can_use_system(user.id, user.username):
-            await query.answer("Недостаточно прав", show_alert=True)
+            try:
+                await query.answer("Недостаточно прав", show_alert=True)
+            except BadRequest:
+                pass
             return
 
         action = (query.data or "").replace("system_", "", 1)
@@ -197,7 +204,20 @@ class SystemMenuHandler:
 
     async def _send_logs(self, query) -> str:
         log_path = None
-        candidates = [path for path in self.LOG_PATHS if path.exists()]
+        # Дедупим пути (часто один и тот же файл доступен по двум путям)
+        seen = set()
+        candidates = []
+        for path in self.LOG_PATHS:
+            if not path.exists():
+                continue
+            try:
+                resolved = path.resolve()
+            except Exception:
+                resolved = path
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            candidates.append(path)
         if not candidates:
             return "📄 Логи недоступны (файлы не найдены)."
 
@@ -212,11 +232,19 @@ class SystemMenuHandler:
                 main_candidate = candidate
 
         sent_files = 0
+        # Считаем дубликаты имён, чтобы корректно назвать файлы в Telegram
+        name_counts = {}
+        for candidate in candidates:
+            name_counts[candidate.name] = name_counts.get(candidate.name, 0) + 1
+
         if main_candidate:
             try:
                 tail_text = self._read_log_tail_text(main_candidate, self.MAX_LOG_BYTES)
                 log_path = main_candidate
-                await self._send_logs_file(query, tail_text, log_path)
+                filename_override = None
+                if name_counts.get(log_path.name, 0) > 1:
+                    filename_override = f"{log_path.parent.name}_{log_path.name}"
+                await self._send_logs_file(query, tail_text, log_path, filename_override)
                 sent_files += 1
             except Exception as exc:
                 logger.warning("Не удалось прочитать лог %s: %s", main_candidate, exc)
@@ -224,7 +252,10 @@ class SystemMenuHandler:
         for err_path in error_candidates:
             try:
                 tail_text = self._read_log_tail_text(err_path, self.MAX_LOG_BYTES)
-                await self._send_logs_file(query, tail_text, err_path)
+                filename_override = None
+                if name_counts.get(err_path.name, 0) > 1:
+                    filename_override = f"{err_path.parent.name}_{err_path.name}"
+                await self._send_logs_file(query, tail_text, err_path, filename_override)
                 sent_files += 1
             except Exception as exc:
                 logger.warning("Не удалось прочитать лог %s: %s", err_path, exc)
@@ -279,7 +310,13 @@ class SystemMenuHandler:
                 logger.warning("Не удалось прочитать лог %s: %s", path, exc)
         return bucket
 
-    async def _send_logs_file(self, query, log_text: str, log_path: Optional[Path]) -> None:
+    async def _send_logs_file(
+        self,
+        query,
+        log_text: str,
+        log_path: Optional[Path],
+        filename_override: Optional[str] = None,
+    ) -> None:
         message = getattr(query, "message", None)
         if not message:
             logger.warning("Нет message для отправки логов файлом")
@@ -287,7 +324,7 @@ class SystemMenuHandler:
         buffer = BytesIO()
         buffer.write(log_text.encode("utf-8"))
         buffer.seek(0)
-        filename = (log_path.name if isinstance(log_path, Path) else "logs.txt") or "logs.txt"
+        filename = filename_override or (log_path.name if isinstance(log_path, Path) else "logs.txt") or "logs.txt"
         caption = f"📄 Логи ({filename})"
         await message.reply_document(
             document=buffer,

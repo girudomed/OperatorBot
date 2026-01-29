@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes, Application
 
 from app.db.repositories.admin import AdminRepository
@@ -51,9 +52,15 @@ class AdminStatsHandler:
             "admin_stats",
             cooldown_seconds=1.5,
         ):
-            await query.answer("Слишком часто обновляете статистику. Подождите.", show_alert=True)
+            try:
+                await query.answer("Слишком часто обновляете статистику. Подождите.", show_alert=True)
+            except BadRequest:
+                pass
             return
-        await query.answer()
+        try:
+            await query.answer()
+        except BadRequest:
+            pass
         if sub_action == "period" and len(args) > 1:
             await self._show_period_summary(query, period_key=args[1])
             return
@@ -118,7 +125,10 @@ class AdminStatsHandler:
     async def _show_period_summary(self, query, *, period_key: str) -> None:
         config = next((cfg for cfg in self._period_configs() if cfg[1] == period_key), None)
         if not config:
-            await query.answer("Неизвестный период", show_alert=True)
+            try:
+                await query.answer("Неизвестный период", show_alert=True)
+            except BadRequest:
+                pass
             return
         label, _, days = config
         today = datetime.now().date()

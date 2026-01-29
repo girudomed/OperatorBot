@@ -13,8 +13,10 @@ MAIN_LOG_FILE = "operabot.log"
 ERROR_LOG_FILE = "errors.log"
 
 # Настройки ротации
-MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", str(500 * 1024 * 1024)))  # 500 MB
-BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "1"))
+# 20 MB по умолчанию, чтобы ротация срабатывала заметно раньше и
+# в боте не приходили «огромные смешанные» логи.
+MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", str(20 * 1024 * 1024)))  # 20 MB
+BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "5"))
 
 # Чувствительные ключи для маскировки (из переменных окружения)
 SENSITIVE_KEYS = [

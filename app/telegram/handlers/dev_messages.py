@@ -8,6 +8,7 @@ Telegram handler для системы сообщений разработчик
 from typing import Optional
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
 from telegram.ext import Application, ContextTypes, CommandHandler, MessageHandler, filters
 
 from app.db.manager import DatabaseManager
@@ -153,7 +154,10 @@ class DevMessagesHandler:
     async def reply_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка нажатия кнопки 'Ответить'."""
         query = update.callback_query
-        await query.answer()
+        try:
+            await query.answer()
+        except BadRequest:
+            pass
         
         action, args = AdminCB.parse(query.data or "")
         if action != AdminCB.DEV_REPLY or not args:

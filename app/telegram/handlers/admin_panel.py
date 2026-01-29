@@ -22,7 +22,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes,
     Application,
-    MessageHandler as _MessageHandler,
+    MessageHandler,
     filters,
 )
 
@@ -70,10 +70,9 @@ LM_PERIOD_OPTIONS = (7, 14, 30, 180)
 logger = get_watchdog_logger(__name__)
 
 
-def MessageHandler(*args, **kwargs):
-    """Совместимость: игнорируем group, если его ошибочно передали."""
-    kwargs.pop("group", None)
-    return _MessageHandler(*args, **kwargs)
+# MessageHandler is already imported as _MessageHandler to avoid name clashes, 
+# but we can just use the standard name if we don't need a shim.
+from telegram.ext import MessageHandler
 
 class AdminPanelHandler:
     """Основной хендлер админ-панели."""
@@ -205,6 +204,9 @@ class AdminPanelHandler:
         if not query:
             return
 
+        # Сразу подтверждаем callback, чтобы избежать таймаута Telegram.
+        await self._safe_answer(query)
+
         data = query.data or ""
         cb_action, cb_args = AdminCB.parse(data)
 
@@ -234,11 +236,9 @@ class AdminPanelHandler:
                 cb_action, cb_args = AdminCB.parse(data)
             else:
                 # Не удалось разрешить хеш — аккуратный fallback в меню.
-                await query.answer()
+                await self._safe_answer(query)
                 await self._handle_unknown_callback(query)
                 return True
-
-        await query.answer()
 
         user = update.effective_user
         logger.info(
@@ -257,6 +257,22 @@ class AdminPanelHandler:
         if not handled:
             await self._handle_unknown_callback(query)
         return True
+
+    async def _safe_answer(self, query, *args, **kwargs) -> bool:
+        """Best-effort ответ на callback без проброса ошибок таймаута/invalid id."""
+        try:
+            await query.answer(*args, **kwargs)
+            return True
+        except BadRequest as exc:
+            error_text = str(exc).lower()
+            if "query is too old" in error_text or "query id is invalid" in error_text:
+                logger.debug("Callback уже устарел или id недействителен: %s", exc)
+                return False
+            logger.warning("Ошибка ответа на callback: %s", exc)
+            return False
+        except TelegramError as exc:
+            logger.warning("Ошибка Telegram при ответе на callback: %s", exc)
+            return False
 
     async def _handle_new_callback(
         self,

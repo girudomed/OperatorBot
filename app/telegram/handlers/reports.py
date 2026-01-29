@@ -8,6 +8,7 @@ from math import ceil
 from typing import Dict, Any, Optional, List
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CallbackContext,
@@ -177,7 +178,10 @@ class _ReportHandler:
         if self._rate_limited(update, context, "report_callback"):
             return
 
-        await query.answer()
+        try:
+            await query.answer()
+        except BadRequest:
+            pass
         
         # Parse AdminCB: adm:rep:sub_action:args...
         action_type, args = AdminCB.parse(query.data)
@@ -214,7 +218,10 @@ class _ReportHandler:
 
         if sub_action == "select":
             if len(params) < 2:
-                await query.answer("Некорректные данные", show_alert=True)
+                try:
+                    await query.answer("Некорректные данные", show_alert=True)
+                except BadRequest:
+                    pass
                 return
             try:
                 target_user_id = int(params[0])
@@ -239,6 +246,7 @@ class _ReportHandler:
                 await self._send_report_for_user(
                     bot=context.bot,
                     chat_id=query.message.chat_id if query.message else user.id,
+                    message_thread_id=query.message.message_thread_id if query.message else None,
                     target_user_id=target_user_id,
                     header="Генерация отчёта…",
                     period=period,
@@ -403,6 +411,7 @@ class _ReportHandler:
         period: str,
         date_range: Optional[str],
         extension: Optional[str] = None,
+        message_thread_id: Optional[int] = None,
     ):
         try:
             operator_info = await self.operator_repo.get_operator_info_by_user_id(
@@ -413,12 +422,17 @@ class _ReportHandler:
                 "report: не удалось получить оператора",
                 extra={"target_user_id": target_user_id, "chat_id": chat_id},
             )
-            await bot.send_message(chat_id=chat_id, text=DB_ERROR_MESSAGE)
+            await bot.send_message(
+                chat_id=chat_id,
+                text=DB_ERROR_MESSAGE,
+                message_thread_id=message_thread_id,
+            )
             return
         if not operator_info:
             await bot.send_message(
                 chat_id=chat_id,
                 text=f"Оператор с ID {target_user_id} не найден в системе.",
+                message_thread_id=message_thread_id,
             )
             return
 
@@ -434,10 +448,15 @@ class _ReportHandler:
             await bot.send_message(
                 chat_id=chat_id,
                 text=f"Для {operator_name} не указан extension — отчёт недоступен.",
+                message_thread_id=message_thread_id,
             )
             return
 
-        status_message = await bot.send_message(chat_id=chat_id, text=header)
+        status_message = await bot.send_message(
+            chat_id=chat_id,
+            text=header,
+            message_thread_id=message_thread_id,
+        )
         try:
             report = await self.report_service.generate_report(
                 user_id=target_user_id,
@@ -450,18 +469,27 @@ class _ReportHandler:
                 await bot.send_message(
                     chat_id=chat_id,
                     text=f"Отчёт для {operator_name} не был сгенерирован (нет данных).",
+                    message_thread_id=message_thread_id,
                 )
                 return
 
             chunks = [report[i:i + 4000] for i in range(0, len(report), 4000)]
             for chunk in chunks:
-                await bot.send_message(chat_id=chat_id, text=chunk)
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=chunk,
+                    message_thread_id=message_thread_id,
+                )
         except Exception:
             logger.exception(
                 "report: генерация отчёта завершилась с ошибкой",
                 extra={"target_user_id": target_user_id, "period": period},
             )
-            await bot.send_message(chat_id=chat_id, text=DB_ERROR_MESSAGE)
+            await bot.send_message(
+                chat_id=chat_id,
+                text=DB_ERROR_MESSAGE,
+                message_thread_id=message_thread_id,
+            )
         finally:
             try:
                 await status_message.delete()
