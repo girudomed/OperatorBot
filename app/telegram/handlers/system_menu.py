@@ -453,10 +453,20 @@ class SystemMenuHandler:
 
     async def _log_system_action(self, user_id: int, action: str, text: str) -> None:
         try:
+            payload = {"action": action}
+            if action in {"errors", "system_logs"}:
+                payload.update(
+                    {
+                        "result_len": len(text),
+                        "result_preview": text[:200],
+                    }
+                )
+            else:
+                payload["result"] = text[:2000]
             await self.action_logger.log_action(
                 actor_telegram_id=user_id,
                 action="system_action",
-                payload={"action": action, "result": text[:2000]},
+                payload=payload,
             )
         except Exception:
             logger.debug("Не удалось записать system_action в лог", exc_info=True)

@@ -22,10 +22,10 @@ class ReportsV2Repository:
         normalized = (value or "").strip().lower()
         if normalized == "ready":
             return "ready"
-        if normalized == "error":
-            return "error"
-        logger.warning("reports_v2: неизвестный status=%r, используем 'error'", value)
-        return "error"
+        if normalized in {"error", "failed", "failure", "empty"}:
+            return "failed"
+        logger.warning("reports_v2: неизвестный status=%r, используем 'failed'", value)
+        return "failed"
 
     async def save_report(
         self,
