@@ -38,6 +38,7 @@ from app.utils.job_guard import JobGuard
 from app.core.roles import role_name_from_id
 from app.telegram.ui.admin.screens import Screen
 from app.telegram.ui.admin.screens.menu import render_main_menu_screen
+from app.config import DEV_ADMIN_ID
 from app.telegram.ui.admin.screens.dashboard import render_dashboard_screen
 from app.telegram.ui.admin.screens.alerts import render_alerts_screen
 from app.telegram.ui.admin.screens.export import render_export_screen
@@ -125,6 +126,9 @@ class AdminPanelHandler:
         user = update.effective_user
         allow_commands = False
         allow_yandex_tools = False
+        allow_video_upload = False
+        allow_video_delete = False
+        video_status = None
         try:
             allow_commands = await self.permissions.has_permission(
                 user.id,
@@ -136,6 +140,14 @@ class AdminPanelHandler:
                 "debug",
                 user.username,
             )
+            allow_video_upload = bool(user and user.id == DEV_ADMIN_ID)
+            if allow_video_upload:
+                has_video = context.application.bot_data.get("manual_video_has_file")
+                if callable(has_video) and has_video():
+                    allow_video_delete = True
+                    video_status = "установлено"
+                else:
+                    video_status = "нет"
         except Exception:
             logger.warning("Не удалось определить права пользователя %s", describe_user(user))
 
@@ -145,6 +157,9 @@ class AdminPanelHandler:
         screen = render_main_menu_screen(
             allow_commands,
             allow_yandex_tools,
+            allow_video_upload,
+            allow_video_delete,
+            video_status,
         )
         await self._render_screen(update, screen)
         logger.debug(
@@ -362,7 +377,12 @@ class AdminPanelHandler:
             await self._show_inline_help(update, context)
             return True
         if action == AdminCB.MANUAL:
-            await self._show_manual_link(update, context)
+            if args and args[0] == "video":
+                await self._start_manual_video_upload(update, context)
+            elif args and args[0] == "video_delete":
+                await self._delete_manual_video(update, context)
+            else:
+                await self._show_manual_link(update, context)
             return True
         handler = get_admin_callback_handler(context, action)
         if handler:
@@ -390,7 +410,29 @@ class AdminPanelHandler:
         if handler:
             await handler(update, context)
             return
-        await self._reply_feature_unavailable(update, "Мануал временно недоступен.")
+        await self._reply_feature_unavailable(update, "Обучение временно недоступно.")
+
+    async def _start_manual_video_upload(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> None:
+        handler = context.application.bot_data.get("manual_video_upload_handler")
+        if handler:
+            await handler(update, context)
+            return
+        await self._reply_feature_unavailable(update, "Отправка видео недоступна.")
+
+    async def _delete_manual_video(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> None:
+        handler = context.application.bot_data.get("manual_video_delete_handler")
+        if handler:
+            await handler(update, context)
+            return
+        await self._reply_feature_unavailable(update, "Удаление видео недоступно.")
 
     async def _reply_feature_unavailable(
         self,
@@ -794,7 +836,7 @@ class AdminPanelHandler:
     ) -> None:
         action_texts = {
             "weekly_quality": "Еженедельный контроль качества. Готовит тяжёлый CSV и отчёт.",
-            "report": "AI-отчёт по текущим звонкам. Потребляет LM-квоту.",
+            "report": "Отчет-Операторы по текущим звонкам. Потребляет LM-квоту.",
             "maintenance_alert": "Рассылает всем пользователям предупреждение о техработах.",
         }
         description = action_texts.get(action_key)
@@ -1019,7 +1061,7 @@ class AdminPanelHandler:
         guard = self._get_job_guard(context)
         guard_key = f"job:call_export:{days}"
         if not await guard.acquire(guard_key):
-            await query.answer("Эта выгрузка уже готовится", show_alert=True)
+            await query.answer("Ваша выгрузка уже готовится, подождите", show_alert=True)
             return
         try:
             await self._run_call_export(update, context, days)

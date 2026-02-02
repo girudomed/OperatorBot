@@ -87,7 +87,7 @@ class _ReportHandler:
         if self._rate_limited(update, context, "report_button"):
             return
         logger.info(
-            "[REPORTS] Пользователь %s нажал кнопку «📊 AI отчеты»",
+            "[REPORTS] Пользователь %s нажал кнопку «Отчет-Операторы»",
             describe_user(update.effective_user),
         )
         await self._start_reports_flow(update, context, period="monthly", date_range=None)
@@ -180,11 +180,21 @@ class _ReportHandler:
 
         try:
             await query.answer()
-        except BadRequest:
-            pass
+        except BadRequest as exc:
+            logger.debug("report: callback уже устарел: %s", exc)
+        except Exception:
+            logger.exception("report: ошибка ответа на callback")
+            raise
         
         # Parse AdminCB: adm:rep:sub_action:args...
-        action_type, args = AdminCB.parse(query.data)
+        try:
+            action_type, args = AdminCB.parse(query.data)
+        except (ValueError, TypeError) as exc:
+            logger.warning("report: некорректные данные callback '%s': %s", query.data, exc)
+            return
+        except Exception:
+            logger.exception("report: непредвиденная ошибка разбора callback '%s'", query.data)
+            raise
         if action_type != AdminCB.REPORTS or not args:
             return
 
@@ -212,7 +222,7 @@ class _ReportHandler:
             return
 
         if sub_action == "page":
-            page = int(params[0]) if params else 0
+            page = self._safe_int(params[0] if params else None, default=0)
             await self._show_operator_keyboard(query, context, page=page, edit=True)
             return
 
@@ -224,10 +234,13 @@ class _ReportHandler:
                     pass
                 return
             try:
-                target_user_id = int(params[0])
+                target_user_id = self._safe_int(params[0], default=None)
                 extension = params[1]
             except (ValueError, IndexError) as exc:
                 logger.warning("Некорректный target_id в report callback '%s': %s", params, exc)
+                await query.answer("Некорректный оператор", show_alert=True)
+                return
+            if not target_user_id:
                 await query.answer("Некорректный оператор", show_alert=True)
                 return
 
@@ -279,7 +292,12 @@ class _ReportHandler:
     def _acquire_busy(self, context: CallbackContext, query=None) -> bool:
         if self._is_busy(context):
             if query:
-                context.application.create_task(query.answer("Отчёт ещё рассчитывается. Подождите.", show_alert=True))
+                try:
+                    context.application.create_task(
+                        query.answer("Отчёт ещё рассчитывается. Подождите.", show_alert=True)
+                    )
+                except Exception:
+                    logger.exception("report: не удалось отправить busy-ответ")
             return False
         context.user_data[self._busy_key] = True
         return True
@@ -289,7 +307,13 @@ class _ReportHandler:
 
     async def _notify_busy(self, update: Update) -> None:
         if update.callback_query:
-            await update.callback_query.answer("Отчёт ещё рассчитывается. Подождите.", show_alert=True)
+            try:
+                await update.callback_query.answer("Отчёт ещё рассчитывается. Подождите.", show_alert=True)
+            except BadRequest as exc:
+                logger.debug("report: callback уже устарел: %s", exc)
+            except Exception:
+                logger.exception("report: не удалось отправить busy-ответ")
+                raise
         elif update.message:
             await update.message.reply_text("⚠️ Предыдущий отчёт ещё не готов. Дождитесь завершения.")
 
@@ -452,11 +476,18 @@ class _ReportHandler:
             )
             return
 
-        status_message = await bot.send_message(
-            chat_id=chat_id,
-            text=header,
-            message_thread_id=message_thread_id,
-        )
+        try:
+            status_message = await bot.send_message(
+                chat_id=chat_id,
+                text=header,
+                message_thread_id=message_thread_id,
+            )
+        except BadRequest as exc:
+            logger.warning("report: не удалось отправить статусное сообщение: %s", exc)
+            return
+        except Exception:
+            logger.exception("report: непредвиденная ошибка при отправке статуса")
+            raise
         try:
             report = await self.report_service.generate_report(
                 user_id=target_user_id,
@@ -475,11 +506,18 @@ class _ReportHandler:
 
             chunks = [report[i:i + 4000] for i in range(0, len(report), 4000)]
             for chunk in chunks:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=chunk,
-                    message_thread_id=message_thread_id,
-                )
+                try:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=chunk,
+                        message_thread_id=message_thread_id,
+                    )
+                except BadRequest as exc:
+                    logger.warning("report: не удалось отправить часть отчёта: %s", exc)
+                    return
+                except Exception:
+                    logger.exception("report: непредвиденная ошибка при отправке отчёта")
+                    raise
         except Exception:
             logger.exception(
                 "report: генерация отчёта завершилась с ошибкой",
@@ -493,8 +531,20 @@ class _ReportHandler:
         finally:
             try:
                 await status_message.delete()
-            except Exception as exc:
-                logger.debug("Не удалось удалить статусное сообщение отчёта: %s", exc, exc_info=True)
+            except BadRequest as exc:
+                logger.debug("Не удалось удалить статусное сообщение отчёта: %s", exc)
+            except Exception:
+                logger.exception("report: непредвиденная ошибка при удалении статуса")
+                raise
+
+    @staticmethod
+    def _safe_int(value: Optional[str], default: Optional[int] = 0) -> Optional[int]:
+        if value is None:
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
 
     def _human_period_name(self, period: str) -> str:
         mapping = {slug: label for slug, label in REPORT_PERIOD_CHOICES}

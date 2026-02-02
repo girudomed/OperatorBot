@@ -13,6 +13,7 @@ from app.telegram.ui.admin.screens import Screen
 from app.telegram.utils.callback_lm import LMCB
 from app.telegram.utils.callback_data import AdminCB
 from app.services.lm_rules import METRIC_CONFIG, get_badge, decline_word
+from app.logging_config import get_watchdog_logger
 
 MIN_SAMPLE_SIZE = 30
 LM_TRANSCRIPT_SNIPPET_LIMIT = 500
@@ -31,6 +32,8 @@ STATUS_ICONS = {
 }
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+
+logger = get_watchdog_logger(__name__)
 
 METHODOLOGY_SECTIONS = [
     {
@@ -1052,8 +1055,12 @@ def _describe_action_item(action_type: str, item: Dict[str, Any]) -> Tuple[str, 
     if isinstance(meta_payload, str):
         try:
             meta_payload = json.loads(meta_payload)
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            logger.warning("LM screens: не удалось распарсить meta_payload: %s", exc)
             meta_payload = None
+        except Exception:
+            logger.exception("LM screens: непредвиденная ошибка парсинга meta_payload")
+            raise
     if isinstance(meta_payload, dict):
         meta_dict = meta_payload
         meta_reasons = meta_payload.get('reasons') or []
@@ -1082,11 +1089,17 @@ def _describe_action_item(action_type: str, item: Dict[str, Any]) -> Tuple[str, 
         if len(found_reasons) >= 2:
             break
         try:
-            if r['condition'](item):
-                reason_text = r['text'].format(**item)
+            condition = r.get('condition')
+            reason_template = r.get('text')
+            if condition and condition(item):
+                reason_text = reason_template.format(**item) if reason_template else ""
                 found_reasons.append(reason_text)
-        except Exception:
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning("LM screens: ошибка построения причины (%s)", exc)
             continue
+        except Exception:
+            logger.exception("LM screens: непредвиденная ошибка правила")
+            raise
                 
     if action_type == "followup":
         source_bits: List[str] = []

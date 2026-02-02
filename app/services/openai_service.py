@@ -10,20 +10,20 @@ from typing import List
 
 from openai import AsyncOpenAI, OpenAIError
 
-from app.config import OPENAI_API_KEY, OPENAI_COMPLETION_OPTIONS
+from app.config import OPENAI_API_KEY, OPENAI_COMPLETION_OPTIONS, OPENAI_MODEL
 from app.logging_config import get_watchdog_logger
 
 logger = get_watchdog_logger(__name__)
 
 
 class OpenAIService:
-    def __init__(self, model: str = "gpt-4o-mini"):
+    def __init__(self, model: str | None = None):
         if not OPENAI_API_KEY:
             logger.error("OpenAI API ключ не найден.")
             raise EnvironmentError("OpenAI API ключ не найден.")
         
         self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-        self.model = model
+        self.model = model or OPENAI_MODEL
         self.semaphore = Semaphore(5)
         
         # Используем параметры из конфига, если они нужны, но здесь пока просто модель

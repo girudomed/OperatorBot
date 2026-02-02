@@ -74,6 +74,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 if IS_CI_ENV and not OPENAI_API_KEY:
     OPENAI_API_KEY = "ci-test-key"
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 OPENAI_COMPLETION_OPTIONS: Dict[str, Any] = {
     "temperature": float(os.getenv("OPENAI_TEMPERATURE", "0.7")),

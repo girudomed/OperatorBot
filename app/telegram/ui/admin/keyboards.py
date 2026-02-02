@@ -123,6 +123,8 @@ def main_menu_keyboard(
     *,
     allow_commands: bool,
     allow_yandex_tools: bool,
+    allow_video_upload: bool,
+    allow_video_delete: bool,
 ) -> InlineKeyboard:
     keyboard: InlineKeyboard = [
         [
@@ -133,7 +135,7 @@ def main_menu_keyboard(
         ],
         [
             InlineKeyboardButton(
-                "🧠 AI-отчёт", callback_data=AdminCB.create(AdminCB.REPORTS, "period_menu")
+                "Отчет-Операторы", callback_data=AdminCB.create(AdminCB.REPORTS, "period_menu")
             ),
             InlineKeyboardButton(
                 "🧠 LM Метрики", callback_data=AdminCB.create(AdminCB.LM_MENU)
@@ -155,7 +157,7 @@ def main_menu_keyboard(
                 callback_data=AdminCB.create(AdminCB.HELP_SCREEN),
             ),
             InlineKeyboardButton(
-                "📘 Мануал",
+                "📘 Обучение",
                 callback_data=AdminCB.create(AdminCB.MANUAL),
             ),
         ],
@@ -172,6 +174,24 @@ def main_menu_keyboard(
             )
         ],
     ]
+    if allow_video_upload:
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    "🎬 Отправить видео",
+                    callback_data=AdminCB.create(AdminCB.MANUAL, "video"),
+                )
+            ]
+        )
+    if allow_video_delete:
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    "🗑 Удалить видео",
+                    callback_data=AdminCB.create(AdminCB.MANUAL, "video_delete"),
+                )
+            ]
+        )
     # Всегда добавляем явную кнопку "◀️ Назад" в админских inline-меню
     # чтобы гарантировать единообразную навигацию назад через AdminCB.BACK.
     keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))])

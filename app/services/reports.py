@@ -5,15 +5,13 @@
 """
 
 import datetime
-from typing import Optional, Tuple, Dict, Any
-from datetime import date as date_type
+import hashlib
+import json
+from typing import Optional, Tuple, Dict, Any, List
 
 from app.services.openai_service import OpenAIService
 from app.db.repositories.operators import OperatorRepository
-from app.db.repositories.reports import ReportRepository
-from app.db.repositories.analytics import AnalyticsRepository
-from app.services.metrics_service import MetricsService
-from app.services.recommendations import RecommendationsService
+from app.db.repositories.reports_v2 import ReportsV2Repository
 from app.db.manager import DatabaseManager
 from app.logging_config import get_watchdog_logger
 from app.utils.error_handlers import log_async_exceptions
@@ -22,14 +20,14 @@ logger = get_watchdog_logger(__name__)
 
 
 class ReportService:
+    SCORING_VERSION = "v2026-01-29-v4"
+    MIN_COVERAGE_FOR_STRONG = 10
+
     def __init__(self, db_manager: DatabaseManager):
         self.db_manager = db_manager
         self.repo = OperatorRepository(db_manager)
-        self.report_repo = ReportRepository(db_manager)
-        self.analytics_repo = AnalyticsRepository(db_manager)
+        self.report_repo_v2 = ReportsV2Repository(db_manager)
         self.openai = OpenAIService()
-        self.metrics_service = MetricsService(self.repo)
-        self.recommendations_service = RecommendationsService()
 
     @log_async_exceptions
     async def generate_report(
@@ -44,21 +42,10 @@ class ReportService:
             start_date, end_date = self._resolve_dates(period, date_range)
             logger.info(f"Генерация отчета для {user_id} за {start_date} - {end_date}")
             normalized_period = self._normalize_period(period)
-            report_date_key = self._format_report_date(start_date)
+            date_from = start_date if isinstance(start_date, datetime.datetime) else datetime.datetime.combine(start_date, datetime.time.min)
+            date_to = end_date if isinstance(end_date, datetime.datetime) else datetime.datetime.combine(end_date, datetime.time.max)
 
-            existing_report = await self.report_repo.get_report(
-                user_id=user_id,
-                period=normalized_period,
-                report_date=report_date_key,
-            )
-            if existing_report and existing_report.get("report_text"):
-                logger.info(
-                    "Отчёт уже существует (user_id=%s, period=%s, date=%s) — возвращаем сохранённый результат",
-                    user_id,
-                    normalized_period,
-                    report_date_key,
-                )
-                return existing_report["report_text"]
+            # legacy reports cache intentionally removed
 
             # 2. Get Operator Info
             resolved_extension = extension or await self.repo.get_extension_by_user_id(user_id)
@@ -71,11 +58,28 @@ class ReportService:
             
             name = await self.repo.get_name_by_extension(resolved_extension)
 
-            # 3. Get Call Data (старая логика для обратной совместимости)
-            data = await self.repo.get_call_data(resolved_extension, start_date, end_date)
-            if not data['call_history'] and not data['call_scores']:
+            # 2.1 Try v2 cache after resolving operator_key
+            v2_cache_key = self._build_report_cache_key(
+                operator_key=resolved_extension,
+                date_from=date_from,
+                date_to=date_to,
+                period_label=normalized_period,
+                filters={"user_id": user_id, "period": normalized_period, "date_range": date_range, "extension": resolved_extension},
+                scoring_version=self.SCORING_VERSION,
+            )
+            existing_v2 = await self.report_repo_v2.get_ready_report_by_cache_key(v2_cache_key)
+            if existing_v2 and existing_v2.get("report_text"):
+                logger.info(
+                    "Отчёт v2 уже существует (cache_key=%s) — возвращаем сохранённый результат",
+                    v2_cache_key,
+                )
+                return existing_v2["report_text"]
+
+            # 3. Get Call Data (ТОЛЬКО call_scores)
+            scores = await self.repo.get_call_scores(resolved_extension, start_date, end_date)
+            if not scores:
                 logger.warning(
-                    "report: нет данных по звонкам для %s (extension=%s, period=%s-%s)",
+                    "report: нет данных по call_scores для %s (extension=%s, period=%s-%s)",
                     user_id,
                     resolved_extension,
                     start_date,
@@ -83,156 +87,448 @@ class ReportService:
                 )
                 return f"Нет данных для оператора {name} за указанный период."
 
-            # 4. Calculate Metrics (старая логика)
-            metrics = await self.metrics_service.calculate_operator_metrics(
-                call_history_data=data['call_history'],
-                call_scores_data=data['call_scores'],
-                extension=resolved_extension,
-                start_date=start_date,
-                end_date=end_date
-            )
+            # 4. Calculate Metrics (только из call_scores)
+            metrics = self._calculate_metrics_from_scores(scores)
 
-            # 5. НОВОЕ: Получаем дашборд метрики для более детального анализа
-            try:
-                dashboard_metrics = await self.analytics_repo.get_live_dashboard_single(
-                    operator_name=name,
-                    period_type='day' if period == 'daily' else 'week' if period == 'weekly' else 'month'
-                )
-            except Exception as e:
-                logger.warning(f"Не удалось получить dashboard метрики: {e}", exc_info=True)
-                dashboard_metrics = None
+            # 5. Собираем примеры звонков для GPT
+            examples = self._build_call_examples(scores, limit=5)
 
-            # 6. НОВОЕ: Генерируем рекомендации через новый сервис
-            recommendations = await self._generate_recommendations_new(
-                name=name, 
-                metrics=metrics,
-                dashboard_metrics=dashboard_metrics,
-                start_date=start_date.date() if isinstance(start_date, datetime.datetime) else start_date,
-                end_date=end_date.date() if isinstance(end_date, datetime.datetime) else end_date
-            )
-            
-            # Daily check: skip if no recommendations
-            if period == 'daily' and not recommendations.strip():
-                return "Нет рекомендаций для ежедневного отчета."
-
-            # 7. Format Report (обновленный формат)
-            report_text = self._format_report_new(
+            # 6. Генерируем отчёт через GPT (всегда)
+            report_text = await self._generate_report_with_gpt(
                 name=name,
                 start=start_date,
                 end=end_date,
                 metrics=metrics,
-                dashboard_metrics=dashboard_metrics,
-                recommendations=recommendations
+                call_examples=examples,
             )
-
-            # 8. Save to DB
-            await self.report_repo.save_report_to_db(
-                user_id=user_id,
-                period=normalized_period,
-                report_date=report_date_key,
-                total_calls=metrics.get('total_calls', 0),
-                accepted_calls=metrics.get('accepted_calls', 0),
-                booked_services=metrics.get('booked_services', 0),
-                conversion_rate=metrics.get('conversion_rate_leads', 0.0),
-                avg_call_rating=metrics.get('avg_call_rating', 0.0),
-                total_cancellations=metrics.get('total_cancellations', 0),
-                cancellation_rate=metrics.get('cancellation_rate', 0.0),
-                total_conversation_time=int(metrics.get('total_conversation_time', 0)),
-                avg_conversation_time=metrics.get('avg_conversation_time', 0.0),
-                avg_spam_time=metrics.get('avg_time_spam', 0.0),
-                total_spam_time=0,
-                total_navigation_time=0,
-                avg_navigation_time=metrics.get('avg_navigation_time', 0.0),
-                complaint_calls=metrics.get('complaint_calls', 0),
-                complaint_rating=metrics.get('complaint_rating', 0.0),
-                recommendations=recommendations
-            )
-
-            # 9. НОВОЕ: Сохраняем рекомендации в отдельную таблицу
-            try:
-                await self.analytics_repo.save_recommendations(
-                    operator_name=name,
-                    report_date=start_date.date() if isinstance(start_date, datetime.datetime) else start_date,
-                    recommendations=recommendations,
-                    call_samples_analyzed=len(data.get('call_scores', []))
+            if not report_text or not report_text.strip():
+                logger.error(
+                    "report: пустой ответ GPT для user_id=%s (extension=%s, period=%s-%s)",
+                    user_id,
+                    resolved_extension,
+                    start_date,
+                    end_date,
                 )
-            except Exception as e:
-                logger.warning(f"Не удалось сохранить рекомендации в новую таблицу: {e}", exc_info=True)
+                return "Произошла ошибка при генерации отчета."
 
+            # 7. Save to reports_v2
+            operator_key = resolved_extension
+            filters = {
+                "user_id": user_id,
+                "period": normalized_period,
+                "date_range": date_range,
+                "extension": resolved_extension,
+            }
+            metrics_json = metrics.copy()
+            cache_key = self._build_report_cache_key(
+                operator_key=operator_key,
+                date_from=date_from,
+                date_to=date_to,
+                period_label=normalized_period,
+                filters=filters,
+                scoring_version=self.SCORING_VERSION,
+            )
+            await self.report_repo_v2.save_report(
+                user_id=user_id,
+                operator_key=operator_key,
+                operator_name=name,
+                date_from=date_from,
+                date_to=date_to,
+                period_label=normalized_period,
+                scoring_version=self.SCORING_VERSION,
+                filters_json=filters,
+                metrics_json=metrics_json,
+                report_text=report_text,
+                cache_key=cache_key,
+                status="ready",
+                generated_at=datetime.datetime.utcnow(),
+                error_text=None,
+            )
+
+            # 8. Возвращаем сохранённый текст из reports_v2
+            saved_v2 = await self.report_repo_v2.get_ready_report_by_cache_key(cache_key)
+            if saved_v2 and saved_v2.get("report_text"):
+                return saved_v2["report_text"]
             return report_text
 
-        except Exception as e:
-            logger.error(f"Ошибка генерации отчета: {e}", exc_info=True)
-            return "Произошла ошибка при генерации отчета."
+        except Exception:
+            logger.exception("Ошибка генерации отчета")
+            raise
 
-    async def _generate_recommendations_new(
-        self,
-        name: str,
-        metrics: Dict[str, Any],
-        dashboard_metrics: Optional[Dict[str, Any]],
-        start_date: date_type,
-        end_date: date_type
-    ) -> str:
-        """
-        НОВАЯ логика генерации рекомендаций через RecommendationsService.
+    def _calculate_metrics_from_scores(self, scores: List[Dict[str, Any]]) -> Dict[str, Any]:
+        total_calls = 0
+        booked = 0
+        lead_no_record = 0
+        cancellations = 0
+        complaints = 0
+        info_calls = 0
+        total_score = 0.0
+        score_count = 0
+        total_talk = 0
+
+        # Новые метрики (counts & coverage)
+        m = {
+            "objection_present": {"true": 0, "cov": 0},
+            "objection_handled": {"true": 0, "cov": 0},
+            "booking_attempted": {"true": 0, "cov": 0},
+            "next_step_clear": {"true": 0, "cov": 0},
+            "followup_captured": {"true": 0, "cov": 0},
+            "handled_given_objection": {"true": 0, "cov": 0},
+        }
+        unknown = {
+            "objection_handled": 0,
+            "next_step_clear": 0,
+            "followup_captured": 0,
+        }
+
+        for row in scores:
+            if not isinstance(row, dict):
+                logger.warning(
+                    "report: некорректная строка call_scores (ожидался dict), пропускаем: %r",
+                    row,
+                )
+                continue
+            total_calls += 1
+            outcome = (row.get("outcome") or "").lower()
+            category = (row.get("call_category") or "").lower()
+            score = row.get("call_score")
+            if score is not None:
+                total_score += float(score)
+                score_count += 1
+            duration = row.get("talk_duration") or 0
+            total_talk += int(duration) if str(duration).isdigit() else 0
+
+            # Старая воронка
+            if outcome == "record":
+                booked += 1
+            elif outcome in ["lead_no_record", "lead"]:
+                lead_no_record += 1
+            elif outcome in ["info_only", "non_target", "info"]:
+                info_calls += 1
+
+            # Отмены считаем строго как отмены
+            if outcome == "cancel" or "отмен" in category:
+                cancellations += 1
+            if "жалоб" in category:
+                complaints += 1
+            if not outcome and any(x in category for x in ["инфо", "подтверж", "пропущ"]):
+                info_calls += 1
+
+            # Новые флаги
+            for flag in ["objection_present", "objection_handled", "booking_attempted", "next_step_clear", "followup_captured"]:
+                val = row.get(flag)
+                if val is not None:
+                    m[flag]["cov"] += 1
+                    if val == 1:
+                        m[flag]["true"] += 1
+
+            # Специальная метрика: обработка ПРИ наличии возражения
+            if row.get("objection_present") == 1:
+                oh = row.get("objection_handled")
+                if oh is not None:
+                    m["handled_given_objection"]["cov"] += 1
+                    if oh == 1:
+                        m["handled_given_objection"]["true"] += 1
+                else:
+                    unknown["objection_handled"] += 1
+
+            if row.get("booking_attempted") == 1:
+                ns = row.get("next_step_clear")
+                if ns is None:
+                    unknown["next_step_clear"] += 1
+
+            if row.get("outcome") == "lead_no_record":
+                fu = row.get("followup_captured")
+                if fu is None:
+                    unknown["followup_captured"] += 1
+
+        conversion = (booked / total_calls) if total_calls else 0.0
+        avg_score = (total_score / score_count) if score_count else 0.0
+
+        res = {
+            "total_calls": total_calls,
+            "booked_services": booked,
+            "lead_no_record": lead_no_record,
+            "info_calls": info_calls,
+            "total_cancellations": cancellations,
+            "complaint_calls": complaints,
+            "conversion_rate": round(conversion * 100, 2),
+            "avg_call_rating": round(avg_score, 2),
+            "total_conversation_time": total_talk,
+            "avg_conversation_time": round(total_talk / total_calls, 2) if total_calls else 0.0,
+            "cancellation_rate": round((cancellations / total_calls) * 100, 2) if total_calls else 0.0,
+        }
+
+        # Добавляем новые метрики в результат
+        for key, vals in m.items():
+            true_count = vals["true"]
+            cov_count = vals["cov"]
+            res[f"{key}_count"] = true_count
+            res[f"{key}_coverage"] = cov_count
+            res[f"{key}_rate"] = round((true_count / cov_count * 100), 2) if cov_count > 0 else None
+
+        # Провалы (counts) для управления
+        res["count_objection_not_handled"] = sum(
+            1 for r in scores if r.get("objection_present") == 1 and r.get("objection_handled") == 0
+        )
+        res["count_objection_handled_unknown"] = unknown["objection_handled"]
+        res["count_booking_no_next_step"] = sum(
+            1 for r in scores if r.get("booking_attempted") == 1 and r.get("next_step_clear") == 0
+        )
+        res["count_booking_next_step_unknown"] = unknown["next_step_clear"]
+        # Для lead_no_record мы хотим знать сколько из них БЕЗ followup
+        res["count_lead_no_followup"] = sum(
+            1 for r in scores if r.get("outcome") == "lead_no_record" and r.get("followup_captured") == 0
+        )
+        res["count_lead_followup_unknown"] = unknown["followup_captured"]
+
+        return res
+
+    def _build_call_examples(self, scores: List[Dict[str, Any]], limit: int = 5) -> str:
+        def _row_key(row: Dict[str, Any]) -> int:
+            row_id = row.get("id")
+            return row_id if row_id is not None else id(row)
+
+        valid_scores = []
+        for row in scores:
+            if not isinstance(row, dict):
+                logger.warning(
+                    "report: некорректная строка call_scores в примерах (ожидался dict), пропускаем: %r",
+                    row,
+                )
+                continue
+            valid_scores.append(row)
+
+        # 1. 2 худших по score
+        worst = sorted(
+            [s for s in valid_scores if s.get("call_score") is not None],
+            key=lambda x: x["call_score"],
+        )[:2]
         
-        Использует:
-        1. Проблемные звонки из analytics_repo
-        2. Dashboard метрики
-        3. LLM через recommendations_service
-        """
-        try:
-            # Получаем звонки для анализа
-            calls_data = await self.analytics_repo.get_calls_for_recommendations(
-                operator_name=name,
-                date_from=start_date,
-                date_to=end_date,
-                limit=10
-            )
-            
-            # Собираем статистику для контекста
-            stats = {
-                'accepted_calls': dashboard_metrics.get('accepted_calls', 0) if dashboard_metrics else metrics.get('accepted_calls', 0),
-                'records': dashboard_metrics.get('records_count', 0) if dashboard_metrics else metrics.get('booked_services', 0),
-                'conversion_rate': dashboard_metrics.get('conversion_rate', 0) if dashboard_metrics else metrics.get('conversion_rate_leads', 0),
-                'avg_score_all': dashboard_metrics.get('avg_score_all', 0) if dashboard_metrics else metrics.get('avg_call_rating', 0),
-                'complaint_calls': dashboard_metrics.get('complaint_calls', 0) if dashboard_metrics else metrics.get('complaint_calls', 0)
-            }
-            
-            # Генерируем через новый сервис
-            recommendations = await self.recommendations_service.generate_operator_recommendations(
-                operator_name=name,
-                calls_data=calls_data,
-                stats=stats
-            )
-            
-            return recommendations
-            
-        except Exception as e:
-            logger.error(f"Ошибка генерации рекомендаций через новый сервис: {e}", exc_info=True)
-            # Fallback на старую логику
-            return await self._generate_recommendations_fallback(name, metrics)
+        # 2. 1 лучший по score
+        best = sorted(
+            [s for s in valid_scores if s.get("call_score") is not None],
+            key=lambda x: x["call_score"],
+            reverse=True,
+        )[:1]
+        
+        # 3. Проблемные кейсы (возражение было, но не обработано)
+        no_handle = [
+            s for s in valid_scores if s.get("objection_present") == 1 and s.get("objection_handled") == 0
+        ][:1]
+        
+        # 4. Проблемные кейсы (lead_no_record без follow-up)
+        no_followup = [
+            s for s in valid_scores if s.get("outcome") == "lead_no_record" and s.get("followup_captured") == 0
+        ][:1]
+        
+        # Собираем уникальный список
+        seen_ids = set()
+        selected = []
+        for s in worst + best + no_handle + no_followup:
+            key = _row_key(s)
+            if key not in seen_ids:
+                selected.append(s)
+                seen_ids.add(key)
+        
+        # Если не набрали лимит - добираем просто по порядку (но не те что уже есть)
+        if len(selected) < limit:
+            others = [s for s in valid_scores if _row_key(s) not in seen_ids]
+            selected.extend(others[:(limit - len(selected))])
 
-            return await self._generate_recommendations_fallback(name, metrics)
-    
-    async def _generate_recommendations_fallback(
+        examples = []
+        for idx, row in enumerate(selected, start=1):
+            transcript = (row.get("transcript") or "").strip()
+            if len(transcript) > 600:
+                transcript = transcript[:600] + "…"
+            
+            # Формируем строку флагов
+            flags = []
+            if row.get("objection_present") is not None:
+                flags.append(f"Возражение: {'Да' if row['objection_present'] else 'Нет'}")
+            if row.get("objection_handled") is not None:
+                flags.append(f"Обработано: {'Да' if row['objection_handled'] else 'Нет'}")
+            if row.get("booking_attempted") is not None:
+                flags.append(f"Попытка записи: {'Да' if row['booking_attempted'] else 'Нет'}")
+            if row.get("next_step_clear") is not None:
+                flags.append(f"След.шаг ясен: {'Да' if row['next_step_clear'] else 'Нет'}")
+            if row.get("followup_captured") is not None:
+                flags.append(f"Follow-up: {'Да' if row['followup_captured'] else 'Нет'}")
+            
+            flags_str = " | ".join(flags)
+            score_value = row.get("call_score")
+            score_text = score_value if score_value is not None else "Нет"
+
+            examples.append(
+                f"### Звонок {idx}\n"
+                f"- Оценка: {score_text} | Результат: {row.get('outcome') or '?'}\n"
+                f"- Метрики: {flags_str}\n"
+                f"- Услуга: {row.get('requested_service_name') or '?'}\n"
+                f"- Фрагмент:\n{transcript or 'Нет расшифровки'}\n"
+            )
+        return "\n".join(examples) if examples else "Нет подходящих примеров звонков."
+
+    async def _generate_report_with_gpt(
         self,
         name: str,
-        metrics: Dict[str, Any]
+        start: Any,
+        end: Any,
+        metrics: Dict[str, Any],
+        call_examples: str,
     ) -> str:
-        """Fallback на старую логику, если новый сервис не работает."""
-        try:
-            # Используем старую логику через OpenAI
-            results_text = f"Оценка: {metrics.get('avg_call_rating', 0)}, Конверсия: {metrics.get('conversion_rate_leads', 0)}%"
-            
-            prompt = (
-                f"Данные оператора {name}:\n{results_text}\n\n"
-                f"Дай краткие рекомендации для улучшения работы."
+        period_line = f"{start} - {end}"
+        template = (
+            "# 1. Объём и типы звонков {name} (по факту из массива)\n\n"
+            "По присланному материалу зафиксированы **≈{total_calls} завершённых диалогов** (часть — короткие, часть — длинные).\n\n"
+            "Я разделяю их **по результату**, а не по длительности.\n\n"
+            "## Итоговая воронка\n\n"
+            "| Тип звонка | Кол-во |\n"
+            "| --- | --- |\n"
+            "| ✅ Запись оформлена | **{booked}** |\n"
+            "| ❌ Запись не состоялась (консультация / «подумаю») | **{lead_no_record}** |\n"
+            "| ❌ Отмена без перезаписи | **{cancellations}** |\n"
+            "| ℹ️ Инфо / подтверждение / пропущенный | **{info_calls}** |\n"
+            "| **Всего** | **{total_calls}** |\n\n"
+            "### Конверсия {name} в запись\n\n"
+            "- **{booked} / {total_calls} = ~{conversion}%**\n\n"
+            "⚠️ Это **пограничное значение**:\n\n"
+            "- для регистратуры — нормально\n"
+            "- для **продающего колл-центра клиники — ниже нормы (ожидание 55–65%)**\n\n"
+            "---\n\n"
+            "# 2. Как {name} продаёт услуги (реальная модель поведения)\n\n"
+            "## Общий стиль\n\n"
+            "...\n\n"
+            "👉 {name} **отвечает на запрос**, но **редко управляет диалогом**.\n\n"
+            "---\n\n"
+            "# 3. Продажа УЗИ: ключевой фокус анализа\n\n"
+            "## 3.1. Предлагает ли {name} комплекс УЗИ\n\n"
+            "**Факт:**\n\n"
+            "...\n\n"
+            "---\n\n"
+            "## 3.2. Предлагает ли УЗИ нескольких органов / зон\n\n"
+            "**Факт:**\n\n"
+            "...\n\n"
+            "---\n\n"
+            "# 4. Работа с врачом как инструментом продаж\n\n"
+            "## Что есть:\n\n"
+            "- ...\n\n"
+            "## Чего нет:\n\n"
+            "- ...\n\n"
+            "---\n\n"
+            "# 5. Время и адрес — как {name} предлагает выбор\n\n"
+            "## Время приёма\n\n"
+            "...\n\n"
+            "## Адреса клиники\n\n"
+            "...\n\n"
+            "---\n\n"
+            "# 6. Возражения, которые {name} НЕ отрабатывает\n\n"
+            "## Топ-возражения из звонков\n\n"
+            "...\n\n"
+            "---\n\n"
+            "# 7. Где {name} работает ХОРОШО\n\n"
+            "...\n\n"
+            "---\n\n"
+            "# 8. Ключевой управленческий вывод\n\n"
+            "...\n\n"
+            "---\n\n"
+            "# 9. Потенциал роста (без увеличения нагрузки)\n\n"
+            "...\n\n"
+            "➡️ **конверсия может вырасти с ~{conversion}% до 60–65%**\n"
+        )
+
+        # Собираем блок фактов для промпта
+        facts = [
+            f"Имя оператора: {name}",
+            f"Период: {period_line}",
+            f"ВСЕГО звонков: {metrics.get('total_calls')}",
+            f"Записи: {metrics.get('booked_services')}",
+            f"Lead No Record: {metrics.get('lead_no_record')}",
+            f"Отмены: {metrics.get('total_cancellations')}",
+            f"Инфо: {metrics.get('info_calls')}",
+            f"Конверсия: {metrics.get('conversion_rate')}%",
+            f"Средняя оценка: {metrics.get('avg_call_rating')}",
+            "",
+            "НОВЫЕ МЕТРИКИ (ДЛЯ ЖЕСТКИХ ВЫВОДОВ):",
+        ]
+
+        # Добавляем флаги с coverage
+        for key in ["objection_present", "objection_handled", "booking_attempted", "next_step_clear", "followup_captured", "handled_given_objection"]:
+            rate = metrics.get(f"{key}_rate")
+            cov = metrics.get(f"{key}_coverage", 0)
+            true_count = metrics.get(f"{key}_count", 0)
+            rate_text = f"{rate}%" if rate is not None else "н/д"
+            facts.append(f"- {key}: {rate_text} (true={true_count}, cov={cov})")
+
+        facts.extend([
+            "",
+            "ПРОИГРЫШНЫЕ СВЯЗКИ (COUNTS):",
+            f"- Возражение было, но НЕ отработано: {metrics.get('count_objection_not_handled')} раз",
+            f"- Возражение было, но обработка НЕ оценена: {metrics.get('count_objection_handled_unknown')} раз",
+            f"- Запись предлагалась, но след.шаг НЕ ясен: {metrics.get('count_booking_no_next_step')} раз",
+            f"- Запись предлагалась, но след.шаг НЕ оценен: {metrics.get('count_booking_next_step_unknown')} раз",
+            f"- Лид без записи и БЕЗ follow-up: {metrics.get('count_lead_no_followup')} раз",
+            f"- Лид без записи и follow-up НЕ оценен: {metrics.get('count_lead_followup_unknown')} раз",
+        ])
+
+        prompt = (
+            "Ты — аналитик колл-центра клиники (Кумихо 🦊). Твоя задача — написать честный, жесткий и фактологичный отчет по оператору.\n"
+            "Используй ТОЛЬКО предоставленные данные и примеры звонков. Если данных для вывода не хватает (низкий coverage), не выдумывай показатели, а пиши мягче (например, 'в предоставленных примерах не встретилось').\n\n"
+            "СТИЛЬ ОТЧЕТА:\n"
+            "- Как в эталонном примере Наили.\n"
+            "- Минимум 'воды', максимум управленческих выводов.\n"
+            "- Если видишь проигрышную связку (например, objection_handled_rate низкий) — делай из этого 'точку потери' в Разделе 6 и 8.\n"
+            "- Жесткие формулировки допускаются только если coverage >= {min_cov}.\n"
+            "- Если метрики по апселлу/комплексам нет, не пиши '0 раз' по отсутствию в примерах; пиши мягко ('в примерах не встретилось').\n\n"
+            "ДАННЫЕ:\n"
+            "{facts}\n\n"
+            "ПРИМЕРЫ ЗВОНКОВ:\n"
+            "{examples}\n\n"
+            "КАРКАС (СТРОГО СОБЛЮДАЙ ВСЕ ЗАГОЛОВКИ):\n"
+            "{template}\n"
+        ).format(
+            facts="\n".join(facts),
+            examples=call_examples,
+            min_cov=self.MIN_COVERAGE_FOR_STRONG,
+            template=template.format(
+                name=name,
+                total_calls=metrics.get("total_calls", 0),
+                booked=metrics.get("booked_services", 0),
+                lead_no_record=metrics.get("lead_no_record", 0),
+                cancellations=metrics.get("total_cancellations", 0),
+                info_calls=metrics.get("info_calls", 0),
+                conversion=metrics.get("conversion_rate", 0),
             )
-            return await self.openai.generate_recommendations(prompt)
-        except Exception as e:
-            logger.error(f"Ошибка fallback рекомендаций: {e}", exc_info=True)
-            return "Рекомендации временно недоступны."
+        )
+
+        try:
+            return await self.openai.generate_recommendations(prompt, max_tokens=2500)
+        except (ValueError, RuntimeError) as exc:
+            logger.warning("Ожидаемая ошибка при генерации отчета GPT: %s", exc)
+            return ""
+        except Exception:
+            logger.exception("Непредвиденная ошибка при генерации отчета GPT")
+            raise
+
+
+    def _build_report_cache_key(
+        self,
+        operator_key: str,
+        date_from: datetime.datetime,
+        date_to: datetime.datetime,
+        period_label: str,
+        filters: Dict[str, Any],
+        scoring_version: str,
+    ) -> str:
+        payload = {
+            "operator_key": operator_key,
+            "date_from": date_from.isoformat(),
+            "date_to": date_to.isoformat(),
+            "period_label": period_label,
+            "scoring_version": scoring_version,
+            "filters": filters,
+        }
+        raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def _normalize_period(self, period: Optional[str]) -> str:
         value = (period or "daily").strip().lower()
@@ -258,98 +554,6 @@ class ReportService:
             return base_date.strftime("%Y-%m-%d")
         return str(start_date)
 
-    def _format_report_new(
-        self, 
-        name: str, 
-        start: datetime.datetime, 
-        end: datetime.datetime, 
-        metrics: Dict[str, Any],
-        dashboard_metrics: Optional[Dict[str, Any]],
-        recommendations: str
-    ) -> str:
-        """
-        НОВЫЙ формат отчета с dashboard метриками.
-        """
-        period_str = f"{start.strftime('%d.%m.%Y')} - {end.strftime('%d.%m.%Y')}"
-        
-        # Используем dashboard метрики если доступны, иначе старые
-        if dashboard_metrics:
-            total_calls = dashboard_metrics.get('accepted_calls', 0)
-            records = dashboard_metrics.get('records_count', 0)
-            leads = dashboard_metrics.get('leads_no_record', 0)
-            conversion = dashboard_metrics.get('conversion_rate', 0)
-            avg_score = dashboard_metrics.get('avg_score_all', 0)
-            avg_score_leads = dashboard_metrics.get('avg_score_leads', 0)
-            cancel_calls = dashboard_metrics.get('cancel_calls', 0)
-            complaint_calls = dashboard_metrics.get('complaint_calls', 0)
-            avg_talk_time = dashboard_metrics.get('avg_talk_all', 0)
-        else:
-            total_calls = metrics.get('accepted_calls', 0)
-            records = metrics.get('booked_services', 0)
-            leads = metrics.get('total_leads', 0)
-            conversion = metrics.get('conversion_rate_leads', 0)
-            avg_score = metrics.get('avg_call_rating', 0)
-            avg_score_leads = avg_score
-            cancel_calls = metrics.get('total_cancellations', 0)
-            complaint_calls = metrics.get('complaint_calls', 0)
-            avg_talk_time = int(metrics.get('avg_conversation_time', 0))
-        
-        # Форматируем время
-        talk_mins = avg_talk_time // 60
-        talk_secs = avg_talk_time % 60
-        
-        lines = [
-            f"📊 <b>Отчет для оператора: {name}</b>",
-            f"📅 Период: {period_str}",
-            "",
-            "<b>1️⃣ Общая статистика:</b>",
-            f"   • Всего звонков: {total_calls}",
-            f"   • Лиды / Записи: {records}",
-            f"   • Лиды без записи: {leads}",
-            f"   • Конверсия: <b>{conversion}%</b>",
-            "",
-            "<b>2️⃣ Качество:</b>",
-            f"   • Средняя оценка: {avg_score:.1f}/10",
-            f"   • Оценка лидов: {avg_score_leads:.1f}/10",
-            "",
-            "<b>3️⃣ Время:</b>",
-            f"   • Среднее время разговора: {talk_mins}:{talk_secs:02d}",
-            "",
-            "<b>4️⃣ Проблемы:</b>",
-            f"   • Отмен/переносов: {cancel_calls}",
-            f"   • Жалоб: {complaint_calls}",
-            "",
-            "<b>💡 Рекомендации:</b>",
-            recommendations
-        ]
-        return "\n".join(lines)
-
-    def _format_report(
-        self, 
-        name: str, 
-        start: datetime.datetime, 
-        end: datetime.datetime, 
-        metrics: Dict[str, Any], 
-        recommendations: str
-    ) -> str:
-        """СТАРЫЙ формат отчета (для обратной совместимости)."""
-        period_str = f"{start.strftime('%d.%m.%Y')} - {end.strftime('%d.%m.%Y')}"
-        
-        lines = [
-            f"📊 **Отчет для оператора: {name}**",
-            f"📅 Период: {period_str}",
-            "",
-            "**Основные показатели:**",
-            f"📞 Всего звонков: {metrics.get('total_calls', 0)}",
-            f"✅ Принято: {metrics.get('accepted_calls', 0)}",
-            f"❌ Пропущено: {metrics.get('missed_calls', 0)}",
-            f"⭐ Средняя оценка: {metrics.get('avg_call_rating', 0.0)}",
-            "",
-            "**Рекомендации:**",
-            recommendations
-        ]
-        return "\n".join(lines)
-
     def _resolve_dates(
         self, 
         period: str, 
@@ -363,7 +567,11 @@ class ReportService:
                     dt = datetime.datetime.strptime(date_range, '%Y-%m-%d')
                 except ValueError as exc:
                     logger.debug("Дата '%s' не соответствует формату YYYY-MM-DD: %s", date_range, exc)
-                    dt = datetime.datetime.strptime(date_range, '%d/%m/%Y')
+                    try:
+                        dt = datetime.datetime.strptime(date_range, '%d/%m/%Y')
+                    except ValueError:
+                        logger.warning("Невалидная дата '%s', используем текущую", date_range)
+                        dt = now
                 return dt.replace(hour=0, minute=0, second=0), dt.replace(hour=23, minute=59, second=59)
             return now.replace(hour=0, minute=0, second=0), now.replace(hour=23, minute=59, second=59)
             

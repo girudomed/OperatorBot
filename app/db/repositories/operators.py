@@ -4,7 +4,7 @@
 Репозиторий для работы с операторами.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from datetime import datetime
 import json
 
@@ -150,6 +150,147 @@ class OperatorRepository:
             'accepted_calls': accepted,
             'missed_calls': missed
         }
+
+    async def get_call_scores(
+        self,
+        extension: str,
+        start_date: datetime,
+        end_date: datetime,
+    ) -> List[Dict[str, Any]]:
+        """
+        Получает данные звонков только из call_scores по extension.
+        Используем поля call_scores без call_history.
+        """
+        start_str = start_date.strftime('%Y-%m-%d %H:%M:%S')
+        end_str = end_date.strftime('%Y-%m-%d %H:%M:%S')
+
+        base_select = [
+            "cs.id",
+            "cs.history_id",
+            "cs.called_info",
+            "cs.caller_info",
+            "cs.score_date",
+            "cs.call_date",
+            "cs.talk_duration",
+            "cs.call_category",
+            "cs.call_score",
+            "cs.outcome",
+            "cs.refusal_reason",
+            "cs.refusal_group",
+            "cs.result",
+            "cs.transcript",
+            "cs.requested_service_name",
+            "cs.requested_doctor_name",
+            "cs.requested_doctor_speciality",
+            "cs.is_target",
+        ]
+        optional_columns = [
+            "objection_present",
+            "objection_handled",
+            "booking_attempted",
+            "next_step_clear",
+            "followup_captured",
+        ]
+
+        columns = await self._get_call_scores_columns()
+        if columns is None:
+            scores_query = self._build_call_scores_query(
+                base_select,
+                optional_columns,
+                available_columns=None,
+            )
+            try:
+                rows = await self.db_manager.execute_with_retry(
+                    scores_query,
+                    (extension, extension, start_str, end_str),
+                    fetchall=True,
+                )
+                return rows or []
+            except Exception as exc:
+                if "Unknown column" not in str(exc):
+                    raise
+                logger.warning(
+                    "[OPERATORS] Нет части колонок call_scores, выгружаем без них: %s",
+                    exc,
+                    exc_info=True,
+                )
+                logger.warning(
+                    "[OPERATORS] В call_scores отсутствуют колонки: %s",
+                    ", ".join(optional_columns),
+                )
+                columns = set()
+        else:
+            missing = [name for name in optional_columns if name not in columns]
+            if missing:
+                logger.warning(
+                    "[OPERATORS] В call_scores отсутствуют колонки: %s",
+                    ", ".join(missing),
+                )
+
+        scores_query = self._build_call_scores_query(
+            base_select,
+            optional_columns,
+            available_columns=columns,
+        )
+        rows = await self.db_manager.execute_with_retry(
+            scores_query,
+            (extension, extension, start_str, end_str),
+            fetchall=True,
+        )
+        return rows or []
+
+    async def _get_call_scores_columns(self) -> Optional[Set[str]]:
+        query = """
+            SELECT COLUMN_NAME
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'call_scores'
+        """
+        try:
+            rows = await self.db_manager.execute_with_retry(
+                query,
+                fetchall=True,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[OPERATORS] Не удалось получить список колонок call_scores: %s",
+                exc,
+                exc_info=True,
+            )
+            return None
+        columns: Set[str] = set()
+        for row in rows or []:
+            name = row.get("COLUMN_NAME") if isinstance(row, dict) else (row[0] if row else None)
+            if name:
+                columns.add(str(name))
+        return columns
+
+    @staticmethod
+    def _build_call_scores_query(
+        base_select: List[str],
+        optional_columns: List[str],
+        *,
+        available_columns: Optional[Set[str]],
+    ) -> str:
+        select_parts = list(base_select)
+        if available_columns is None:
+            select_parts.extend([f"cs.{name}" for name in optional_columns])
+        else:
+            for name in optional_columns:
+                if name in available_columns:
+                    select_parts.append(f"cs.{name}")
+                else:
+                    select_parts.append(f"NULL AS {name}")
+        select_clause = ",\n            ".join(select_parts)
+        return f\"\"\"
+        SELECT
+            {select_clause}
+        FROM mangoapi_db.call_scores cs
+        WHERE
+            cs.is_target = 1
+            AND (cs.called_info = %s OR cs.caller_info = %s)
+            AND cs.score_date BETWEEN %s AND %s
+        \"\"\"
 
     async def get_quality_summary(
         self,

@@ -39,6 +39,11 @@ HEADERS = (
     "Цель звонка",
     "Специальность врача",
     "Исход звонка",
+    "Возражение (0/1)",
+    "Возражение обработано (0/1)",
+    "Попытка записи (0/1)",
+    "Следующий шаг ясен (0/1)",
+    "Follow-up зафиксирован (0/1)",
     "Причина отказа",
     "Категория причины",
     "Причины отказа",
@@ -114,36 +119,89 @@ class CallExportService:
         start: datetime,
         end: datetime,
     ) -> List[Dict[str, Any]]:
-        query = """
-            SELECT
-                cs.history_id,
-                cs.call_date,
-                cs.called_info,
-                cs.requested_doctor_name,
-                cs.requested_service_name,
-                cs.caller_number,
-                cs.called_number,
-                cs.call_type,
-                cs.context_type,
-                cs.talk_duration,
-                cs.is_target,
-                cs.transcript,
-                cs.result,
-                cs.call_category,
-                cs.requested_doctor_speciality,
-                cs.outcome,
-                cs.refusal_reason,
-                rc.label AS refusal_category_label,
-                cs.refusal_category_code,
-                cs.refusal_group,
-                cs.utm_source_by_number,
-                cs.call_score,
-                cs.score_date
-            FROM call_scores cs
-            LEFT JOIN refusal_categories rc ON rc.id = cs.refusal_category_id
-            WHERE cs.call_date BETWEEN %s AND %s
-            ORDER BY cs.call_date ASC
-        """
+        base_select = [
+            "cs.history_id",
+            "cs.call_date",
+            "cs.called_info",
+            "cs.requested_doctor_name",
+            "cs.requested_service_name",
+            "cs.caller_number",
+            "cs.called_number",
+            "cs.call_type",
+            "cs.context_type",
+            "cs.talk_duration",
+            "cs.is_target",
+            "cs.transcript",
+            "cs.result",
+            "cs.call_category",
+            "cs.requested_doctor_speciality",
+            "cs.outcome",
+        ]
+        optional_columns = [
+            "objection_present",
+            "objection_handled",
+            "booking_attempted",
+            "next_step_clear",
+            "followup_captured",
+        ]
+        tail_select = [
+            "cs.refusal_reason",
+            "rc.label AS refusal_category_label",
+            "cs.refusal_category_code",
+            "cs.refusal_group",
+            "cs.utm_source_by_number",
+            "cs.call_score",
+            "cs.score_date",
+        ]
+
+        columns = await self._get_call_scores_columns()
+        if columns is None:
+            query = self._build_export_query(
+                base_select,
+                optional_columns,
+                tail_select,
+                available_columns=None,
+            )
+            try:
+                result = await self.db_manager.execute_with_retry(
+                    query,
+                    params=(start, end),
+                    fetchall=True,
+                    query_name="call_export.fetch_calls",
+                )
+                return [dict(row) for row in (result or [])]
+            except Exception as exc:
+                if "Unknown column" not in str(exc):
+                    raise
+                logger.warning(
+                    "[CALL_EXPORT] Missing columns, exporting without them: %s",
+                    exc,
+                    exc_info=True,
+                )
+                logger.warning(
+                    "[CALL_EXPORT] Отсутствующие колонки: %s",
+                    ", ".join(optional_columns),
+                )
+                query = self._build_export_query(
+                    base_select,
+                    optional_columns,
+                    tail_select,
+                    available_columns=set(),
+                )
+        else:
+            missing = [name for name in optional_columns if name not in columns]
+            if missing:
+                logger.warning(
+                    "[CALL_EXPORT] Отсутствующие колонки: %s",
+                    ", ".join(missing),
+                )
+            query = self._build_export_query(
+                base_select,
+                optional_columns,
+                tail_select,
+                available_columns=columns,
+            )
+
         result = await self.db_manager.execute_with_retry(
             query,
             params=(start, end),
@@ -151,6 +209,64 @@ class CallExportService:
             query_name="call_export.fetch_calls",
         )
         return [dict(row) for row in (result or [])]
+
+    async def _get_call_scores_columns(self) -> set[str] | None:
+        query = """
+            SELECT COLUMN_NAME
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'call_scores'
+        """
+        try:
+            rows = await self.db_manager.execute_with_retry(
+                query,
+                fetchall=True,
+                query_name="call_export.call_scores_columns",
+            )
+        except Exception as exc:
+            logger.warning(
+                "[CALL_EXPORT] Не удалось получить список колонок call_scores: %s",
+                exc,
+                exc_info=True,
+            )
+            return None
+        columns: set[str] = set()
+        for row in rows or []:
+            if isinstance(row, dict):
+                name = row.get("COLUMN_NAME")
+            else:
+                name = row[0] if row else None
+            if name:
+                columns.add(str(name))
+        return columns
+
+    @staticmethod
+    def _build_export_query(
+        base_select: List[str],
+        optional_columns: List[str],
+        tail_select: List[str],
+        *,
+        available_columns: set[str] | None,
+    ) -> str:
+        select_parts = list(base_select)
+        if available_columns is None:
+            select_parts.extend([f"cs.{name}" for name in optional_columns])
+        else:
+            for name in optional_columns:
+                if name in available_columns:
+                    select_parts.append(f"cs.{name}")
+                else:
+                    select_parts.append(f"NULL AS {name}")
+        select_parts.extend(tail_select)
+        select_clause = ",\n                ".join(select_parts)
+        return f\"\"\"
+            SELECT
+                {select_clause}
+            FROM call_scores cs
+            LEFT JOIN refusal_categories rc ON rc.id = cs.refusal_category_id
+            WHERE cs.call_date BETWEEN %s AND %s
+            ORDER BY cs.call_date ASC
+        \"\"\"
 
     def _resolve_period(self, days: int) -> Tuple[datetime, datetime]:
         now = datetime.now(MOSCOW_TZ)
@@ -198,6 +314,11 @@ class CallExportService:
                 goal,
                 self._normalize_label(row.get("requested_doctor_speciality")),
                 self._normalize_label(row.get("outcome")),
+                row.get("objection_present"),
+                row.get("objection_handled"),
+                row.get("booking_attempted"),
+                row.get("next_step_clear"),
+                row.get("followup_captured"),
                 self._normalize_label(row.get("refusal_reason")),
                 self._normalize_label(row.get("refusal_category_label")),
                 self._normalize_label(row.get("refusal_category_code")),
@@ -239,13 +360,18 @@ class CallExportService:
             14: 26,
             15: 26,
             16: 18,
-            17: 24,
+            17: 20,
             18: 24,
-            19: 18,
+            19: 20,
             20: 20,
-            21: 24,
-            22: 20,
-            23: 24,
+            21: 20,
+            22: 24,
+            23: 18,
+            24: 20,
+            25: 24,
+            26: 20,
+            27: 24,
+            28: 24,
         }
         for column, width in column_widths.items():
             ws.column_dimensions[get_column_letter(column)].width = width

@@ -509,13 +509,17 @@ async def main():
         await application.bot.delete_webhook(drop_pending_updates=True)
         logger.info("Webhook удален (если был), переключаемся на Polling.")
         
-        await application.updater.start_polling(
-            timeout=30,
-            read_timeout=70,
-            write_timeout=30,
-            connect_timeout=15,
-            pool_timeout=15,
-        )
+        try:
+            await application.updater.start_polling(
+                timeout=30,
+                read_timeout=70,
+                write_timeout=30,
+                connect_timeout=15,
+                pool_timeout=15,
+            )
+        except Exception:
+            logger.exception("Ошибка при запуске polling")
+            raise
         logger.info("Бот запущен и готов к работе (Polling).")
         await stop_event.wait()
 
@@ -536,9 +540,16 @@ async def main():
                     logger.warning("Updater stop skipped: %s", exc)
             if 'workers_started' in locals() and workers_started:
                 await stop_workers(application)
-        if getattr(application, "running", False):
-            await application.stop()
-            await application.shutdown()
+        if 'application' in locals():
+            if getattr(application, "running", False):
+                try:
+                    await application.stop()
+                except RuntimeError as exc:
+                    logger.warning("Application stop skipped: %s", exc)
+            try:
+                await application.shutdown()
+            except RuntimeError as exc:
+                logger.warning("Application shutdown skipped: %s", exc)
 
         if 'yandex_disk_cache' in locals() and yandex_disk_cache:
             await yandex_disk_cache.close()

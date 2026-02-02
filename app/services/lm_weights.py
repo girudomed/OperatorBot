@@ -8,6 +8,8 @@ from typing import Dict, Any, Optional
 import json
 import copy
 
+from app.logging_config import get_watchdog_logger
+
 
 DEFAULT_MATRIX: Dict[str, Any] = {
     "thresholds": {
@@ -22,6 +24,8 @@ DEFAULT_MATRIX: Dict[str, Any] = {
         "spam": {"multiplier": -2.0},
     },
 }
+
+logger = get_watchdog_logger(__name__)
 
 
 class ComplaintWeightMatrix:
@@ -39,17 +43,26 @@ class ComplaintWeightMatrix:
             with self.path.open("r", encoding="utf-8") as fp:
                 data = json.load(fp)
             self._deep_update(self._config, data)
-        except Exception:
-            # В случае ошибки используем дефолты.
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            # Ожидаемые проблемы чтения/парсинга — остаёмся на дефолтах.
+            logger.warning("LM weights: не удалось прочитать матрицу (%s)", exc)
             return
+        except Exception:
+            logger.exception("LM weights: непредвиденная ошибка чтения матрицы")
+            raise
 
     def save(self) -> None:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("w", encoding="utf-8") as fp:
                 json.dump(self._config, fp, ensure_ascii=False, indent=2)
+        except (OSError, TypeError, ValueError) as exc:
+            # Ожидаемые проблемы записи/сериализации — не валим приложение.
+            logger.warning("LM weights: не удалось сохранить матрицу (%s)", exc)
+            return
         except Exception:
-            pass
+            logger.exception("LM weights: непредвиденная ошибка сохранения матрицы")
+            raise
 
     @property
     def thresholds(self) -> Dict[str, float]:

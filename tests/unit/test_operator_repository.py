@@ -65,3 +65,26 @@ async def test_get_quality_summary_queries_are_safe():
 
     assert result["total_calls"] == 0
     assert len(db.calls) == 2
+
+
+def test_build_call_scores_query_adds_null_for_missing_columns():
+    base_select = ["cs.id", "cs.history_id"]
+    optional_columns = ["objection_present", "booking_attempted"]
+    query = OperatorRepository._build_call_scores_query(
+        base_select,
+        optional_columns,
+        available_columns={"objection_present"},
+    )
+    assert "cs.objection_present" in query
+    assert "NULL AS booking_attempted" in query
+
+
+def test_build_call_scores_query_keeps_optional_when_unknown():
+    base_select = ["cs.id"]
+    optional_columns = ["objection_present"]
+    query = OperatorRepository._build_call_scores_query(
+        base_select,
+        optional_columns,
+        available_columns=None,
+    )
+    assert "cs.objection_present" in query
