@@ -43,6 +43,7 @@ from app.telegram.ui.admin.screens.dashboard import render_dashboard_screen
 from app.telegram.ui.admin.screens.alerts import render_alerts_screen
 from app.telegram.ui.admin.screens.export import render_export_screen
 from app.telegram.ui.admin.screens.manual import render_manual_screen
+from app.telegram.handlers.manual import _load_video_file_id
 from app.telegram.ui.admin.screens.dangerous_ops import (
     render_dangerous_ops_screen,
     render_critical_confirmation,
@@ -396,22 +397,20 @@ class AdminPanelHandler:
         update: Update,
         context: ContextTypes.DEFAULT_TYPE,
     ) -> None:
-        handler = context.application.bot_data.get("manual_text_handler")
-        if handler:
-            await handler(update, context)
-        else:
-            await self._reply_feature_unavailable(update, "Обучение временно недоступно.")
-            return
-
         user = update.effective_user
         allow_video_upload = bool(user and self.permissions.is_dev_admin(user.id, user.username))
         allow_video_delete = False
         video_status = None
+        video_id = None
         if allow_video_upload:
             has_video = context.application.bot_data.get("manual_video_has_file")
             if callable(has_video) and has_video():
                 allow_video_delete = True
                 video_status = "установлено"
+                try:
+                    video_id = _load_video_file_id()
+                except Exception:
+                    video_id = None
             else:
                 video_status = "нет"
         screen = render_manual_screen(
@@ -420,6 +419,14 @@ class AdminPanelHandler:
             video_status=video_status,
         )
         await self._render_screen(update, screen)
+        if video_id:
+            message = update.effective_message
+            if message:
+                await context.bot.send_video(
+                    chat_id=message.chat_id,
+                    video=video_id,
+                    message_thread_id=getattr(message, "message_thread_id", None),
+                )
 
     async def _start_manual_video_upload(
         self,
