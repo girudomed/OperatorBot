@@ -180,8 +180,6 @@ class _ReportHandler:
             describe_user(user),
             query.data,
         )
-        if self._rate_limited(update, context, "report_callback"):
-            return
 
         try:
             await query.answer()
@@ -205,6 +203,8 @@ class _ReportHandler:
 
         sub_action = args[0]
         params = args[1:]
+        if sub_action == "select" and self._rate_limited(update, context, f"report_callback:{sub_action}"):
+            return
         logger.info(
             "[REPORTS] Действие=%s params=%s user=%s",
             sub_action,
