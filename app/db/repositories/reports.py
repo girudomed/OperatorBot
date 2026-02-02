@@ -85,27 +85,27 @@ class ReportRepository:
                 %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
                 %s, %s
-            )
+            ) AS new
             ON DUPLICATE KEY UPDATE
-                name = COALESCE(VALUES(name), name),
-                report_text = COALESCE(VALUES(report_text), report_text),
-                total_calls = VALUES(total_calls),
-                accepted_calls = VALUES(accepted_calls),
-                booked_services = VALUES(booked_services),
-                conversion_rate = VALUES(conversion_rate),
-                avg_call_rating = VALUES(avg_call_rating),
-                total_cancellations = VALUES(total_cancellations),
-                cancellation_rate = VALUES(cancellation_rate),
-                total_conversation_time = VALUES(total_conversation_time),
-                avg_conversation_time = VALUES(avg_conversation_time),
-                avg_spam_time = VALUES(avg_spam_time),
-                total_spam_time = VALUES(total_spam_time),
-                avg_navigation_time = VALUES(avg_navigation_time),
-                complaint_calls = VALUES(complaint_calls),
-                complaint_rating = VALUES(complaint_rating),
-                missed_calls = VALUES(missed_calls),
-                missed_rate = VALUES(missed_rate),
-                total_leads = VALUES(total_leads)
+                name = COALESCE(new.name, name),
+                report_text = COALESCE(new.report_text, report_text),
+                total_calls = new.total_calls,
+                accepted_calls = new.accepted_calls,
+                booked_services = new.booked_services,
+                conversion_rate = new.conversion_rate,
+                avg_call_rating = new.avg_call_rating,
+                total_cancellations = new.total_cancellations,
+                cancellation_rate = new.cancellation_rate,
+                total_conversation_time = new.total_conversation_time,
+                avg_conversation_time = new.avg_conversation_time,
+                avg_spam_time = new.avg_spam_time,
+                total_spam_time = new.total_spam_time,
+                avg_navigation_time = new.avg_navigation_time,
+                complaint_calls = new.complaint_calls,
+                complaint_rating = new.complaint_rating,
+                missed_calls = new.missed_calls,
+                missed_rate = new.missed_rate,
+                total_leads = new.total_leads
         """
 
         params = (

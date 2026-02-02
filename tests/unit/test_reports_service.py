@@ -28,7 +28,7 @@ async def test_generate_report_no_data_saves_empty_status():
     assert "Нет данных" in result
     service.report_repo_v2.save_report.assert_called_once()
     _, kwargs = service.report_repo_v2.save_report.call_args
-    assert kwargs["status"] == "empty"
+    assert kwargs["status"] == "error"
     assert kwargs["error_text"] == "no_call_scores"
 
 

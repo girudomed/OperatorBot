@@ -1308,9 +1308,10 @@ class LMRepository:
         query = """
             INSERT INTO lm_calc_state (lm_version, calc_profile, last_score_date, last_id)
             VALUES (%s, %s, %s, %s)
+            AS new
             ON DUPLICATE KEY UPDATE
-                last_score_date = VALUES(last_score_date),
-                last_id = VALUES(last_id),
+                last_score_date = new.last_score_date,
+                last_id = new.last_id,
                 updated_at = CURRENT_TIMESTAMP
         """
         await self.db_manager.execute_with_retry(

@@ -17,6 +17,16 @@ class ReportsV2Repository:
     def __init__(self, db_manager: DatabaseManager):
         self.db_manager = db_manager
 
+    @staticmethod
+    def _normalize_status(value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized == "ready":
+            return "ready"
+        if normalized == "error":
+            return "error"
+        logger.warning("reports_v2: неизвестный status=%r, используем 'error'", value)
+        return "error"
+
     async def save_report(
         self,
         *,
@@ -35,6 +45,7 @@ class ReportsV2Repository:
         generated_at,
         error_text: Optional[str],
     ) -> bool:
+        status = self._normalize_status(status)
         query = """
             INSERT INTO reports_v2 (
                 user_id,
@@ -53,17 +64,17 @@ class ReportsV2Repository:
                 error_text
             ) VALUES (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-            )
+            ) AS new
             ON DUPLICATE KEY UPDATE
-                operator_name = VALUES(operator_name),
-                period_label = VALUES(period_label),
-                scoring_version = VALUES(scoring_version),
-                filters_json = VALUES(filters_json),
-                metrics_json = VALUES(metrics_json),
-                report_text = VALUES(report_text),
-                status = VALUES(status),
-                generated_at = VALUES(generated_at),
-                error_text = VALUES(error_text)
+                operator_name = new.operator_name,
+                period_label = new.period_label,
+                scoring_version = new.scoring_version,
+                filters_json = new.filters_json,
+                metrics_json = new.metrics_json,
+                report_text = new.report_text,
+                status = new.status,
+                generated_at = new.generated_at,
+                error_text = new.error_text
         """
         params = (
             user_id,

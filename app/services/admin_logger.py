@@ -25,9 +25,28 @@ class AdminActionLogger:
     ВАЖНО: В admin_action_logs.actor_id и target_id записываем
     UsersTelegaBot.id (PK), а не user_id (Telegram ID)!
     """
+    MAX_PAYLOAD_CHARS = 8000
     
     def __init__(self, db_manager: DatabaseManager):
         self.db = db_manager
+
+    def _serialize_payload(self, payload: Optional[Dict[str, Any]]) -> Optional[str]:
+        if not payload:
+            return None
+        try:
+            raw = json.dumps(payload, ensure_ascii=False)
+        except Exception as exc:
+            logger.warning("[ADMIN_LOG] Payload JSON serialization failed: %s", exc, exc_info=True)
+            fallback = {"_payload_error": str(exc)}
+            return json.dumps(fallback, ensure_ascii=False)
+        if len(raw) <= self.MAX_PAYLOAD_CHARS:
+            return raw
+        trimmed = {
+            "_payload_truncated": True,
+            "_payload_len": len(raw),
+            "payload_preview": raw[: self.MAX_PAYLOAD_CHARS],
+        }
+        return json.dumps(trimmed, ensure_ascii=False)
     
     async def _get_user_pk_by_telegram_id(self, telegram_id: int) -> Optional[int]:
         """
@@ -122,7 +141,7 @@ class AdminActionLogger:
                 VALUES (%s, %s, %s, %s, NOW())
             """
             
-            payload_json = json.dumps(payload, ensure_ascii=False) if payload else None
+            payload_json = self._serialize_payload(payload)
             
             await self.db.execute_with_retry(
                 query,

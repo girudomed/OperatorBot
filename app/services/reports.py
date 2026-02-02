@@ -133,7 +133,7 @@ class ReportService:
                     filters={"user_id": user_id, "period": normalized_period, "date_range": date_range, "extension": resolved_extension},
                     metrics={},
                     cache_key=v2_cache_key,
-                    status="empty",
+                    status="error",
                     error_text="no_call_scores",
                 )
                 return f"Нет данных для оператора {name} за указанный период."

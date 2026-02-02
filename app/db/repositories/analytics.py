@@ -586,9 +586,10 @@ class AnalyticsRepository:
             INSERT INTO operator_recommendations 
                 (operator_name, report_date, recommendations, call_samples_analyzed, generated_at)
             VALUES (%s, %s, %s, %s, NOW())
+            AS new
             ON DUPLICATE KEY UPDATE
-                recommendations = VALUES(recommendations),
-                call_samples_analyzed = VALUES(call_samples_analyzed),
+                recommendations = new.recommendations,
+                call_samples_analyzed = new.call_samples_analyzed,
                 generated_at = NOW()
             """
             
