@@ -418,15 +418,25 @@ class AdminPanelHandler:
             allow_video_delete=allow_video_delete,
             video_status=video_status,
         )
-        await self._render_screen(update, screen)
         if video_id:
             message = update.effective_message
             if message:
                 await context.bot.send_video(
                     chat_id=message.chat_id,
                     video=video_id,
+                    caption=screen.text,
+                    parse_mode=screen.parse_mode,
+                    reply_markup=InlineKeyboardMarkup(screen.keyboard),
                     message_thread_id=getattr(message, "message_thread_id", None),
                 )
+                query = update.callback_query
+                if query and query.message:
+                    try:
+                        await query.message.delete()
+                    except Exception:
+                        logger.debug("Не удалось удалить сообщение перед отправкой видео", exc_info=True)
+                return
+        await self._render_screen(update, screen)
 
     async def _start_manual_video_upload(
         self,

@@ -176,7 +176,7 @@ def main_menu_keyboard(
     ]
     # Всегда добавляем явную кнопку "◀️ Назад" в админских inline-меню
     # чтобы гарантировать единообразную навигацию назад через AdminCB.BACK.
-    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))])
+    keyboard.append([InlineKeyboardButton("◀️ В админ-панель", callback_data=AdminCB.create(AdminCB.DASHBOARD))])
     return keyboard
 
 
