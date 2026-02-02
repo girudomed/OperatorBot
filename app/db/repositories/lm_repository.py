@@ -102,6 +102,7 @@ class LMRepository:
         if value_numeric is None and value_label is None and value_json is None:
             raise ValueError(f"At least one value must be provided for metric {metric_code}")
         
+        value_numeric = self._sanitize_value_numeric(value_numeric, metric_code, history_id)
         # Convert value_json to JSON string if provided
         value_json_str = json.dumps(value_json) if value_json else None
         
@@ -177,6 +178,31 @@ class LMRepository:
                 return row['id']
         
         raise RuntimeError(f"Failed to save LM value for {metric_code}")
+
+    @staticmethod
+    def _sanitize_value_numeric(
+        value_numeric: Optional[float],
+        metric_code: str,
+        history_id: int,
+    ) -> Optional[float]:
+        if value_numeric is None:
+            return None
+        try:
+            value = float(value_numeric)
+        except (TypeError, ValueError):
+            return None
+        if value != value or value in (float("inf"), float("-inf")):
+            return None
+        # DECIMAL(10,4): max 999999.9999
+        if abs(value) > 999999.9999:
+            logger.warning(
+                "LM value_numeric out of range for %s (history_id=%s): %s",
+                metric_code,
+                history_id,
+                value,
+            )
+            value = max(min(value, 999999.9999), -999999.9999)
+        return round(value, 4)
 
     async def save_lm_values_batch(
         self,

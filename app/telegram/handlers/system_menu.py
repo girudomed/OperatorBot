@@ -319,13 +319,26 @@ class SystemMenuHandler:
                     if not include_current:
                         continue
                     if level_re.search(normalized):
+                        if "admin_action_logs" in normalized or "system_action" in normalized:
+                            continue
                         bucket.append(f"[{path.name}] {normalized}")
                     elif include_tracebacks and tb_keyword in lower:
                         prefix = f"{last_stamp} | " if last_stamp and not ts_match else ""
                         bucket.append(f"[{path.name}] {prefix}{normalized}")
             except Exception as exc:
                 logger.warning("Не удалось прочитать лог %s: %s", path, exc)
-        return bucket
+        # Убираем дубликаты (одинаковые строки) с сохранением порядка.
+        deduped = deque(maxlen=limit)
+        seen = set()
+        for line in bucket:
+            normalized = line
+            if line.startswith("[") and "] " in line:
+                normalized = line.split("] ", 1)[1]
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            deduped.append(line)
+        return deduped
 
     async def _send_logs_file(
         self,
