@@ -281,18 +281,22 @@ class _ReportHandler:
             )
             if not self._acquire_busy(context, query):
                 return
-            try:
-                await self._send_report_for_user(
-                    bot=context.bot,
-                    chat_id=query.message.chat_id if query.message else user.id,
-                    message_thread_id=query.message.message_thread_id if query.message else None,
-                    target_user_id=target_user_id,
-                    header="Генерация отчёта…",
-                    period=period,
-                    date_range=date_range,
-                )
-            finally:
-                self._release_busy(context)
+            async def _run_report_task():
+                try:
+                    await self._send_report_for_user(
+                        bot=context.bot,
+                        chat_id=query.message.chat_id if query.message else user.id,
+                        message_thread_id=query.message.message_thread_id if query.message else None,
+                        target_user_id=target_user_id,
+                        header="Генерация отчёта…",
+                        period=period,
+                        date_range=date_range,
+                    )
+                finally:
+                    self._release_busy(context)
+
+            context.application.create_task(_run_report_task())
+            return
 
     def _rate_limited(self, update: Update, context: CallbackContext, key: str) -> bool:
         user = update.effective_user

@@ -5,6 +5,7 @@
 """
 
 from typing import Any, Dict, List, Optional, Tuple
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 import json
@@ -188,21 +189,23 @@ class LMRepository:
         if value_numeric is None:
             return None
         try:
-            value = float(value_numeric)
-        except (TypeError, ValueError):
+            value = Decimal(str(value_numeric))
+        except (TypeError, ValueError, InvalidOperation):
             return None
-        if value != value or value in (float("inf"), float("-inf")):
+        if value.is_nan() or value == Decimal("Infinity") or value == Decimal("-Infinity"):
             return None
         # DECIMAL(10,4): max 999999.9999
-        if abs(value) > 999999.9999:
+        max_value = Decimal("999999.9999")
+        if abs(value) > max_value:
             logger.warning(
                 "LM value_numeric out of range for %s (history_id=%s): %s",
                 metric_code,
                 history_id,
                 value,
             )
-            value = max(min(value, 999999.9999), -999999.9999)
-        return round(value, 4)
+            value = max(min(value, max_value), -max_value)
+        value = value.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+        return float(value)
 
     async def save_lm_values_batch(
         self,

@@ -23,6 +23,26 @@ class TestLMRepository:
     def lm_repo(self, mock_db_manager):
         return LMRepository(mock_db_manager)
 
+    def test_sanitize_value_numeric(self):
+        """Test value_numeric sanitization rules."""
+        sanitize = LMRepository._sanitize_value_numeric
+        metric_code = "test_metric"
+        history_id = 1
+
+        assert sanitize(None, metric_code, history_id) is None
+        assert sanitize("bad", metric_code, history_id) is None
+        assert sanitize(float("nan"), metric_code, history_id) is None
+        assert sanitize(float("inf"), metric_code, history_id) is None
+        assert sanitize(float("-inf"), metric_code, history_id) is None
+
+        # Rounds to 4 decimals
+        assert sanitize(1.234567, metric_code, history_id) == 1.2346
+        assert sanitize("2.34565", metric_code, history_id) == 2.3457
+
+        # Clamp to DECIMAL(10,4) range
+        assert sanitize(1_000_000, metric_code, history_id) == 999999.9999
+        assert sanitize(-1_000_000, metric_code, history_id) == -999999.9999
+
     @pytest.mark.asyncio
     async def test_save_lm_value(self, lm_repo, mock_db_manager):
         """Test saving a single LM value."""

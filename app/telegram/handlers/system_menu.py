@@ -128,6 +128,11 @@ class SystemMenuHandler:
         simple_reply_actions = {"status", "errors", "logs", "clear_cache"}
 
         try:
+            if action in {"logs", "errors", "check", "status"}:
+                try:
+                    await query.answer("⏳ Выполняю…", show_alert=False)
+                except BadRequest:
+                    pass
             if action == "status":
                 text = await self._collect_status()
             elif action == "errors":
