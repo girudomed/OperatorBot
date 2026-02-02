@@ -541,11 +541,10 @@ async def main():
             if 'workers_started' in locals() and workers_started:
                 await stop_workers(application)
         if 'application' in locals():
-            if getattr(application, "running", False):
-                try:
-                    await application.stop()
-                except RuntimeError as exc:
-                    logger.warning("Application stop skipped: %s", exc)
+            try:
+                await application.stop()
+            except RuntimeError as exc:
+                logger.warning("Application stop skipped: %s", exc)
             try:
                 await application.shutdown()
             except RuntimeError as exc:

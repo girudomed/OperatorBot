@@ -99,6 +99,7 @@ DB_CONFIG: Dict[str, Any] = {
     "password": os.getenv("DB_PASSWORD"),
     "db": os.getenv("DB_NAME"),
     "port": int(os.getenv("DB_PORT", "3306")),
+    "charset": os.getenv("DB_CHARSET", "utf8mb4"),
     "autocommit": _get_bool(os.getenv("DB_AUTOCOMMIT", "true"), True),
     "minsize": int(os.getenv("DB_POOL_MIN", "1")),
     "maxsize": int(os.getenv("DB_POOL_MAX", "50")),

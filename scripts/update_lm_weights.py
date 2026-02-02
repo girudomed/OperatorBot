@@ -5,6 +5,7 @@
 import argparse
 import asyncio
 import json
+import sys
 from typing import Any, Dict
 
 from app.db.manager import DatabaseManager
@@ -35,7 +36,8 @@ def main() -> None:
     args = parser.parse_args()
 
     result = asyncio.run(run_optimizer(days=args.days, limit=args.limit))
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    sys.__stdout__.write(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+    sys.__stdout__.flush()
 
 
 if __name__ == "__main__":

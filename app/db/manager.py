@@ -112,6 +112,8 @@ class DatabaseManager:
                         user=DB_CONFIG["user"],
                         password=DB_CONFIG["password"],
                         db=DB_CONFIG["db"],
+                        charset=DB_CONFIG.get("charset", "utf8mb4"),
+                        use_unicode=True,
                         autocommit=DB_CONFIG.get("autocommit", True),
                         minsize=DB_CONFIG.get("minsize", 1),
                         maxsize=DB_CONFIG.get("maxsize", 50),
