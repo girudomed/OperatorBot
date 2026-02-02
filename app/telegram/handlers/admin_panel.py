@@ -42,6 +42,7 @@ from app.config import DEV_ADMIN_ID
 from app.telegram.ui.admin.screens.dashboard import render_dashboard_screen
 from app.telegram.ui.admin.screens.alerts import render_alerts_screen
 from app.telegram.ui.admin.screens.export import render_export_screen
+from app.telegram.ui.admin.screens.manual import render_manual_screen
 from app.telegram.ui.admin.screens.dangerous_ops import (
     render_dangerous_ops_screen,
     render_critical_confirmation,
@@ -126,9 +127,6 @@ class AdminPanelHandler:
         user = update.effective_user
         allow_commands = False
         allow_yandex_tools = False
-        allow_video_upload = False
-        allow_video_delete = False
-        video_status = None
         try:
             allow_commands = await self.permissions.has_permission(
                 user.id,
@@ -140,14 +138,6 @@ class AdminPanelHandler:
                 "debug",
                 user.username,
             )
-            allow_video_upload = bool(user and user.id == DEV_ADMIN_ID)
-            if allow_video_upload:
-                has_video = context.application.bot_data.get("manual_video_has_file")
-                if callable(has_video) and has_video():
-                    allow_video_delete = True
-                    video_status = "установлено"
-                else:
-                    video_status = "нет"
         except Exception:
             logger.warning("Не удалось определить права пользователя %s", describe_user(user))
 
@@ -157,9 +147,9 @@ class AdminPanelHandler:
         screen = render_main_menu_screen(
             allow_commands,
             allow_yandex_tools,
-            allow_video_upload,
-            allow_video_delete,
-            video_status,
+            False,
+            False,
+            None,
         )
         await self._render_screen(update, screen)
         logger.debug(
@@ -406,11 +396,23 @@ class AdminPanelHandler:
         update: Update,
         context: ContextTypes.DEFAULT_TYPE,
     ) -> None:
-        handler = context.application.bot_data.get("manual_text_handler")
-        if handler:
-            await handler(update, context)
-            return
-        await self._reply_feature_unavailable(update, "Обучение временно недоступно.")
+        user = update.effective_user
+        allow_video_upload = bool(user and self.permissions.is_dev_admin(user.id, user.username))
+        allow_video_delete = False
+        video_status = None
+        if allow_video_upload:
+            has_video = context.application.bot_data.get("manual_video_has_file")
+            if callable(has_video) and has_video():
+                allow_video_delete = True
+                video_status = "установлено"
+            else:
+                video_status = "нет"
+        screen = render_manual_screen(
+            allow_video_upload=allow_video_upload,
+            allow_video_delete=allow_video_delete,
+            video_status=video_status,
+        )
+        await self._render_screen(update, screen)
 
     async def _start_manual_video_upload(
         self,

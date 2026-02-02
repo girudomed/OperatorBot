@@ -174,6 +174,18 @@ def main_menu_keyboard(
             )
         ],
     ]
+    # Всегда добавляем явную кнопку "◀️ Назад" в админских inline-меню
+    # чтобы гарантировать единообразную навигацию назад через AdminCB.BACK.
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))])
+    return keyboard
+
+
+def manual_keyboard(
+    *,
+    allow_video_upload: bool,
+    allow_video_delete: bool,
+) -> InlineKeyboard:
+    keyboard = []
     if allow_video_upload:
         keyboard.append(
             [
@@ -192,8 +204,6 @@ def main_menu_keyboard(
                 )
             ]
         )
-    # Всегда добавляем явную кнопку "◀️ Назад" в админских inline-меню
-    # чтобы гарантировать единообразную навигацию назад через AdminCB.BACK.
     keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data=AdminCB.create(AdminCB.BACK))])
     return keyboard
 

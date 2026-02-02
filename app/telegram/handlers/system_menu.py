@@ -59,7 +59,7 @@ class SystemMenuHandler:
     ALLOWED_ROLES = {"founder", "head_of_registry"}
     MAX_LOG_LINES = 40
     MAX_LOG_BYTES = 5 * 1024 * 1024
-    ERROR_LOOKBACK_DAYS = 10
+    ERROR_LOOKBACK_DAYS = 7
     TIMESTAMP_FMT = "%Y-%m-%d %H:%M:%S"
 
     def __init__(
@@ -240,6 +240,7 @@ class SystemMenuHandler:
         if main_candidate:
             try:
                 tail_text = self._read_log_tail_text(main_candidate, self.MAX_LOG_BYTES)
+                tail_text = self._filter_recent_log_text(tail_text, self.ERROR_LOOKBACK_DAYS)
                 if not tail_text.strip():
                     logger.info("Лог %s пустой, пропускаем", main_candidate)
                     tail_text = None
@@ -256,6 +257,7 @@ class SystemMenuHandler:
         for err_path in error_candidates:
             try:
                 tail_text = self._read_log_tail_text(err_path, self.MAX_LOG_BYTES)
+                tail_text = self._filter_recent_log_text(tail_text, self.ERROR_LOOKBACK_DAYS)
                 if not tail_text.strip():
                     logger.info("Лог %s пустой, пропускаем", err_path)
                     continue
@@ -347,6 +349,23 @@ class SystemMenuHandler:
         if len(data) > max_bytes:
             data = data[-max_bytes:]
         return self._decode_log_bytes(data)
+
+    def _filter_recent_log_text(self, text: str, lookback_days: int) -> str:
+        cutoff = datetime.now(ZoneInfo("Europe/Moscow")) - timedelta(days=lookback_days)
+        cutoff_naive = cutoff.replace(tzinfo=None)
+        kept_lines = []
+        include_current = True
+        for line in text.splitlines():
+            if not line:
+                continue
+            ts_match = self.TIMESTAMP_RE.match(line)
+            if ts_match:
+                include_current = self._is_recent_timestamp(ts_match.group(0), cutoff_naive)
+                if not include_current:
+                    continue
+            if include_current:
+                kept_lines.append(line)
+        return "\n".join(kept_lines)
 
     def _decode_log_bytes(self, data: bytes) -> str:
         for encoding in ("utf-8", "cp1251", "latin-1"):
