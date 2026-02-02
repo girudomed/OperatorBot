@@ -270,7 +270,7 @@ class SystemMenuHandler:
                 logger.warning("Не удалось прочитать лог %s: %s", err_path, exc)
 
         if not sent_files:
-            return "📄 Логи недоступны (файлы не найдены)."
+            return f"📄 За последние {self.ERROR_LOOKBACK_DAYS} дней логов не найдено."
         return f"📄 Отправлено файлов логов: {sent_files}."
 
     def _grep_logs(
@@ -358,7 +358,7 @@ class SystemMenuHandler:
         for line in text.splitlines():
             if not line:
                 continue
-            ts_match = self.TIMESTAMP_RE.match(line)
+            ts_match = self.TIMESTAMP_RE.match(line.lstrip())
             if ts_match:
                 include_current = self._is_recent_timestamp(ts_match.group(0), cutoff_naive)
                 if not include_current:

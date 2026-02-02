@@ -9,7 +9,7 @@ from pathlib import Path
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-from app.config import DEV_ADMIN_ID
+from app.telegram.middlewares.permissions import PermissionsManager
 from app.logging_config import get_watchdog_logger
 from app.telegram.utils.logging import describe_user
 from app.telegram.utils.state import MANUAL_VIDEO_KEY
@@ -85,7 +85,8 @@ async def _send_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def _start_video_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-    if not user or user.id != DEV_ADMIN_ID:
+    permissions = PermissionsManager(context.application.bot_data.get("db_manager"))
+    if not user or not permissions.is_dev_admin(user.id, user.username):
         target = update.effective_message
         if target:
             await target.reply_text("Недостаточно прав.")
@@ -108,7 +109,8 @@ async def _handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYP
     if not context.user_data.get(MANUAL_VIDEO_KEY):
         return
     context.user_data.pop(MANUAL_VIDEO_KEY, None)
-    if user.id != DEV_ADMIN_ID:
+    permissions = PermissionsManager(context.application.bot_data.get("db_manager"))
+    if not permissions.is_dev_admin(user.id, user.username):
         await message.reply_text("Недостаточно прав.")
         return
     if not message.video:
@@ -126,7 +128,8 @@ async def _handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYP
 async def _delete_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     message = update.effective_message
-    if not user or user.id != DEV_ADMIN_ID:
+    permissions = PermissionsManager(context.application.bot_data.get("db_manager"))
+    if not user or not permissions.is_dev_admin(user.id, user.username):
         if message:
             await message.reply_text("Недостаточно прав.")
         elif update.callback_query:

@@ -248,6 +248,10 @@ class _ReportHandler:
             return
 
         if sub_action == "select":
+            try:
+                await query.answer("Готовлю отчёт…", show_alert=False)
+            except BadRequest:
+                pass
             if len(params) < 2:
                 try:
                     await query.answer("Некорректные данные", show_alert=True)

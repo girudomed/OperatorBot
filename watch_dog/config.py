@@ -6,6 +6,7 @@ import logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+LOG_CAPTURE_STDOUT = os.getenv("LOG_CAPTURE_STDOUT", "false").lower() in ("1", "true", "yes", "on")
 
 # Пути к логам (по умолчанию вне рабочего каталога контейнера)
 LOG_DIR = os.getenv("LOG_DIR", "/var/log/operabot")

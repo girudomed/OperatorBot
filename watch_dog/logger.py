@@ -9,9 +9,35 @@ from logging.handlers import RotatingFileHandler
 from .config import (
     LOG_DIR, MAIN_LOG_FILE, ERROR_LOG_FILE, 
     LOG_LEVEL, LOG_FORMAT, LOG_DATE_FORMAT, 
-    MAX_BYTES, BACKUP_COUNT
+    MAX_BYTES, BACKUP_COUNT, LOG_CAPTURE_STDOUT
 )
 from .filters import SensitiveDataFilter
+
+
+class _StreamToLogger:
+    def __init__(self, logger: logging.Logger, level: int, fallback_stream):
+        self.logger = logger
+        self.level = level
+        self.fallback_stream = fallback_stream
+
+    def write(self, buf):
+        if not buf:
+            return
+        text = buf.rstrip()
+        if text:
+            self.logger.log(self.level, text)
+        if self.fallback_stream:
+            try:
+                self.fallback_stream.write(buf)
+            except Exception:
+                pass
+
+    def flush(self):
+        if self.fallback_stream:
+            try:
+                self.fallback_stream.flush()
+            except Exception:
+                pass
 
 def setup_watchdog():
     """
@@ -84,6 +110,10 @@ def setup_watchdog():
     error_handler.setLevel(logging.ERROR)
     error_handler.addFilter(sensitive_filter)
     root_logger.addHandler(error_handler)
+
+    if LOG_CAPTURE_STDOUT:
+        sys.stdout = _StreamToLogger(logging.getLogger("stdout"), logging.INFO, sys.__stdout__)
+        sys.stderr = _StreamToLogger(logging.getLogger("stderr"), logging.ERROR, sys.__stderr__)
     
     # Отключаем шумные библиотеки
     logging.getLogger("httpx").setLevel(logging.WARNING)
