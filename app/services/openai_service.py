@@ -30,8 +30,8 @@ class OpenAIService:
         self.completion_options = OPENAI_COMPLETION_OPTIONS
 
     async def generate_recommendations(
-        self, 
-        prompt: str, 
+        self,
+        prompt: str,
         max_tokens: int = 1500,
         max_retries: int = 3
     ) -> str:
@@ -50,6 +50,15 @@ class OpenAIService:
                     raise ValueError("Пустой ответ от OpenAI")
                 
                 content = response.choices[0].message.content
+                if content:
+                    preview = content[:800].replace("\n", " ")
+                    logger.info(
+                        "OpenAI response received (chars=%s, preview='%s')",
+                        len(content),
+                        preview,
+                    )
+                else:
+                    logger.info("OpenAI response received with empty content")
                 return content.strip() if content else ""
 
             except OpenAIError as e:
@@ -59,6 +68,8 @@ class OpenAIService:
                     max_retries,
                     e,
                 )
+                if attempt == max_retries - 1:
+                    return f"Ошибка OpenAI: {e}"
                 await asyncio.sleep(2 ** attempt)
             except (asyncio.TimeoutError,) as exc:
                 # Временные сетевые/таймаут ошибки — повторяем попытку с экспоненциальной задержкой.
@@ -68,6 +79,8 @@ class OpenAIService:
                     max_retries,
                     exc,
                 )
+                if attempt == max_retries - 1:
+                    return f"Ошибка OpenAI: timeout ({exc})"
                 await asyncio.sleep(2 ** attempt)
             except Exception as exc:
                 # Непредвиденные ошибки логируем и пробрасываем выше — не скрываем баги.

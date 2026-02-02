@@ -38,9 +38,26 @@ class ReportService:
         extension: Optional[str] = None,
     ) -> str:
         try:
+            if not isinstance(user_id, int):
+                logger.warning("report: некорректный user_id=%r", user_id)
+                raise ValueError("user_id must be int")
+            if period is not None and not isinstance(period, str):
+                logger.warning("report: некорректный period=%r, используем daily", period)
+                period = "daily"
+            if date_range is not None and not isinstance(date_range, str):
+                logger.warning("report: некорректный date_range=%r, игнорируем", date_range)
+                date_range = None
+
             # 1. Resolve Dates
             start_date, end_date = self._resolve_dates(period, date_range)
-            logger.info(f"Генерация отчета для {user_id} за {start_date} - {end_date}")
+            logger.info(
+                "Генерация отчета для user_id=%s period=%s date_range=%s start=%s end=%s",
+                user_id,
+                period,
+                date_range,
+                start_date,
+                end_date,
+            )
             normalized_period = self._normalize_period(period)
             date_from = start_date if isinstance(start_date, datetime.datetime) else datetime.datetime.combine(start_date, datetime.time.min)
             date_to = end_date if isinstance(end_date, datetime.datetime) else datetime.datetime.combine(end_date, datetime.time.max)
@@ -48,7 +65,11 @@ class ReportService:
             # legacy reports cache intentionally removed
 
             # 2. Get Operator Info
-            resolved_extension = extension or await self.repo.get_extension_by_user_id(user_id)
+            try:
+                resolved_extension = extension or await self.repo.get_extension_by_user_id(user_id)
+            except Exception:
+                logger.exception("report: ошибка получения extension для user_id=%s", user_id)
+                raise
             if not resolved_extension:
                 logger.warning(
                     "report: не найден extension для пользователя %s",
@@ -56,7 +77,11 @@ class ReportService:
                 )
                 return "Ошибка: Не удалось найти extension оператора."
             
-            name = await self.repo.get_name_by_extension(resolved_extension)
+            try:
+                name = await self.repo.get_name_by_extension(resolved_extension)
+            except Exception:
+                logger.exception("report: ошибка получения имени по extension=%s", resolved_extension)
+                raise
 
             # 2.1 Try v2 cache after resolving operator_key
             v2_cache_key = self._build_report_cache_key(
@@ -67,7 +92,11 @@ class ReportService:
                 filters={"user_id": user_id, "period": normalized_period, "date_range": date_range, "extension": resolved_extension},
                 scoring_version=self.SCORING_VERSION,
             )
-            existing_v2 = await self.report_repo_v2.get_ready_report_by_cache_key(v2_cache_key)
+            try:
+                existing_v2 = await self.report_repo_v2.get_ready_report_by_cache_key(v2_cache_key)
+            except Exception:
+                logger.exception("report: ошибка чтения кеша v2 (cache_key=%s)", v2_cache_key)
+                raise
             if existing_v2 and existing_v2.get("report_text"):
                 logger.info(
                     "Отчёт v2 уже существует (cache_key=%s) — возвращаем сохранённый результат",
@@ -76,7 +105,16 @@ class ReportService:
                 return existing_v2["report_text"]
 
             # 3. Get Call Data (ТОЛЬКО call_scores)
-            scores = await self.repo.get_call_scores(resolved_extension, start_date, end_date)
+            try:
+                scores = await self.repo.get_call_scores(resolved_extension, start_date, end_date)
+            except Exception:
+                logger.exception(
+                    "report: ошибка получения call_scores (extension=%s, start=%s, end=%s)",
+                    resolved_extension,
+                    start_date,
+                    end_date,
+                )
+                raise
             if not scores:
                 logger.warning(
                     "report: нет данных по call_scores для %s (extension=%s, period=%s-%s)",
@@ -84,6 +122,19 @@ class ReportService:
                     resolved_extension,
                     start_date,
                     end_date,
+                )
+                await self._safe_save_report_status(
+                    user_id=user_id,
+                    operator_key=resolved_extension,
+                    operator_name=name,
+                    date_from=date_from,
+                    date_to=date_to,
+                    period_label=normalized_period,
+                    filters={"user_id": user_id, "period": normalized_period, "date_range": date_range, "extension": resolved_extension},
+                    metrics={},
+                    cache_key=v2_cache_key,
+                    status="empty",
+                    error_text="no_call_scores",
                 )
                 return f"Нет данных для оператора {name} за указанный период."
 
@@ -109,6 +160,19 @@ class ReportService:
                     start_date,
                     end_date,
                 )
+                await self._safe_save_report_status(
+                    user_id=user_id,
+                    operator_key=resolved_extension,
+                    operator_name=name,
+                    date_from=date_from,
+                    date_to=date_to,
+                    period_label=normalized_period,
+                    filters={"user_id": user_id, "period": normalized_period, "date_range": date_range, "extension": resolved_extension},
+                    metrics=metrics,
+                    cache_key=v2_cache_key,
+                    status="error",
+                    error_text="empty_gpt_response",
+                )
                 return "Произошла ошибка при генерации отчета."
 
             # 7. Save to reports_v2
@@ -128,25 +192,27 @@ class ReportService:
                 filters=filters,
                 scoring_version=self.SCORING_VERSION,
             )
-            await self.report_repo_v2.save_report(
+            await self._safe_save_report_status(
                 user_id=user_id,
                 operator_key=operator_key,
                 operator_name=name,
                 date_from=date_from,
                 date_to=date_to,
                 period_label=normalized_period,
-                scoring_version=self.SCORING_VERSION,
-                filters_json=filters,
-                metrics_json=metrics_json,
-                report_text=report_text,
+                filters=filters,
+                metrics=metrics_json,
                 cache_key=cache_key,
                 status="ready",
-                generated_at=datetime.datetime.utcnow(),
                 error_text=None,
+                report_text=report_text,
             )
 
             # 8. Возвращаем сохранённый текст из reports_v2
-            saved_v2 = await self.report_repo_v2.get_ready_report_by_cache_key(cache_key)
+            try:
+                saved_v2 = await self.report_repo_v2.get_ready_report_by_cache_key(cache_key)
+            except Exception:
+                logger.exception("report: ошибка чтения сохранённого отчёта (cache_key=%s)", cache_key)
+                raise
             if saved_v2 and saved_v2.get("report_text"):
                 return saved_v2["report_text"]
             return report_text
@@ -501,12 +567,60 @@ class ReportService:
         )
 
         try:
+            logger.info(
+                "report: GPT запрос (name=%s, period=%s - %s, prompt_chars=%s)",
+                name,
+                start,
+                end,
+                len(prompt),
+            )
             return await self.openai.generate_recommendations(prompt, max_tokens=2500)
         except (ValueError, RuntimeError) as exc:
             logger.warning("Ожидаемая ошибка при генерации отчета GPT: %s", exc)
             return ""
         except Exception:
             logger.exception("Непредвиденная ошибка при генерации отчета GPT")
+            raise
+
+    async def _safe_save_report_status(
+        self,
+        *,
+        user_id: int,
+        operator_key: str,
+        operator_name: Optional[str],
+        date_from: datetime.datetime,
+        date_to: datetime.datetime,
+        period_label: str,
+        filters: Dict[str, Any],
+        metrics: Dict[str, Any],
+        cache_key: str,
+        status: str,
+        error_text: Optional[str],
+        report_text: str = "",
+    ) -> None:
+        try:
+            await self.report_repo_v2.save_report(
+                user_id=user_id,
+                operator_key=operator_key,
+                operator_name=operator_name,
+                date_from=date_from,
+                date_to=date_to,
+                period_label=period_label,
+                scoring_version=self.SCORING_VERSION,
+                filters_json=filters,
+                metrics_json=metrics,
+                report_text=report_text,
+                cache_key=cache_key,
+                status=status,
+                generated_at=datetime.datetime.utcnow(),
+                error_text=error_text,
+            )
+        except Exception:
+            logger.exception(
+                "report: не удалось сохранить статус отчета (cache_key=%s status=%s)",
+                cache_key,
+                status,
+            )
             raise
 
 
