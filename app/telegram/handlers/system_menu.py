@@ -241,13 +241,15 @@ class SystemMenuHandler:
             try:
                 tail_text = self._read_log_tail_text(main_candidate, self.MAX_LOG_BYTES)
                 if not tail_text.strip():
-                    continue
+                    logger.info("Лог %s пустой, пропускаем", main_candidate)
+                    tail_text = None
                 log_path = main_candidate
                 filename_override = None
                 if name_counts.get(log_path.name, 0) > 1:
                     filename_override = f"{log_path.parent.name}_{log_path.name}"
-                await self._send_logs_file(query, tail_text, log_path, filename_override)
-                sent_files += 1
+                if tail_text:
+                    await self._send_logs_file(query, tail_text, log_path, filename_override)
+                    sent_files += 1
             except Exception as exc:
                 logger.warning("Не удалось прочитать лог %s: %s", main_candidate, exc)
 
@@ -255,6 +257,7 @@ class SystemMenuHandler:
             try:
                 tail_text = self._read_log_tail_text(err_path, self.MAX_LOG_BYTES)
                 if not tail_text.strip():
+                    logger.info("Лог %s пустой, пропускаем", err_path)
                     continue
                 filename_override = None
                 if name_counts.get(err_path.name, 0) > 1:
