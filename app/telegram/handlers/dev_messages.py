@@ -17,6 +17,7 @@ from app.telegram.middlewares.permissions import PermissionsManager
 from app.telegram.utils.callback_data import AdminCB
 from app.logging_config import get_watchdog_logger
 from app.telegram.utils.admin_registry import register_admin_callback_handler
+from app.services.permissions import ROLE_DEV, ROLE_SUPER_ADMIN
 
 logger = get_watchdog_logger(__name__)
 

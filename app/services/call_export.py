@@ -259,14 +259,14 @@ class CallExportService:
                     select_parts.append(f"NULL AS {name}")
         select_parts.extend(tail_select)
         select_clause = ",\n                ".join(select_parts)
-        return f\"\"\"
+        return f"""
             SELECT
                 {select_clause}
             FROM call_scores cs
             LEFT JOIN refusal_categories rc ON rc.id = cs.refusal_category_id
             WHERE cs.call_date BETWEEN %s AND %s
             ORDER BY cs.call_date ASC
-        \"\"\"
+        """
 
     def _resolve_period(self, days: int) -> Tuple[datetime, datetime]:
         now = datetime.now(MOSCOW_TZ)
