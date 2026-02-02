@@ -282,7 +282,7 @@ class OperatorRepository:
                 else:
                     select_parts.append(f"NULL AS {name}")
         select_clause = ",\n            ".join(select_parts)
-        return f\"\"\"
+        return f"""
         SELECT
             {select_clause}
         FROM mangoapi_db.call_scores cs
@@ -290,7 +290,7 @@ class OperatorRepository:
             cs.is_target = 1
             AND (cs.called_info = %s OR cs.caller_info = %s)
             AND cs.score_date BETWEEN %s AND %s
-        \"\"\"
+        """
 
     async def get_quality_summary(
         self,
