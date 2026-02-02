@@ -538,6 +538,13 @@ class _ReportHandler:
             )
 
             if not report:
+                logger.warning(
+                    "[REPORTS] Отчёт не сформирован: пустой ответ (target_user_id=%s period=%s date_range=%s extension=%s)",
+                    target_user_id,
+                    period,
+                    date_range,
+                    operator_extension,
+                )
                 await bot.send_message(
                     chat_id=chat_id,
                     text=f"Отчёт для {operator_name} не был сгенерирован (нет данных).",
@@ -549,6 +556,15 @@ class _ReportHandler:
                     period,
                 )
                 return
+            if isinstance(report, str) and report.startswith("Нет данных"):
+                logger.warning(
+                    "[REPORTS] Нет данных для отчёта (target_user_id=%s period=%s date_range=%s extension=%s message=%s)",
+                    target_user_id,
+                    period,
+                    date_range,
+                    operator_extension,
+                    report,
+                )
 
             chunks = [report[i:i + 4000] for i in range(0, len(report), 4000)]
             for chunk in chunks:

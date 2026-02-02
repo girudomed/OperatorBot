@@ -195,15 +195,25 @@ class LMRepository:
         if value.is_nan() or value == Decimal("Infinity") or value == Decimal("-Infinity"):
             return None
         # DECIMAL(10,4): max 999999.9999
-        max_value = Decimal("999999.9999")
-        if abs(value) > max_value:
+        max_limit = Decimal("999999.9999")
+        
+        # Specific clamping based on metric type
+        if metric_code in LM_SCORE_METRICS or metric_code == LM_SCRIPT_METRIC:
+            value = max(Decimal("0.0000"), min(value, Decimal("100.0000")))
+        elif metric_code in LM_PROBABILITY_METRICS:
+            value = max(Decimal("0.0000"), min(value, Decimal("1.0000")))
+        else:
+            value = max(min(value, max_limit), -max_limit)
+
+        if abs(value) > max_limit:
             logger.warning(
                 "LM value_numeric out of range for %s (history_id=%s): %s",
                 metric_code,
                 history_id,
                 value,
             )
-            value = max(min(value, max_value), -max_value)
+            value = max(min(value, max_limit), -max_limit)
+        
         value = value.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
         return float(value)
 

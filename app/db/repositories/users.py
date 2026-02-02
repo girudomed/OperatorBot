@@ -367,8 +367,14 @@ class UserRepository:
         logger.info(f"[USER_REPO] Updating status for user {user_id} to {new_status}")
         
         try:
+            # Normalize status to avoid ENUM truncation warnings
+            normalized_status = str(new_status or "pending").strip().lower()
+            if normalized_status not in ("pending", "approved", "blocked"):
+                logger.warning("[USER_REPO] Invalid status '%s' for user %s, falling back to 'pending'", new_status, user_id)
+                normalized_status = "pending"
+
             query = "UPDATE UsersTelegaBot SET status = %s WHERE user_id = %s"
-            await self.db_manager.execute_query(query, (new_status, user_id))
+            await self.db_manager.execute_query(query, (normalized_status, user_id))
             logger.info(f"[USER_REPO] Status updated successfully")
         except Exception as e:
             logger.error(f"[USER_REPO] Error updating status for user {user_id}: {e}", exc_info=True)
