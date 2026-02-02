@@ -15,29 +15,28 @@ from .filters import SensitiveDataFilter
 
 
 class _StreamToLogger:
-    def __init__(self, logger: logging.Logger, level: int, fallback_stream):
+    _reentry_guard = False
+
+    def __init__(self, logger: logging.Logger, level: int):
         self.logger = logger
         self.level = level
-        self.fallback_stream = fallback_stream
 
     def write(self, buf):
         if not buf:
             return
+        if _StreamToLogger._reentry_guard:
+            return
         text = buf.rstrip()
-        if text:
+        if not text:
+            return
+        try:
+            _StreamToLogger._reentry_guard = True
             self.logger.log(self.level, text)
-        if self.fallback_stream:
-            try:
-                self.fallback_stream.write(buf)
-            except Exception:
-                pass
+        finally:
+            _StreamToLogger._reentry_guard = False
 
     def flush(self):
-        if self.fallback_stream:
-            try:
-                self.fallback_stream.flush()
-            except Exception:
-                pass
+        return
 
 def setup_watchdog():
     """
@@ -73,13 +72,13 @@ def setup_watchdog():
     sensitive_filter = SensitiveDataFilter()
 
     # 1. Console Handler (stdout)
-    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler = logging.StreamHandler(sys.__stdout__)
     console_handler.setFormatter(formatter)
     console_handler.addFilter(sensitive_filter)
     root_logger.addHandler(console_handler)
 
     # 1.1 Error Console Handler (stderr)
-    error_console_handler = logging.StreamHandler(sys.stderr)
+    error_console_handler = logging.StreamHandler(sys.__stderr__)
     error_console_handler.setLevel(logging.ERROR)
     error_console_handler.setFormatter(formatter)
     error_console_handler.addFilter(sensitive_filter)
@@ -112,8 +111,8 @@ def setup_watchdog():
     root_logger.addHandler(error_handler)
 
     if LOG_CAPTURE_STDOUT:
-        sys.stdout = _StreamToLogger(logging.getLogger("stdout"), logging.INFO, sys.__stdout__)
-        sys.stderr = _StreamToLogger(logging.getLogger("stderr"), logging.ERROR, sys.__stderr__)
+        sys.stdout = _StreamToLogger(logging.getLogger("stdout"), logging.INFO)
+        sys.stderr = _StreamToLogger(logging.getLogger("stderr"), logging.ERROR)
     
     # Отключаем шумные библиотеки
     logging.getLogger("httpx").setLevel(logging.WARNING)
