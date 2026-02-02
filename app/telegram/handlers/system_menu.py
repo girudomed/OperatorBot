@@ -285,26 +285,31 @@ class SystemMenuHandler:
         level_re = re.compile(r" - (ERROR|CRITICAL|EXCEPTION) - ", re.IGNORECASE)
         tb_keyword = "traceback"
         bucket: Deque[str] = deque(maxlen=limit)
-        existing = [path for path in paths if path.exists()]
+        # Unique paths while preserving order
+        unique_paths = list(dict.fromkeys(paths))
+        existing = [path for path in unique_paths if path.exists()]
         existing.sort(key=lambda path: path.stat().st_mtime, reverse=True)
         if not existing:
             return bucket
         error_paths = [path for path in existing if "error" in path.name.lower()]
-        target_paths = error_paths or existing[:1]
+        if error_paths:
+            target_paths = error_paths + [p for p in existing if p not in error_paths][:1]
+        else:
+            target_paths = existing[:1]
         # Если есть errors.log, смотрим его; иначе берём самый свежий лог.
         for path in target_paths:
             if not path.exists():
                 continue
             try:
                 last_stamp = ""
-                include_current = True
+                include_current = False
                 cutoff = datetime.now(ZoneInfo("Europe/Moscow")) - timedelta(days=self.ERROR_LOOKBACK_DAYS)
                 cutoff_naive = cutoff.replace(tzinfo=None)
                 for line in self._read_log_lines(path):
                     normalized = line.rstrip()
                     if not normalized:
                         continue
-                    ts_match = self.TIMESTAMP_RE.match(normalized)
+                    ts_match = self.TIMESTAMP_RE.search(normalized.lstrip())
                     if ts_match:
                         last_stamp = ts_match.group(0)
                         include_current = self._is_recent_timestamp(last_stamp, cutoff_naive)
@@ -361,7 +366,7 @@ class SystemMenuHandler:
         for line in text.splitlines():
             if not line:
                 continue
-            ts_match = self.TIMESTAMP_RE.match(line.lstrip())
+            ts_match = self.TIMESTAMP_RE.search(line.lstrip())
             if ts_match:
                 include_current = self._is_recent_timestamp(ts_match.group(0), cutoff_naive)
                 if not include_current:

@@ -15,8 +15,6 @@ def render_manual_screen(
         "📘 <b>Обучение</b>\n\n"
         f"Материал: {MANUAL_URL}\n"
     )
-    if video_status:
-        text += f"\n🎬 Видео обучения: {video_status}"
     return Screen(
         text=text,
         keyboard=keyboards.manual_keyboard(
