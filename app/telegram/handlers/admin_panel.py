@@ -396,6 +396,13 @@ class AdminPanelHandler:
         update: Update,
         context: ContextTypes.DEFAULT_TYPE,
     ) -> None:
+        handler = context.application.bot_data.get("manual_text_handler")
+        if handler:
+            await handler(update, context)
+        else:
+            await self._reply_feature_unavailable(update, "Обучение временно недоступно.")
+            return
+
         user = update.effective_user
         allow_video_upload = bool(user and self.permissions.is_dev_admin(user.id, user.username))
         allow_video_delete = False

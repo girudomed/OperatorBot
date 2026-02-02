@@ -239,10 +239,13 @@ class SystemMenuHandler:
 
         if main_candidate:
             try:
-                tail_text = self._read_log_tail_text(main_candidate, self.MAX_LOG_BYTES)
-                tail_text = self._filter_recent_log_text(tail_text, self.ERROR_LOOKBACK_DAYS)
+                raw_text = self._read_log_tail_text(main_candidate, self.MAX_LOG_BYTES)
+                tail_text = self._filter_recent_log_text(raw_text, self.ERROR_LOOKBACK_DAYS)
                 if not tail_text.strip():
-                    logger.info("Лог %s пустой, пропускаем", main_candidate)
+                    logger.info("Лог %s пустой за последние %s дней, отправляем хвост без фильтра", main_candidate, self.ERROR_LOOKBACK_DAYS)
+                    tail_text = raw_text
+                if not tail_text.strip():
+                    logger.info("Лог %s полностью пустой, пропускаем", main_candidate)
                     tail_text = None
                 log_path = main_candidate
                 filename_override = None
@@ -256,10 +259,10 @@ class SystemMenuHandler:
 
         for err_path in error_candidates:
             try:
-                tail_text = self._read_log_tail_text(err_path, self.MAX_LOG_BYTES)
-                tail_text = self._filter_recent_log_text(tail_text, self.ERROR_LOOKBACK_DAYS)
+                raw_text = self._read_log_tail_text(err_path, self.MAX_LOG_BYTES)
+                tail_text = raw_text
                 if not tail_text.strip():
-                    logger.info("Лог %s пустой, пропускаем", err_path)
+                    logger.info("Лог %s полностью пустой, пропускаем", err_path)
                     continue
                 filename_override = None
                 if name_counts.get(err_path.name, 0) > 1:
