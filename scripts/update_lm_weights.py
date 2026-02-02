@@ -22,7 +22,7 @@ async def run_optimizer(days: int, limit: int) -> Dict[str, Any]:
         dictionary_repo = LMDictionaryRepository(db_manager)
         optimizer = LMWeightOptimizer(dictionary_repo)
         result = await optimizer.optimize(days=days, sample_limit=limit)
-        logger.info("[LM][weights] Optimization result: %s", result)
+        logger.info("[LM][weights] Optimization result: %s" % (result,))
         return result
     finally:
         await db_manager.close()

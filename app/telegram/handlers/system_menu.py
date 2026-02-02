@@ -240,6 +240,8 @@ class SystemMenuHandler:
         if main_candidate:
             try:
                 tail_text = self._read_log_tail_text(main_candidate, self.MAX_LOG_BYTES)
+                if not tail_text.strip():
+                    continue
                 log_path = main_candidate
                 filename_override = None
                 if name_counts.get(log_path.name, 0) > 1:
@@ -252,6 +254,8 @@ class SystemMenuHandler:
         for err_path in error_candidates:
             try:
                 tail_text = self._read_log_tail_text(err_path, self.MAX_LOG_BYTES)
+                if not tail_text.strip():
+                    continue
                 filename_override = None
                 if name_counts.get(err_path.name, 0) > 1:
                     filename_override = f"{err_path.parent.name}_{err_path.name}"

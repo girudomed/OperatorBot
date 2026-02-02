@@ -175,6 +175,11 @@ class _ReportHandler:
         if not query or not user:
             return
 
+        logger.info(
+            "[REPORTS] Callback от %s: data=%s",
+            describe_user(user),
+            query.data,
+        )
         if self._rate_limited(update, context, "report_callback"):
             return
 
@@ -200,6 +205,12 @@ class _ReportHandler:
 
         sub_action = args[0]
         params = args[1:]
+        logger.info(
+            "[REPORTS] Действие=%s params=%s user=%s",
+            sub_action,
+            params,
+            describe_user(user),
+        )
         args_store = context.user_data.setdefault(
             "report_args",
             {"period": "monthly", "date_range": None},
@@ -207,6 +218,11 @@ class _ReportHandler:
 
         if sub_action == "period_menu":
             current_period = args_store.get("period", "monthly")
+            logger.info(
+                "[REPORTS] Открыт выбор периода (current=%s) user=%s",
+                current_period,
+                describe_user(user),
+            )
             await self._render_period_menu(query, current_period, edit=True)
             return
 
@@ -223,6 +239,11 @@ class _ReportHandler:
 
         if sub_action == "page":
             page = self._safe_int(params[0] if params else None, default=0)
+            logger.info(
+                "[REPORTS] Переключение страницы операторов: page=%s user=%s",
+                page,
+                describe_user(user),
+            )
             await self._show_operator_keyboard(query, context, page=page, edit=True)
             return
 
@@ -249,9 +270,10 @@ class _ReportHandler:
             date_range = args.get("date_range")
 
             logger.info(
-                "Пользователь %s выбрал оператора %s для отчёта",
+                "Пользователь %s выбрал оператора %s для отчёта (period=%s)",
                 describe_user(user),
                 target_user_id,
+                period,
             )
             if not self._acquire_busy(context, query):
                 return
@@ -337,6 +359,11 @@ class _ReportHandler:
                 continue
             cleaned_operators.append(operator)
         operators = cleaned_operators
+        logger.info(
+            "[REPORTS] Список операторов: total=%s skipped_no_extension=%s",
+            len(operators),
+            skipped_no_extension,
+        )
         if not operators:
             text = "Нет утверждённых операторов для отчётов."
             if edit and hasattr(target, "edit_message_text"):
@@ -437,6 +464,12 @@ class _ReportHandler:
         extension: Optional[str] = None,
         message_thread_id: Optional[int] = None,
     ):
+        logger.info(
+            "[REPORTS] Генерация отчёта start: target_user_id=%s period=%s date_range=%s",
+            target_user_id,
+            period,
+            date_range,
+        )
         try:
             operator_info = await self.operator_repo.get_operator_info_by_user_id(
                 target_user_id
@@ -502,6 +535,11 @@ class _ReportHandler:
                     text=f"Отчёт для {operator_name} не был сгенерирован (нет данных).",
                     message_thread_id=message_thread_id,
                 )
+                logger.info(
+                    "[REPORTS] Отчёт пустой: target_user_id=%s period=%s",
+                    target_user_id,
+                    period,
+                )
                 return
 
             chunks = [report[i:i + 4000] for i in range(0, len(report), 4000)]
@@ -536,6 +574,11 @@ class _ReportHandler:
             except Exception:
                 logger.exception("report: непредвиденная ошибка при удалении статуса")
                 raise
+            logger.info(
+                "[REPORTS] Генерация отчёта finish: target_user_id=%s period=%s",
+                target_user_id,
+                period,
+            )
 
     @staticmethod
     def _safe_int(value: Optional[str], default: Optional[int] = 0) -> Optional[int]:
