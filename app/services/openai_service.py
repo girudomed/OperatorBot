@@ -69,7 +69,7 @@ class OpenAIService:
                     e,
                 )
                 if attempt == max_retries - 1:
-                    return f"Ошибка OpenAI: {e}"
+                    return f"Ошибка: OpenAI: {e}"
                 await asyncio.sleep(2 ** attempt)
             except (asyncio.TimeoutError,) as exc:
                 # Временные сетевые/таймаут ошибки — повторяем попытку с экспоненциальной задержкой.
@@ -80,7 +80,7 @@ class OpenAIService:
                     exc,
                 )
                 if attempt == max_retries - 1:
-                    return f"Ошибка OpenAI: timeout ({exc})"
+                    return f"Ошибка: OpenAI timeout ({exc})"
                 await asyncio.sleep(2 ** attempt)
             except Exception as exc:
                 # Непредвиденные ошибки логируем и пробрасываем выше — не скрываем баги.
