@@ -182,6 +182,18 @@ class DatabaseManager:
         """
         query = self._sanitize_sql(query)
 
+        if not query or not query.strip():
+            logger.error(
+                "[DB] CRITICAL: Attempted to execute empty query!",
+                extra={
+                    "query_name": self._resolve_query_name(query_name),
+                    "params": repr(params),
+                    "original_query_type": type(query),
+                },
+            )
+            # In dev/debug we might want to crash, but for now just raise exception
+            raise ValueError(f"Empty SQL query passed to execute_query. QueryName: {query_name}")
+
         if not self.pool:
             await self.create_pool()
             

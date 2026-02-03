@@ -232,6 +232,8 @@ class OperatorRepository:
             optional_columns,
             available_columns=columns,
         )
+        logger.debug("[OPERATORS] Built scores_query (len=%d): %s", len(scores_query), scores_query)
+
         rows = await self.db_manager.execute_with_retry(
             scores_query,
             (extension, extension, start_str, end_str),
