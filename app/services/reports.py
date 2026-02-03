@@ -48,17 +48,17 @@ class ReportService:
                 logger.warning("report: некорректный date_range=%r, игнорируем", date_range)
                 date_range = None
 
+            normalized_period = self._normalize_period(period)
             # 1. Resolve Dates
-            start_date, end_date = self._resolve_dates(period, date_range)
+            start_date, end_date = self._resolve_dates(normalized_period, date_range)
             logger.info(
                 "Генерация отчета для user_id=%s period=%s date_range=%s start=%s end=%s",
                 user_id,
-                period,
+                normalized_period,
                 date_range,
                 start_date,
                 end_date,
             )
-            normalized_period = self._normalize_period(period)
             date_from = start_date if isinstance(start_date, datetime.datetime) else datetime.datetime.combine(start_date, datetime.time.min)
             date_to = end_date if isinstance(end_date, datetime.datetime) else datetime.datetime.combine(end_date, datetime.time.max)
 
@@ -117,32 +117,27 @@ class ReportService:
                 raise
             if not scores:
                 logger.warning(
-                    "report: нет данных по call_scores для %s (extension=%s, period=%s-%s)",
+                    "report: нет данных по call_scores для %s (extension=%s, period=%s-%s). Продолжаем генерацию с пустыми данными.",
                     user_id,
                     resolved_extension,
                     start_date,
                     end_date,
                 )
-                await self._safe_save_report_status(
-                    user_id=user_id,
-                    operator_key=resolved_extension,
-                    operator_name=name,
-                    date_from=date_from,
-                    date_to=date_to,
-                    period_label=normalized_period,
-                    filters={"user_id": user_id, "period": normalized_period, "date_range": date_range, "extension": resolved_extension},
-                    metrics={},
-                    cache_key=v2_cache_key,
-                    status="error",
-                    error_text="no_call_scores",
-                )
-                return f"Нет данных для оператора {name} за указанный период."
 
             # 4. Calculate Metrics (только из call_scores)
-            metrics = self._calculate_metrics_from_scores(scores)
+            metrics = self._calculate_metrics_from_scores(scores or [])
+            missing_data = self._detect_missing_data(metrics, scores or [])
+            if missing_data:
+                logger.warning(
+                    "report: недостаточно данных для отчета (extension=%s, period=%s-%s): %s",
+                    resolved_extension,
+                    start_date,
+                    end_date,
+                    ", ".join(missing_data),
+                )
 
             # 5. Собираем примеры звонков для GPT
-            examples = self._build_call_examples(scores, limit=5)
+            examples = self._build_call_examples(scores or [], limit=5)
 
             # 6. Генерируем отчёт через GPT (всегда)
             report_text = await self._generate_report_with_gpt(
@@ -152,6 +147,29 @@ class ReportService:
                 metrics=metrics,
                 call_examples=examples,
             )
+            if isinstance(report_text, str) and report_text.startswith("Ошибка:"):
+                logger.error(
+                    "report: OpenAI вернул ошибку (extension=%s, period=%s-%s): %s",
+                    resolved_extension,
+                    start_date,
+                    end_date,
+                    report_text,
+                )
+                await self._safe_save_report_status(
+                    user_id=user_id,
+                    operator_key=resolved_extension,
+                    operator_name=name,
+                    date_from=date_from,
+                    date_to=date_to,
+                    period_label=normalized_period,
+                    filters={"user_id": user_id, "period": normalized_period, "date_range": date_range, "extension": resolved_extension},
+                    metrics=metrics,
+                    cache_key=v2_cache_key,
+                    status="error",
+                    error_text="openai_error",
+                    report_text=report_text,
+                )
+                return "Произошла ошибка при генерации отчета."
             if not report_text or not report_text.strip():
                 logger.error(
                     "report: пустой ответ GPT для user_id=%s (extension=%s, period=%s-%s)",
@@ -651,8 +669,13 @@ class ReportService:
             "daily": "daily",
             "week": "weekly",
             "weekly": "weekly",
+            "biweekly": "biweekly",
             "month": "monthly",
             "monthly": "monthly",
+            "half_year": "half_year",
+            "halfyear": "half_year",
+            "year": "yearly",
+            "yearly": "yearly",
         }
         return mapping.get(value, value)
 
@@ -689,13 +712,49 @@ class ReportService:
                 return dt.replace(hour=0, minute=0, second=0), dt.replace(hour=23, minute=59, second=59)
             return now.replace(hour=0, minute=0, second=0), now.replace(hour=23, minute=59, second=59)
             
-        elif period == 'weekly':
+        if period == 'weekly':
             start = now - datetime.timedelta(days=now.weekday())
             return start.replace(hour=0, minute=0, second=0), now
             
-        elif period == 'monthly':
+        if period == 'biweekly':
+            start = (now - datetime.timedelta(days=13)).replace(hour=0, minute=0, second=0)
+            return start, now
+            
+        if period == 'monthly':
             start = now.replace(day=1, hour=0, minute=0, second=0)
+            return start, now
+
+        if period == 'half_year':
+            start = self._subtract_months(now, 6).replace(hour=0, minute=0, second=0)
+            return start, now
+
+        if period == 'yearly':
+            start = self._subtract_months(now, 12).replace(hour=0, minute=0, second=0)
             return start, now
             
         # Default fallback
         return now.replace(hour=0, minute=0, second=0), now
+
+    def _subtract_months(self, dt: datetime.datetime, months: int) -> datetime.datetime:
+        year = dt.year
+        month = dt.month - months
+        while month <= 0:
+            month += 12
+            year -= 1
+        day = dt.day
+        last_day = (datetime.date(year, month + 1, 1) - datetime.timedelta(days=1)).day if month < 12 else 31
+        if day > last_day:
+            day = last_day
+        return dt.replace(year=year, month=month, day=day)
+
+    def _detect_missing_data(self, metrics: Dict[str, Any], scores: List[Dict[str, Any]]) -> List[str]:
+        missing = []
+        total_calls = metrics.get("total_calls", 0) or 0
+        if not scores or total_calls == 0:
+            missing.append("call_scores")
+            return missing
+        for key in ["objection_present", "objection_handled", "booking_attempted", "next_step_clear", "followup_captured", "handled_given_objection"]:
+            cov = metrics.get(f"{key}_coverage", 0) or 0
+            if cov < total_calls:
+                missing.append(f"{key}_coverage({cov}/{total_calls})")
+        return missing
