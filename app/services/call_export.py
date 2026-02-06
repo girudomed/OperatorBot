@@ -46,8 +46,6 @@ HEADERS = (
     "Follow-up зафиксирован (0/1)",
     "Причина отказа",
     "Категория причины",
-    "Причины отказа",
-    "Группа отказа",
     "Источник",
     "Оценка качества (0–10)",
     "Дата/время оценки",
@@ -147,8 +145,6 @@ class CallExportService:
         tail_select = [
             "cs.refusal_reason",
             "rc.label AS refusal_category_label",
-            "cs.refusal_category_code",
-            "cs.refusal_group",
             "cs.utm_source_by_number",
             "cs.call_score",
             "cs.score_date",
@@ -321,8 +317,6 @@ class CallExportService:
                 row.get("followup_captured"),
                 self._normalize_label(row.get("refusal_reason")),
                 self._normalize_label(row.get("refusal_category_label")),
-                self._normalize_label(row.get("refusal_category_code")),
-                self._normalize_label(row.get("refusal_group")),
                 self._normalize_label(row.get("utm_source_by_number")) or "не указано",
                 row.get("call_score"),
                 score_date,
@@ -369,9 +363,7 @@ class CallExportService:
             23: 18,
             24: 20,
             25: 24,
-            26: 20,
-            27: 24,
-            28: 24,
+            26: 24,
         }
         for column, width in column_widths.items():
             ws.column_dimensions[get_column_letter(column)].width = width
