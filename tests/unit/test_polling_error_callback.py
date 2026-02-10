@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from app import main
 import httpx
 from telegram.error import NetworkError, TelegramError
@@ -123,3 +125,34 @@ def test_callback_is_fail_safe_when_logger_warning_raises(monkeypatch):
 
     assert len(fallback_calls) == 1
     assert "Polling error callback failed unexpectedly." in fallback_calls[0][0]
+
+
+def test_updater_filter_suppresses_transient_polling_traceback():
+    err = NetworkError("transient network")
+    err.__cause__ = httpx.ConnectError("connection dropped")
+    record = logging.LogRecord(
+        name="telegram.ext.Updater",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg="Exception happened while polling for updates.",
+        args=(),
+        exc_info=(type(err), err, None),
+    )
+    filt = main._TransientUpdaterPollingFilter()
+    assert filt.filter(record) is False
+
+
+def test_updater_filter_keeps_non_transient_polling_traceback():
+    err = TelegramError("bad request")
+    record = logging.LogRecord(
+        name="telegram.ext.Updater",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg="Exception happened while polling for updates.",
+        args=(),
+        exc_info=(type(err), err, None),
+    )
+    filt = main._TransientUpdaterPollingFilter()
+    assert filt.filter(record) is True

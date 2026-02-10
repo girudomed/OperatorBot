@@ -76,6 +76,7 @@ setup_watchdog()
 setup_global_exception_handlers()
 logger = get_watchdog_logger(__name__)
 polling_callback_logger = logging.getLogger(f"{__name__}.polling_callback")
+updater_logger = logging.getLogger("telegram.ext.Updater")
 
 # Блокировка повторного запуска
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -85,6 +86,7 @@ LOCK_FILE = BASE_DIR / "operabot.lock"
 POLLING_ERROR_THROTTLE_WINDOW_SEC = 60.0
 ERROR_NOTIFY_TTL_SEC = 60.0
 ERROR_NOTIFY_CACHE_KEY = "_error_notify_cache"
+_UPDATER_POLLING_FILTER_FLAG = "_operabot_polling_filter_installed"
 
 
 def _classify_polling_error(error: TelegramError) -> tuple[bool, str]:
@@ -104,6 +106,33 @@ def _classify_polling_error(error: TelegramError) -> tuple[bool, str]:
     if isinstance(cause, httpx.NetworkError):
         return True, "network_transient"
     return True, "network_transient"
+
+
+class _TransientUpdaterPollingFilter(logging.Filter):
+    """Скрывает noisy traceback от Updater только для transient polling ошибок."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            if "Exception happened while polling for updates." not in record.getMessage():
+                return True
+            exc_info = getattr(record, "exc_info", None)
+            if not exc_info or len(exc_info) < 2:
+                return True
+            error = exc_info[1]
+            if not isinstance(error, TelegramError):
+                return True
+            is_transient, _ = _classify_polling_error(error)
+            return not is_transient
+        except Exception:
+            # Фильтр не должен ломать логирование в Updater.
+            return True
+
+
+def _install_updater_polling_filter() -> None:
+    if getattr(updater_logger, _UPDATER_POLLING_FILTER_FLAG, False):
+        return
+    updater_logger.addFilter(_TransientUpdaterPollingFilter())
+    setattr(updater_logger, _UPDATER_POLLING_FILTER_FLAG, True)
 
 
 def _extract_handler_name(error: Optional[BaseException]) -> Optional[str]:
@@ -651,6 +680,7 @@ async def main():
 
         await application.bot.delete_webhook(drop_pending_updates=True)
         logger.info("Webhook удален (если был), переключаемся на Polling.")
+        _install_updater_polling_filter()
         polling_error_callback = make_polling_error_callback()
         
         try:
