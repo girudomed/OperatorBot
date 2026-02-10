@@ -8,9 +8,12 @@ import asyncio
 from asyncio import Semaphore
 from typing import List
 
+import httpx
 from openai import AsyncOpenAI, OpenAIError
 
 from app.config import OPENAI_API_KEY, OPENAI_COMPLETION_OPTIONS, OPENAI_MODEL
+from app.error_policy import get_retry_config, is_retryable
+from app.errors import OpenAIIntegrationError
 from app.logging_config import get_watchdog_logger
 
 logger = get_watchdog_logger(__name__)
@@ -61,38 +64,42 @@ class OpenAIService:
                     logger.info("OpenAI response received with empty content")
                 return content.strip() if content else ""
 
-            except OpenAIError as e:
-                logger.warning(
-                    "OpenAIError (попытка %s/%s): %s",
-                    attempt + 1,
-                    max_retries,
-                    e,
-                )
-                if attempt == max_retries - 1:
-                    return f"Ошибка: OpenAI: {e}"
-                await asyncio.sleep(2 ** attempt)
-            except (asyncio.TimeoutError,) as exc:
-                # Временные сетевые/таймаут ошибки — повторяем попытку с экспоненциальной задержкой.
-                logger.warning(
-                    "OpenAI timeout (попытка %s/%s): %s",
-                    attempt + 1,
-                    max_retries,
-                    exc,
-                )
-                if attempt == max_retries - 1:
-                    return f"Ошибка: OpenAI timeout ({exc})"
-                await asyncio.sleep(2 ** attempt)
-            except Exception as exc:
-                # Непредвиденные ошибки логируем и пробрасываем выше — не скрываем баги.
-                logger.exception(
-                    "Unexpected error while calling OpenAI (attempt %s/%s): %s",
-                    attempt + 1,
-                    max_retries,
-                    exc,
-                )
+            except ValueError:
                 raise
-        
-        return "Ошибка: Не удалось получить ответ от OpenAI."
+            except (OpenAIError, asyncio.TimeoutError, httpx.HTTPError) as exc:
+                wrapped = OpenAIIntegrationError(
+                    "OpenAI request failed",
+                    user_message="Сервис рекомендаций временно недоступен.",
+                    retryable=True,
+                    details={
+                        "attempt": attempt + 1,
+                        "max_retries": max_retries,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                logger.warning(
+                    "OpenAI integration error (attempt %s/%s): %s",
+                    attempt + 1,
+                    max_retries,
+                    exc,
+                )
+                retry_cfg = get_retry_config(wrapped)
+                if (not is_retryable(wrapped)) or attempt >= min(
+                    max_retries, retry_cfg.max_retries
+                ) - 1:
+                    raise wrapped from exc
+                delay = retry_cfg.base_delay
+                if retry_cfg.exponential_backoff:
+                    delay = min(
+                        retry_cfg.max_delay,
+                        retry_cfg.base_delay * (2 ** attempt),
+                    )
+                await asyncio.sleep(delay)
+        raise OpenAIIntegrationError(
+            "OpenAI request retry budget exhausted",
+            user_message="Сервис рекомендаций временно недоступен.",
+            retryable=False,
+        )
 
     async def process_batched_requests(
         self, 
@@ -109,16 +116,21 @@ class OpenAIService:
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         valid_results = []
+        failure_count = 0
         for res in results:
             if isinstance(res, Exception):
-                logger.error(f"Ошибка в батче: {res}")
-            elif isinstance(res, str) and res.startswith("Ошибка:"):
-                logger.error(f"Ошибка генерации: {res}")
+                failure_count += 1
+                logger.warning("Ошибка в батче: %s", res)
             elif isinstance(res, str):
                 valid_results.append(res)
                 
         if not valid_results:
-            return "Ошибка: Все запросы завершились неудачей."
+            raise OpenAIIntegrationError(
+                "All batched OpenAI requests failed",
+                user_message="Сервис рекомендаций временно недоступен.",
+                retryable=False,
+                details={"failed_requests": failure_count, "total_requests": len(prompts)},
+            )
             
         return "\n".join(valid_results)
 

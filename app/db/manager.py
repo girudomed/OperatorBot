@@ -11,6 +11,8 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional, Union, Tuple
 
 from app.config import DB_CONFIG
+from app.error_policy import get_retry_config, is_retryable
+from app.errors import DatabaseIntegrationError
 from app.logging_config import get_watchdog_logger
 
 logger = get_watchdog_logger(__name__)
@@ -38,12 +40,11 @@ class DatabaseManager:
 
     @staticmethod
     def _classify_db_error(error_code: Optional[int], message: str) -> str:
-        msg = message.lower()
-        if error_code in {1054, 1146, 1060, 1062} or "unknown column" in msg or "unknown table" in msg:
+        if error_code in {1054, 1146, 1060, 1062}:
             return "schema_error"
-        if error_code in {2003, 2006, 2013} or "connection" in msg:
+        if error_code in {2002, 2003, 2006, 2013, 1205, 1213}:
             return "connection_error"
-        if "timeout" in msg:
+        if error_code in {3024}:
             return "timeout"
         return "unknown_error"
 
@@ -120,9 +121,14 @@ class DatabaseManager:
                         cursorclass=aiomysql.DictCursor
                     )
                     logger.info("Пул соединений с БД успешно создан.")
-                except Exception as e:
-                    logger.error(f"Ошибка при создании пула соединений: {e}", exc_info=True)
-                    raise
+                except aiomysql.Error as e:
+                    logger.warning("Ошибка при создании пула соединений: %s", e)
+                    raise DatabaseIntegrationError(
+                        "Failed to create DB pool",
+                        user_visible=False,
+                        retryable=True,
+                        details={"error_type": type(e).__name__},
+                    ) from e
 
     async def close_pool(self) -> None:
         """Закрытие пула соединений."""
@@ -148,9 +154,14 @@ class DatabaseManager:
         try:
             conn = await self.pool.acquire()
             yield conn
-        except Exception as e:
-            logger.error(f"Ошибка при получении соединения: {e}", exc_info=True)
-            raise
+        except aiomysql.Error as e:
+            logger.warning("Ошибка при получении соединения: %s", e)
+            raise DatabaseIntegrationError(
+                "Failed to acquire DB connection",
+                user_visible=False,
+                retryable=True,
+                details={"error_type": type(e).__name__},
+            ) from e
         finally:
             if conn and self.pool:
                 release_result = self.pool.release(conn)
@@ -241,12 +252,23 @@ class DatabaseManager:
                         getattr(cursor, "lastrowid", None),
                     )
                     return True
-                except Exception as e:
+                except aiomysql.Error as e:
+                    category = self._classify_db_error(*self._extract_db_error_details(e)[1:])
                     if log_error:
-                        self._log_db_error(e, query, params, query_name)
+                        self._log_db_error(e, query, params, query_name, category)
                     else:
-                        logger.debug("DB error без логирования (log_error=False): %s", e, exc_info=True)
-                    raise
+                        logger.debug("DB error без логирования (log_error=False): %s", e)
+                    retryable = category in {"connection_error", "timeout"}
+                    raise DatabaseIntegrationError(
+                        f"DB query failed ({category})",
+                        user_visible=False,
+                        retryable=retryable,
+                        details={
+                            "query_name": self._resolve_query_name(query_name),
+                            "category": category,
+                            "error_type": type(e).__name__,
+                        },
+                    ) from e
 
     async def execute_with_retry(
         self,
@@ -275,27 +297,50 @@ class DatabaseManager:
                     query_name=query_name,
                     log_error=False,
                 )
-            except (aiomysql.Error, RuntimeError) as error:
-                last_error = error
-                error_type, error_code, message = self._extract_db_error_details(error)
-                category = self._classify_db_error(error_code, message)
-                self._log_db_error(error, query, params, query_name, category)
-                if category == "schema_error":
+            except Exception as error:
+                is_db_like = isinstance(error, aiomysql.Error) or error.__class__.__module__.startswith("pymysql")
+                if not isinstance(error, DatabaseIntegrationError) and not is_db_like:
                     raise
+                wrapped_error: DatabaseIntegrationError
+                if isinstance(error, DatabaseIntegrationError):
+                    wrapped_error = error
+                else:
+                    error_type, error_code, message = self._extract_db_error_details(error)
+                    category = self._classify_db_error(error_code, message)
+                    retryable = category in {"connection_error", "timeout"}
+                    wrapped_error = DatabaseIntegrationError(
+                        f"DB query failed ({category})",
+                        user_visible=False,
+                        retryable=retryable,
+                        details={
+                            "query_name": self._resolve_query_name(query_name),
+                            "category": category,
+                            "error_type": error_type,
+                        },
+                    )
+                last_error = wrapped_error
+                if not is_retryable(wrapped_error):
+                    raise
+                retry_cfg = get_retry_config(wrapped_error)
                 logger.warning(
                     f"Ошибка выполнения запроса. Попытка {attempt}/{retries}",
                     extra={
                         "query_name": self._resolve_query_name(query_name),
-                        "error_type": error_type,
-                        "error_code": error_code,
-                        "category": category,
+                        "error_type": type(wrapped_error).__name__,
+                        "category": wrapped_error.details.get("category"),
                         "attempt": attempt,
-                        "max_attempts": retries,
+                        "max_attempts": min(retries, retry_cfg.max_retries),
                     },
                 )
-                if attempt == retries:
-                    raise
-                await asyncio.sleep(base_delay * attempt)
+                if attempt >= min(retries, retry_cfg.max_retries):
+                    raise wrapped_error from error
+                delay = retry_cfg.base_delay if retry_cfg.base_delay else base_delay
+                if retry_cfg.exponential_backoff:
+                    delay = min(
+                        retry_cfg.max_delay,
+                        (retry_cfg.base_delay or base_delay) * (2 ** (attempt - 1)),
+                    )
+                await asyncio.sleep(delay)
         
         if last_error:
             raise last_error

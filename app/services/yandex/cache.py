@@ -10,6 +10,7 @@ except Exception:  # pragma: no cover
     redis = None  # type: ignore
 
 from .disk import YandexDiskClient
+from app.utils.best_effort import best_effort_async
 
 
 logger = logging.getLogger(__name__)
@@ -56,59 +57,76 @@ class YandexDiskCache:
     async def get_path(self, recording_id: str) -> Optional[str]:
         if not self._redis:
             return None
-        try:
-            return await self._redis.get(self._path_key(recording_id))
-        except Exception as exc:
-            logger.warning("Redis недоступен (get_path %s): %s", recording_id, exc)
-            return None
+        result = await best_effort_async(
+            "best_effort_yandex_cache_get_path",
+            self._redis.get(self._path_key(recording_id)),
+            on_error_result=None,
+            details={"recording_id": recording_id},
+        )
+        return result.value
 
     async def save_path(self, recording_id: str, path: str) -> None:
         if not self._redis:
             return
-        try:
-            await self._redis.set(self._path_key(recording_id), path)
-        except Exception as exc:
-            logger.warning("Redis недоступен (save_path %s): %s", recording_id, exc)
+        await best_effort_async(
+            "best_effort_yandex_cache_save_path",
+            self._redis.set(self._path_key(recording_id), path),
+            on_error_result=None,
+            details={"recording_id": recording_id},
+        )
 
     async def delete_path(self, recording_id: str) -> None:
         if not self._redis:
             return
-        try:
-            await self._redis.delete(self._path_key(recording_id))
-        except Exception as exc:
-            logger.warning("Redis недоступен (delete_path %s): %s", recording_id, exc)
+        await best_effort_async(
+            "best_effort_yandex_cache_delete_path",
+            self._redis.delete(self._path_key(recording_id)),
+            on_error_result=None,
+            details={"recording_id": recording_id},
+        )
 
     async def get_file_id(self, recording_id: str) -> Optional[str]:
         if not self._redis:
             return None
-        try:
-            return await self._redis.get(self._file_key(recording_id))
-        except Exception as exc:
-            logger.warning("Redis недоступен (get_file_id %s): %s", recording_id, exc)
-            return None
+        result = await best_effort_async(
+            "best_effort_yandex_cache_get_file_id",
+            self._redis.get(self._file_key(recording_id)),
+            on_error_result=None,
+            details={"recording_id": recording_id},
+        )
+        return result.value
 
     async def save_file_id(self, recording_id: str, file_id: str) -> None:
         if not self._redis:
             return
-        try:
-            if self.file_ttl_seconds:
-                await self._redis.setex(
+        if self.file_ttl_seconds:
+            await best_effort_async(
+                "best_effort_yandex_cache_save_file_id_ttl",
+                self._redis.setex(
                     self._file_key(recording_id),
                     self.file_ttl_seconds,
                     file_id,
-                )
-            else:
-                await self._redis.set(self._file_key(recording_id), file_id)
-        except Exception as exc:
-            logger.warning("Redis недоступен (save_file_id %s): %s", recording_id, exc)
+                ),
+                on_error_result=None,
+                details={"recording_id": recording_id},
+            )
+            return
+        await best_effort_async(
+            "best_effort_yandex_cache_save_file_id",
+            self._redis.set(self._file_key(recording_id), file_id),
+            on_error_result=None,
+            details={"recording_id": recording_id},
+        )
 
     async def delete_file_id(self, recording_id: str) -> None:
         if not self._redis:
             return
-        try:
-            await self._redis.delete(self._file_key(recording_id))
-        except Exception as exc:
-            logger.warning("Redis недоступен (delete_file_id %s): %s", recording_id, exc)
+        await best_effort_async(
+            "best_effort_yandex_cache_delete_file_id",
+            self._redis.delete(self._file_key(recording_id)),
+            on_error_result=None,
+            details={"recording_id": recording_id},
+        )
 
     async def refresh_index(
         self,
@@ -151,10 +169,13 @@ class YandexDiskCache:
                         pipe.set(self._path_key(recording_id), path)
                         added += 1
                 if added:
-                    try:
-                        await pipe.execute()
-                    except Exception as exc:
-                        logger.warning("Redis ошибка при индексации: %s", exc)
+                    execute_result = await best_effort_async(
+                        "best_effort_yandex_cache_refresh_index_execute_pipe",
+                        pipe.execute(),
+                        on_error_result=None,
+                        details={"offset": offset, "limit": limit},
+                    )
+                    if execute_result.status == "error":
                         break
                 total += added
                 if not has_more:

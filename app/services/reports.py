@@ -14,6 +14,7 @@ from app.db.repositories.operators import OperatorRepository
 from app.db.repositories.reports_v2 import ReportsV2Repository
 from app.db.manager import DatabaseManager
 from app.logging_config import get_watchdog_logger
+from app.errors import OpenAIIntegrationError
 from app.utils.error_handlers import log_async_exceptions
 
 logger = get_watchdog_logger(__name__)
@@ -147,29 +148,6 @@ class ReportService:
                 metrics=metrics,
                 call_examples=examples,
             )
-            if isinstance(report_text, str) and report_text.startswith("Ошибка:"):
-                logger.error(
-                    "report: OpenAI вернул ошибку (extension=%s, period=%s-%s): %s",
-                    resolved_extension,
-                    start_date,
-                    end_date,
-                    report_text,
-                )
-                await self._safe_save_report_status(
-                    user_id=user_id,
-                    operator_key=resolved_extension,
-                    operator_name=name,
-                    date_from=date_from,
-                    date_to=date_to,
-                    period_label=normalized_period,
-                    filters={"user_id": user_id, "period": normalized_period, "date_range": date_range, "extension": resolved_extension},
-                    metrics=metrics,
-                    cache_key=v2_cache_key,
-                    status="error",
-                    error_text="openai_error",
-                    report_text=report_text,
-                )
-                return "Произошла ошибка при генерации отчета."
             if not report_text or not report_text.strip():
                 logger.error(
                     "report: пустой ответ GPT для user_id=%s (extension=%s, period=%s-%s)",
@@ -265,6 +243,7 @@ class ReportService:
             "followup_captured": 0,
         }
 
+        valid_scores: List[Dict[str, Any]] = []
         for row in scores:
             if not isinstance(row, dict):
                 logger.warning(
@@ -272,6 +251,7 @@ class ReportService:
                     row,
                 )
                 continue
+            valid_scores.append(row)
             total_calls += 1
             outcome = (row.get("outcome") or "").lower()
             category = (row.get("call_category") or "").lower()
@@ -353,16 +333,16 @@ class ReportService:
 
         # Провалы (counts) для управления
         res["count_objection_not_handled"] = sum(
-            1 for r in scores if r.get("objection_present") == 1 and r.get("objection_handled") == 0
+            1 for r in valid_scores if r.get("objection_present") == 1 and r.get("objection_handled") == 0
         )
         res["count_objection_handled_unknown"] = unknown["objection_handled"]
         res["count_booking_no_next_step"] = sum(
-            1 for r in scores if r.get("booking_attempted") == 1 and r.get("next_step_clear") == 0
+            1 for r in valid_scores if r.get("booking_attempted") == 1 and r.get("next_step_clear") == 0
         )
         res["count_booking_next_step_unknown"] = unknown["next_step_clear"]
         # Для lead_no_record мы хотим знать сколько из них БЕЗ followup
         res["count_lead_no_followup"] = sum(
-            1 for r in scores if r.get("outcome") == "lead_no_record" and r.get("followup_captured") == 0
+            1 for r in valid_scores if r.get("outcome") == "lead_no_record" and r.get("followup_captured") == 0
         )
         res["count_lead_followup_unknown"] = unknown["followup_captured"]
 
@@ -593,7 +573,7 @@ class ReportService:
                 len(prompt),
             )
             return await self.openai.generate_recommendations(prompt, max_tokens=2500)
-        except (ValueError, RuntimeError) as exc:
+        except OpenAIIntegrationError as exc:
             logger.warning("Ожидаемая ошибка при генерации отчета GPT: %s", exc)
             return ""
         except Exception:

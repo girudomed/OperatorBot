@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from openai import OpenAIError
 
+from app.errors import OpenAIIntegrationError
 from app.telegram.utils.callback_data import AdminCB
 from app.services.openai_service import OpenAIService
 import app.config as app_config
@@ -47,9 +48,9 @@ async def test_resolve_hash_async_handles_redis_exceptions(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_openai_service_retries_and_fallback(monkeypatch):
+async def test_openai_service_retries_and_raises_app_error(monkeypatch):
     """
-    Генератор рекомендаций должен ловить OpenAIError и после попыток вернуть fallback-строку.
+    Генератор рекомендаций должен конвертировать OpenAIError в OpenAIIntegrationError.
     Подменяем клиент на объект, у которого chat.completions.create всегда бросает OpenAIError.
     """
     # Убедимся, что есть ключ API в конфиге, требуемый конструктором
@@ -63,6 +64,6 @@ async def test_openai_service_retries_and_fallback(monkeypatch):
     # Подменяем client.chat.completions.create
     svc.client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=raise_openai)))
 
-    result = await svc.generate_recommendations("hello", max_retries=2, max_tokens=10)
-    assert isinstance(result, str)
-    assert result.startswith("Ошибка:")
+    with pytest.raises(OpenAIIntegrationError) as exc_info:
+        await svc.generate_recommendations("hello", max_retries=2, max_tokens=10)
+    assert isinstance(exc_info.value.__cause__, OpenAIError)

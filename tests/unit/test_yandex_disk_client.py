@@ -4,6 +4,7 @@ import pytest
 import httpx
 
 from app.services.yandex.disk import YandexDiskClient, logger as ydisk_logger
+from app.errors import YandexDiskIntegrationError
 import logging
 
 
@@ -101,8 +102,9 @@ async def test_request_download_link_handles_invalid_json(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", fake_client)
 
     client = YandexDiskClient(login=None, password=None, oauth_token="token", base_path="/mango")
-    href = await client._request_download_link("/mango/test.mp3", {})
-    assert href is None
+    with pytest.raises(YandexDiskIntegrationError) as exc_info:
+        await client._request_download_link("/mango/test.mp3", {})
+    assert isinstance(exc_info.value.__cause__, ValueError)
 
 
 @pytest.mark.asyncio
@@ -115,9 +117,8 @@ async def test_download_recording_reraises_unexpected_exception(monkeypatch, cap
     monkeypatch.setattr(client, "_download_file", boom)
 
     caplog.set_level(logging.ERROR, ydisk_logger.name)
-    result = await client.download_recording("rid")
-    assert result is None
-    assert any("Непредвиденная ошибка при загрузке записи" in rec.message for rec in caplog.records)
+    with pytest.raises(RuntimeError):
+        await client.download_recording("rid")
 
 
 @pytest.mark.asyncio
@@ -135,8 +136,8 @@ async def test_request_download_link_reraises_unexpected(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: RaisingClient())
     client = YandexDiskClient(login=None, password=None, oauth_token="token", base_path="/mango")
 
-    href = await client._request_download_link("/mango/file", {})
-    assert href is None
+    with pytest.raises(RuntimeError):
+        await client._request_download_link("/mango/file", {})
 
 
 @pytest.mark.asyncio

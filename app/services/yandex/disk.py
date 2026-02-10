@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import os
 import re
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ except ImportError:  # pragma: no cover
     from backports.zoneinfo import ZoneInfo  # type: ignore
 
 from app.logging_config import get_watchdog_logger
+from app.errors import YandexDiskIntegrationError
 
 logger = get_watchdog_logger(__name__)
 
@@ -114,42 +116,36 @@ class YandexDiskClient:
             logger.warning("[YDisk] OAuth-токен не задан, загрузка невозможна.")
             return None
 
-        try:
-            candidates = self._build_filename_candidates(
-                recording_id, call_time=call_time, phone_candidates=phone_candidates
-            )
-            logger.debug(
-                "[YDisk] Попытка загрузки %s, кандидатов файлов: %s",
-                recording_id,
-                candidates,
-            )
-            for name in candidates:
-                logger.debug("[YDisk] Пробую файл %s для %s", name, recording_id)
-                recording = await self._download_file(name)
-                if recording:
-                    logger.info(
-                        "[YDisk] Запись %s найдена по имени %s", recording_id, name
-                    )
-                    return recording
-
-            logger.debug(
-                "[YDisk] Прямой подбор для %s не сработал, переключаемся на поиск.",
-                recording_id,
-            )
-            resolved_path = await self._search_path(recording_id)
-            if resolved_path:
-                target_name = resolved_path.rsplit("/", 1)[-1]
+        candidates = self._build_filename_candidates(
+            recording_id, call_time=call_time, phone_candidates=phone_candidates
+        )
+        logger.debug(
+            "[YDisk] Попытка загрузки %s, кандидатов файлов: %s",
+            recording_id,
+            candidates,
+        )
+        for name in candidates:
+            logger.debug("[YDisk] Пробую файл %s для %s", name, recording_id)
+            recording = await self._download_file(name)
+            if recording:
                 logger.info(
-                    "[YDisk] Поиск по %s нашёл файл %s, начинаю скачивание.",
-                    recording_id,
-                    target_name,
+                    "[YDisk] Запись %s найдена по имени %s", recording_id, name
                 )
-                return await self._download_file(target_name, explicit_path=resolved_path)
-        except Exception:
-            logger.exception(
-                "[YDisk] Непредвиденная ошибка при загрузке записи %s", recording_id
+                return recording
+
+        logger.debug(
+            "[YDisk] Прямой подбор для %s не сработал, переключаемся на поиск.",
+            recording_id,
+        )
+        resolved_path = await self._search_path(recording_id)
+        if resolved_path:
+            target_name = resolved_path.rsplit("/", 1)[-1]
+            logger.info(
+                "[YDisk] Поиск по %s нашёл файл %s, начинаю скачивание.",
+                recording_id,
+                target_name,
             )
-            return None
+            return await self._download_file(target_name, explicit_path=resolved_path)
 
         logger.warning(
             "[YDisk] Не удалось найти запись %s в %s", recording_id, self.base_path
@@ -225,7 +221,7 @@ class YandexDiskClient:
     def _phone_from_recording_id(self, recording_id: str) -> Optional[str]:
         try:
             decoded = base64.b64decode(recording_id).decode("utf-8", errors="ignore")
-        except Exception:
+        except (binascii.Error, ValueError):
             return None
 
         match = re.search(r"(\+7\d{10}|7\d{10}|8\d{10}|\d{10})", decoded)
@@ -284,11 +280,13 @@ class YandexDiskClient:
             ) as client:
                 resp = await client.get(href)
         except httpx.HTTPError as exc:
-            logger.warning("[YDisk] Ошибка загрузки %s: %s", filename, exc, exc_info=True)
-            return None
-        except Exception:
-            logger.exception("[YDisk] Непредвиденная ошибка при скачивании %s", filename)
-            return None
+            logger.warning("[YDisk] Ошибка загрузки %s: %s", filename, exc)
+            raise YandexDiskIntegrationError(
+                "Failed to download file from Yandex Disk",
+                retryable=True,
+                user_visible=False,
+                details={"filename": filename, "path": path},
+            ) from exc
 
         if resp.status_code == httpx.codes.OK:
             return YandexDiskRecording(
@@ -322,18 +320,24 @@ class YandexDiskClient:
                     headers=headers,
                 )
         except httpx.HTTPError as exc:
-            logger.warning("[YDisk] Ошибка download-link для %s: %s", path, exc, exc_info=True)
-            return None
-        except Exception:
-            logger.exception("[YDisk] Непредвиденная ошибка при получении download-link %s", path)
-            return None
+            logger.warning("[YDisk] Ошибка download-link для %s: %s", path, exc)
+            raise YandexDiskIntegrationError(
+                "Failed to request Yandex Disk download link",
+                retryable=True,
+                user_visible=False,
+                details={"path": path},
+            ) from exc
 
         if resp.status_code == httpx.codes.OK:
             try:
                 data = resp.json()
-            except ValueError:
-                logger.warning("[YDisk] Некорректный JSON в ответе download-link для %s", path)
-                return None
+            except ValueError as exc:
+                raise YandexDiskIntegrationError(
+                    "Invalid JSON in Yandex Disk download-link response",
+                    retryable=False,
+                    user_visible=False,
+                    details={"path": path},
+                ) from exc
             if not isinstance(data, dict):
                 logger.warning("[YDisk] Неожиданный формат download-link для %s: %s", path, type(data))
                 return None
@@ -428,11 +432,13 @@ class YandexDiskClient:
             ) as client:
                 resp = await client.get(self.LIST_URL, params=params, headers=headers)
         except httpx.HTTPError as exc:
-            logger.warning("[YDisk] Ошибка получения списка %s: %s", recording_id or "*", exc, exc_info=True)
-            return None
-        except Exception:
-            logger.exception("[YDisk] Непредвиденная ошибка при получении списка %s", recording_id or "*")
-            return None
+            logger.warning("[YDisk] Ошибка получения списка %s: %s", recording_id or "*", exc)
+            raise YandexDiskIntegrationError(
+                "Failed to fetch Yandex Disk directory page",
+                retryable=True,
+                user_visible=False,
+                details={"offset": offset, "limit": limit, "recording_id": recording_id},
+            ) from exc
 
         if resp.status_code != httpx.codes.OK:
             logger.warning(

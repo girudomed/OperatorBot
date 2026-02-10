@@ -1,57 +1,42 @@
 # Файл: app/utils/error_handlers.py
 
 """
-Централизованная обработка ошибок для всего приложения.
-Включает глобальные обработчики исключений, декораторы и утилиты.
+Централизованные обработчики ошибок и trace propagation.
 
-Все логи идут через централизованную систему watch_dog.
+Важный контракт:
+- финальное логирование и user-notify выполняются на верхнем уровне (app.main.telegram_error_handler);
+- декораторы ниже только связывают trace-контекст и пробрасывают исключения.
 """
+
+from __future__ import annotations
 
 import asyncio
 import functools
 import sys
 import traceback
-from itertools import chain
 from typing import Any, Awaitable, Callable, Dict, Optional, TypeVar, cast
-
-from telegram import Update
 
 from app.logging_config import (
     bind_trace_id,
     generate_trace_id,
-    get_trace_id,
     get_watchdog_logger,
     reset_trace_id,
 )
+from app.utils.best_effort import best_effort_async, best_effort_sync
 
-# Используем watch_dog для всех логов
 logger = get_watchdog_logger(__name__)
-
-# Type variable для правильной типизации декораторов
-F = TypeVar('F', bound=Callable[..., Any])
-
-try:
-    from aiohttp import ClientError as _AiohttpClientError
-except Exception:  # pragma: no cover
-    _AiohttpClientError = ()  # type: ignore
-
-NETWORK_ERROR_TYPES = (
-    ConnectionError,
-    TimeoutError,
-    asyncio.TimeoutError,
-) + ((_AiohttpClientError,) if isinstance(_AiohttpClientError, type) else ())
+F = TypeVar("F", bound=Callable[..., Any])
 
 _loop_exception_handler: Optional[
     Callable[[asyncio.AbstractEventLoop, Dict[str, Any]], None]
 ] = None
 
 
-def setup_global_exception_handlers():
-    """
-    Настройка глобальных обработчиков исключений для sync и async кода.
-    """
+def setup_global_exception_handlers() -> None:
+    """Настройка обработчиков необработанных исключений для sync/async кода."""
+
     global _loop_exception_handler
-    # Обработчик необработанных исключений (sync)
+
     def handle_exception(exc_type, exc_value, exc_traceback):
         if issubclass(exc_type, (KeyboardInterrupt, SystemExit)):
             sys.__excepthook__(exc_type, exc_value, exc_traceback)
@@ -62,55 +47,49 @@ def setup_global_exception_handlers():
             exc_info=(exc_type, exc_value, exc_traceback),
             extra={
                 "exception_type": exc_type.__name__,
-                "exception_message": str(exc_value)
-            }
+                "exception_message": str(exc_value),
+            },
         )
-    
+
     sys.excepthook = handle_exception
-    
-    # Обработчик необработанных исключений в async задачах
+
     def handle_async_exception(loop, context):
         exception = context.get("exception")
         message = context.get("message", "Необработанное исключение в async задаче")
-        
+
         if exception:
             if isinstance(exception, asyncio.CancelledError):
                 logger.info("Async task cancelled during shutdown: %s", message)
                 return
             logger.error(
-                f"Async exception: {message}",
+                "Async exception: %s",
+                message,
                 exc_info=(type(exception), exception, exception.__traceback__),
                 extra={
                     "exception_type": type(exception).__name__,
                     "exception_message": str(exception),
-                    "context": str(context)
-                }
+                    "context": str(context),
+                },
             )
         else:
-            logger.error(
-                f"Async error: {message}",
-                extra={"context": str(context)}
-            )
+            logger.error("Async error: %s", message, extra={"context": str(context)})
+
     _loop_exception_handler = handle_async_exception
 
     try:
         loop = asyncio.get_event_loop()
         loop.set_exception_handler(handle_async_exception)
     except RuntimeError as exc:
-        # Event loop еще не создан, установим позже
         logger.debug(
             "Не удалось установить обработчик для текущего event loop: %s",
             exc,
             exc_info=True,
         )
-    
+
     logger.info("Глобальные обработчики исключений установлены")
 
 
 def install_loop_exception_handler(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
-    """
-    Привязывает обработчик асинхронных исключений к конкретному event loop.
-    """
     if _loop_exception_handler is None:
         return
     target_loop = loop
@@ -127,295 +106,61 @@ def install_loop_exception_handler(loop: Optional[asyncio.AbstractEventLoop] = N
     target_loop.set_exception_handler(_loop_exception_handler)
 
 
-def _find_update_in_args(args: tuple, kwargs: dict) -> Optional[Update]:
-    for value in chain(args, kwargs.values()):
-        if isinstance(value, Update):
-            return value
-    return None
-
-
-async def _resolve_user_role(handler_instance: Any, update: Optional[Update]) -> Optional[str]:
-    if not update or not getattr(update, "effective_user", None):
-        return None
-    permissions = getattr(handler_instance, "permissions", None)
-    if not permissions or not hasattr(permissions, "get_effective_role"):
-        return None
-    user = update.effective_user
-    try:
-        return await permissions.get_effective_role(user.id, user.username)
-    except Exception as exc:
-        logger.debug(
-            "Не удалось определить роль пользователя %s: %s",
-            user.id,
-            exc,
-            exc_info=True,
-        )
-        return None
-
-
-def _build_update_context(update: Optional[Update]) -> Dict[str, Any]:
-    context: Dict[str, Any] = {}
-    if not update:
-        return context
-
-    user = update.effective_user
-    chat = update.effective_chat
-
-    if user:
-        context["user_id"] = user.id
-        if user.username:
-            context["username"] = user.username
-        if user.full_name:
-            context["full_name"] = user.full_name
-    if chat:
-        context["chat_id"] = chat.id
-
-    handler_type = "update"
-    command_or_callback = None
-
-    if update.callback_query:
-        handler_type = "callback_query"
-        command_or_callback = update.callback_query.data
-    elif update.message:
-        text = update.message.text or update.message.caption or ""
-        handler_type = "command" if text.startswith("/") else "message"
-        command_or_callback = text
-
-    context["handler_type"] = handler_type
-    if command_or_callback:
-        context["command_or_callback"] = command_or_callback
-    current_trace = get_trace_id()
-    if current_trace:
-        context["trace_id"] = current_trace
-    return context
-
-
-def _classify_business_error(error: Exception) -> str:
-    message = str(error).lower()
-    if "unknown column" in message or "unknown table" in message:
-        return "db_schema_error"
-    if isinstance(error, PermissionError) or "permission" in message:
-        return "permission_error"
-    if isinstance(error, NETWORK_ERROR_TYPES) or any(
-        token in message
-        for token in (
-            "network is unreachable",
-            "connection reset",
-            "connection aborted",
-            "connection refused",
-            "temporary failure in name resolution",
-            "host unreachable",
-        )
-    ):
-        return "network_error"
-    if "timeout" in message:
-        return "timeout_error"
-    return "unexpected_error"
-
-
-async def _notify_user_about_error(update: Optional[Update], category: str) -> bool:
-    if not update:
-        return False
-    default_message = "⚠️ Произошла ошибка. Повторите действие или обратитесь к разработчику."
-    if category == "db_schema_error":
-        default_message = "⚠️ Ошибка БД, обратитесь к разработчику."
-    elif category == "network_error":
-        default_message = "⚠️ Проблемы с сетью. Проверьте соединение или повторите позднее."
-    notified = False
-    try:
-        if update.callback_query:
-            try:
-                await update.callback_query.answer(default_message, show_alert=True)
-                notified = True
-            except Exception as exc:
-                logger.debug(
-                    "Не удалось отправить alert в callback_query: %s",
-                    exc,
-                    exc_info=True,
-                )
-            try:
-                await update.callback_query.message.reply_text(default_message)
-                notified = True
-            except Exception as exc:
-                logger.debug(
-                    "Не удалось отправить reply_text по callback_query: %s",
-                    exc,
-                    exc_info=True,
-                )
-        elif update.message:
-            await update.message.reply_text(default_message)
-            notified = True
-    except Exception as exc:
-        logger.warning(
-            "Не удалось отправить уведомление об ошибке пользователю: %s",
-            exc,
-            exc_info=True,
-        )
-    return notified
-
-
 def log_exceptions(func: F) -> F:
-    """
-    Декоратор для автоматического логирования исключений в sync функциях.
-    
-    Пример:
-        @log_exceptions
-        def my_function():
-            raise ValueError("Ошибка")
-    """
+    """Sync decorator: only trace propagation, no final logging/user notify."""
+
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         token = bind_trace_id(generate_trace_id("sync"))
         try:
             return func(*args, **kwargs)
-        except Exception as e:
-            update = _find_update_in_args(args, kwargs)
-            context = _build_update_context(update)
-            error_category = _classify_business_error(e)
-            base_message = f"Ошибка в {func.__module__}.{func.__name__}"
-            if context.get("command_or_callback"):
-                base_message = (
-                    f"Ошибка при выполнении {context.get('handler_type')} "
-                    f"{context.get('command_or_callback')}"
-                )
-            logger.error(
-                base_message,
-                exc_info=True,
-                extra={
-                    "function": func.__name__,
-                    "module_name": func.__module__,
-                    "exception_type": type(e).__name__,
-                    "exception_message": str(e),
-                    "error_category": error_category,
-                    **context,
-                }
-            )
-            setattr(e, "_already_logged", True)
-            raise
         finally:
             reset_trace_id(token)
-    
+
     return cast(F, wrapper)
 
 
 def log_async_exceptions(func: F) -> F:
-    """
-    Декоратор для автоматического логирования исключений в async функциях.
-    
-    Пример:
-        @log_async_exceptions
-        async def my_async_function():
-            raise ValueError("Ошибка")
-    """
+    """Async decorator: only trace propagation, no final logging/user notify."""
+
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
         token = bind_trace_id(generate_trace_id("tg"))
         try:
             return await func(*args, **kwargs)
-        except asyncio.CancelledError:
-            # CancelledError - это нормальное поведение, не логируем как ошибку
-            logger.debug(
-                f"Задача отменена: {func.__module__}.{func.__name__}",
-                extra={
-                    "function": func.__name__,
-                    "module_name": func.__module__
-                }
-            )
-            raise
-        except Exception as e:
-            update = _find_update_in_args(args, kwargs)
-            context = _build_update_context(update)
-            error_category = _classify_business_error(e)
-            handler_instance = args[0] if args else None
-            if handler_instance:
-                role = await _resolve_user_role(handler_instance, update)
-                if role:
-                    context["user_role"] = role
-            base_message = f"Ошибка в async {func.__module__}.{func.__name__}"
-            if context.get("command_or_callback"):
-                base_message = (
-                    f"Ошибка при выполнении {context.get('handler_type')} "
-                    f"{context.get('command_or_callback')}"
-                )
-            logger.error(
-                base_message,
-                exc_info=True,
-                extra={
-                    "function": func.__name__,
-                    "module_name": func.__module__,
-                    "exception_type": type(e).__name__,
-                    "exception_message": str(e),
-                    "error_category": error_category,
-                    **context,
-                }
-            )
-            setattr(e, "_already_logged", True)
-            notified = await _notify_user_about_error(update, error_category)
-            if notified:
-                setattr(e, "_user_notified", True)
-            raise
         finally:
             reset_trace_id(token)
-    
+
     return cast(F, wrapper)
 
 
 def safe_execute(func: Callable, *args, **kwargs) -> Optional[Any]:
-    """
-    Безопасное выполнение функции с логированием ошибок.
-    Возвращает None в случае ошибки вместо propagation.
-    
-    Использование:
-        result = safe_execute(risky_function, arg1, arg2, key=value)
-    """
-    try:
-        return func(*args, **kwargs)
-    except Exception as e:
-        logger.error(
-            f"Ошибка при выполнении {func.__name__}",
-            exc_info=True,
-            extra={
-                "function": func.__name__,
-                "exception_type": type(e).__name__,
-                "exception_message": str(e)
-            }
-        )
-        return None
+    """Legacy explicit best-effort wrapper for sync operations."""
+
+    result = best_effort_sync(
+        op_name=f"legacy.safe_execute:{getattr(func, '__name__', 'unknown')}",
+        fn=func,
+        *args,
+        on_error_result=None,
+        **kwargs,
+    )
+    return result.value
 
 
 async def safe_async_execute(coro_func: Callable, *args, **kwargs) -> Optional[Any]:
-    """
-    Безопасное выполнение async функции с логированием ошибок.
-    Возвращает None в случае ошибки.
-    
-    Использование:
-        result = await safe_async_execute(async_risky_function, arg1, arg2)
-    """
-    try:
-        return await coro_func(*args, **kwargs)
-    except asyncio.CancelledError:
-        logger.debug(f"Задача отменена: {coro_func.__name__}")
-        return None
-    except Exception as e:
-        logger.error(
-            f"Ошибка при выполнении async {coro_func.__name__}",
-            exc_info=True,
-            extra={
-                "function": coro_func.__name__,
-                "exception_type": type(e).__name__,
-                "exception_message": str(e)
-            }
-        )
-        return None
+    """Legacy explicit best-effort wrapper for async operations."""
+
+    result = await best_effort_async(
+        op_name=f"legacy.safe_async_execute:{getattr(coro_func, '__name__', 'unknown')}",
+        coro=coro_func(*args, **kwargs),
+        on_error_result=None,
+    )
+    return result.value
 
 
 async def safe_job(job_name: str, job_func: Callable[[], Awaitable[Any]]) -> None:
-    """
-    Выполняет задачу планировщика с единым логированием и trace_id.
-    
-    Использование (apscheduler):
-        scheduler.add_job(safe_job, args=("weekly_report", my_async_job))
-    """
+    """Безопасный запуск фоновой задачи с trace_id."""
+
     token = bind_trace_id(generate_trace_id(f"job-{job_name}"))
     logger.info("Старт фоновой задачи", extra={"job_name": job_name})
     try:
@@ -439,87 +184,67 @@ async def safe_job(job_name: str, job_func: Callable[[], Awaitable[Any]]) -> Non
 
 
 class ErrorContext:
-    """
-    Контекстный менеджер для автоматического логирования ошибок.
-    
-    Использование:
-        with ErrorContext("Инициализация БД"):
-            db.connect()
-            
-        async with ErrorContext("Запрос к API", reraise=False):
-            await api.call()
-    """
-    
+    """Контекстный менеджер с явным контрактом подавления через reraise=False."""
+
     def __init__(self, context_name: str, reraise: bool = True, log_level: str = "error"):
         self.context_name = context_name
         self.reraise = reraise
         self.log_level = log_level
-        # Используем watch_dog logger
         self.logger = get_watchdog_logger(__name__)
-    
+
     def __enter__(self):
         return self
-    
+
     def __exit__(self, exc_type, exc_value, exc_traceback):
         if exc_type is not None:
             log_func = getattr(self.logger, self.log_level)
             log_func(
-                f"Ошибка в контексте: {self.context_name}",
+                "Ошибка в контексте: %s",
+                self.context_name,
                 exc_info=(exc_type, exc_value, exc_traceback),
                 extra={
                     "context": self.context_name,
                     "exception_type": exc_type.__name__,
-                    "exception_message": str(exc_value)
-                }
+                    "exception_message": str(exc_value),
+                    "suppressed": not self.reraise,
+                },
             )
-            
-            # Если reraise=False, подавляем исключение
             return not self.reraise
         return False
-    
+
     async def __aenter__(self):
         return self
-    
+
     async def __aexit__(self, exc_type, exc_value, exc_traceback):
         return self.__exit__(exc_type, exc_value, exc_traceback)
 
 
 def log_coroutine_exceptions(coro):
-    """
-    Оборачивает корутину для автоматического логирования исключений.
-    
-    Использование:
-        task = asyncio.create_task(log_coroutine_exceptions(my_coro()))
-    """
+    """Оборачивает корутину и логирует её необработанные исключения."""
+
     async def wrapper():
         try:
             return await coro
         except asyncio.CancelledError:
-            logger.debug(f"Корутина отменена: {coro}")
+            logger.debug("Корутина отменена: %s", coro)
             raise
         except Exception as e:
             logger.error(
-                f"Необработанное исключение в корутине",
+                "Необработанное исключение в корутине",
                 exc_info=True,
                 extra={
                     "coroutine": str(coro),
                     "exception_type": type(e).__name__,
-                    "exception_message": str(e)
-                }
+                    "exception_message": str(e),
+                },
             )
             raise
-    
+
     return wrapper()
 
 
 def format_exception_details(exc: Exception) -> dict:
-    """
-    Форматирует детали исключения для структурированного логирования.
-    
-    Возвращает словарь с полной информацией об ошибке.
-    """
     tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
-    
     return {
         "exception_type": type(exc).__name__,
         "exception_message": str(exc),
@@ -527,9 +252,8 @@ def format_exception_details(exc: Exception) -> dict:
         "traceback": "".join(tb_lines),
         "traceback_lines": tb_lines,
         "cause": str(exc.__cause__) if exc.__cause__ else None,
-        "context": str(exc.__context__) if exc.__context__ else None
+        "context": str(exc.__context__) if exc.__context__ else None,
     }
 
 
-# Автоматическая установка обработчиков при импорте модуля
 setup_global_exception_handlers()

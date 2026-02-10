@@ -3,6 +3,12 @@ import logging
 import hashlib
 import os
 import asyncio
+from app.utils.best_effort import best_effort_async, best_effort_sync
+
+try:  # pragma: no cover
+    from redis.exceptions import RedisError
+except Exception:  # pragma: no cover
+    RedisError = Exception  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -174,10 +180,7 @@ class AdminCB:
             return
 
         # Сохраняем в памяти сразу (быстрый доступ, dev резерв)
-        try:
-            cls._hash_registry[digest] = original
-        except Exception:
-            logger.exception("Failed to store hash mapping in memory")
+        cls._hash_registry[digest] = original
 
         # Если REDIS не настроен — оставляем только in-memory (dev mode).
         redis_url = os.getenv("REDIS_URL")
@@ -193,43 +196,45 @@ class AdminCB:
 
         if loop:
             async def _save_to_redis():
+                from redis.asyncio import Redis
+                r = Redis.from_url(redis_url, decode_responses=True)
                 try:
-                    from redis.asyncio import Redis
-                    r = Redis.from_url(redis_url, decode_responses=True)
-                    # Сохраняем с TTL 24 часа — это ограничит размер хранилища.
-                    await r.set(f"adm_hd:{digest}", original, ex=24 * 3600)
+                    await best_effort_async(
+                        "best_effort_admincb_save_hash_async",
+                        r.set(f"adm_hd:{digest}", original, ex=24 * 3600),
+                        on_error_result=None,
+                        details={"digest": digest},
+                    )
+                finally:
                     await r.close()
-                except Exception:
-                    logger.exception("Failed to save hash mapping to Redis (async)")
 
             try:
                 loop.create_task(_save_to_redis())
-            except Exception:
-                logger.exception("Failed to schedule Redis save task")
+            except RuntimeError as exc:
+                logger.warning("Failed to schedule Redis save task: %s", exc)
             return
 
         # Если event loop отсутствует (например, код вызывается при импорте/сборке клавиатур),
         # попытаться записать синхронно (best-effort).
         try:
-            try:
-                import redis as _redis_sync  # redis-py sync client
-            except Exception:
-                _redis_sync = None
+            import redis as _redis_sync  # redis-py sync client
+        except ImportError:
+            logger.debug("redis package not available; cannot persist admin callback mapping synchronously")
+            return
 
-            if _redis_sync:
-                try:
-                    r = _redis_sync.Redis.from_url(redis_url, decode_responses=True)
-                    r.set(f"adm_hd:{digest}", original, ex=24 * 3600)
-                    try:
-                        r.close()
-                    except Exception:
-                        pass
-                except Exception:
-                    logger.exception("Failed to save hash mapping to Redis (sync)")
-            else:
-                logger.debug("redis package not available; cannot persist admin callback mapping synchronously")
-        except Exception:
-            logger.exception("Unexpected error while attempting sync Redis save")
+        def _save_sync() -> None:
+            r = _redis_sync.Redis.from_url(redis_url, decode_responses=True)
+            try:
+                r.set(f"adm_hd:{digest}", original, ex=24 * 3600)
+            finally:
+                r.close()
+
+        best_effort_sync(
+            "best_effort_admincb_save_hash_sync",
+            _save_sync,
+            on_error_result=None,
+            details={"digest": digest},
+        )
 
     @classmethod
     def resolve_hash(cls, digest: str) -> Optional[str]:
@@ -247,23 +252,19 @@ class AdminCB:
         if redis_url:
             try:
                 import redis as _redis_sync
-                if _redis_sync:
-                    try:
-                        r = _redis_sync.Redis.from_url(redis_url, decode_responses=True)
-                        got = r.get(f"adm_hd:{digest}")
-                        try:
-                            r.close()
-                        except Exception:
-                            pass
-                        if got:
-                            # Обновляем in-memory cache для ускорения последующих запросов
-                            cls._hash_registry[digest] = got
-                            return got
-                        # не найдено в Redis — логируем явное предупреждение
-                        logger.warning("Hashed admin callback mapping not found in Redis for digest=%s", digest)
-                    except Exception:
-                        logger.exception("Failed to resolve hash from Redis (sync)")
-            except Exception:
+                r = _redis_sync.Redis.from_url(redis_url, decode_responses=True)
+                try:
+                    got = r.get(f"adm_hd:{digest}")
+                except RedisError as exc:
+                    logger.warning("Failed to resolve hash from Redis (sync): %s", exc)
+                    got = None
+                finally:
+                    r.close()
+                if got:
+                    cls._hash_registry[digest] = got
+                    return got
+                logger.warning("Hashed admin callback mapping not found in Redis for digest=%s", digest)
+            except ImportError:
                 # redis-py не установлен — переходим к in-memory
                 logger.debug("redis sync client not available for resolving admin callback hash")
         # Fallback to in-memory
@@ -292,20 +293,23 @@ class AdminCB:
                 from redis.asyncio import Redis
                 r = Redis.from_url(redis_url, decode_responses=True)
                 try:
-                    got = await r.get(f"adm_hd:{digest}")
+                    result = await best_effort_async(
+                        "best_effort_admincb_resolve_hash_async",
+                        r.get(f"adm_hd:{digest}"),
+                        on_error_result=None,
+                        details={"digest": digest},
+                    )
+                    got = result.value
                 finally:
-                    try:
-                        await r.close()
-                    except Exception:
-                        pass
+                    await r.close()
                 if got:
                     # Обновляем in-memory cache для ускорения последующих запросов
                     cls._hash_registry[digest] = got
                     return got
                 # Не найдено в Redis — логируем явное предупреждение и пробуем in-memory
                 logger.warning("Hashed admin callback mapping not found in Redis for digest=%s", digest)
-            except Exception:
-                logger.exception("Failed to resolve hash from Redis (async)")
+            except ImportError:
+                logger.debug("redis async client not available for resolving admin callback hash")
 
         # Fallback to in-memory cache (dev reserve)
         original = cls._hash_registry.get(digest)

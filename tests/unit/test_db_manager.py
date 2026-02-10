@@ -64,12 +64,23 @@ class TestDatabaseManager:
         """Тест выполнения с ретраем (успех после ошибки)"""
         import aiomysql
         
-        # Первая попытка - ошибка, вторая - успех
+        # Первая попытка - transient DB ошибка (2003), вторая - успех
         db_manager.execute_query = AsyncMock(side_effect=[
-            aiomysql.Error("Connection lost"),
+            aiomysql.Error(2003, "Connection refused"),
             "success"
         ])
         
         result = await db_manager.execute_with_retry("SELECT 1", retries=2, base_delay=0.01)
         assert result == "success"
         assert db_manager.execute_query.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_execute_with_retry_unknown_error_not_retried(self, db_manager):
+        """Unknown DB errors не должны ретраиться автоматически."""
+        import aiomysql
+
+        db_manager.execute_query = AsyncMock(side_effect=aiomysql.Error("unknown failure"))
+
+        with pytest.raises(Exception):
+            await db_manager.execute_with_retry("SELECT 1", retries=3, base_delay=0.01)
+        assert db_manager.execute_query.call_count == 1

@@ -14,25 +14,27 @@ import logging
 import signal
 import os
 import re
-from typing import Optional
+import time
+from typing import Callable, Optional
 from pathlib import Path
+from collections import OrderedDict
 
 import httpx
 from telegram import BotCommand, Update
-from telegram.error import TelegramError
+from telegram.error import NetworkError, TelegramError
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, TypeHandler, filters
 from telegram.request import HTTPXRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
+from app.error_policy import resolve_user_message, should_alert
+from app.errors import AppError, TelegramIntegrationError
 from app.logging_config import get_trace_id, setup_watchdog, get_watchdog_logger
 
 # Импортируем error handlers для установки глобальных обработчиков
 from app.utils.error_handlers import (
-    ErrorContext,
     install_loop_exception_handler,
-    log_async_exceptions,
     safe_job,
     setup_global_exception_handlers,
 )
@@ -73,13 +75,130 @@ from app.workers.task_worker import start_workers, stop_workers
 setup_watchdog()
 setup_global_exception_handlers()
 logger = get_watchdog_logger(__name__)
+polling_callback_logger = logging.getLogger(f"{__name__}.polling_callback")
 
 # Блокировка повторного запуска
 BASE_DIR = Path(__file__).resolve().parent.parent
 LOCK_FILE = BASE_DIR / "operabot.lock"
 
 
-USER_ERROR_MESSAGE = "Ошибка доступа к базе. Проверьте конфигурацию/схему БД."
+POLLING_ERROR_THROTTLE_WINDOW_SEC = 60.0
+ERROR_NOTIFY_TTL_SEC = 60.0
+ERROR_NOTIFY_CACHE_KEY = "_error_notify_cache"
+
+
+def _classify_polling_error(error: TelegramError) -> tuple[bool, str]:
+    """Возвращает (is_transient, kind) для polling network ошибок."""
+    if not isinstance(error, NetworkError):
+        return False, "non_network"
+
+    cause = getattr(error, "__cause__", None) or getattr(error, "__context__", None)
+    if isinstance(cause, httpx.TimeoutException):
+        return True, "timeout"
+    if isinstance(cause, httpx.RemoteProtocolError):
+        return True, "remote_disconnect"
+    if isinstance(cause, httpx.ConnectError):
+        return True, "connect_error"
+    if isinstance(cause, httpx.ReadError):
+        return True, "read_error"
+    if isinstance(cause, httpx.NetworkError):
+        return True, "network_transient"
+    return True, "network_transient"
+
+
+def _extract_handler_name(error: Optional[BaseException]) -> Optional[str]:
+    tb = getattr(error, "__traceback__", None)
+    if not tb:
+        return None
+    while tb.tb_next:
+        tb = tb.tb_next
+    return tb.tb_frame.f_code.co_name
+
+
+def _already_notified_key(trace_id: str, update_id: Optional[int]) -> str:
+    return f"{trace_id}:{update_id or '-'}"
+
+
+def _register_notification_once(
+    app_data: dict,
+    trace_id: str,
+    update_id: Optional[int],
+    *,
+    now_ts: Optional[float] = None,
+    ttl_sec: float = ERROR_NOTIFY_TTL_SEC,
+) -> bool:
+    if now_ts is None:
+        now_ts = time.monotonic()
+    cache = app_data.setdefault(ERROR_NOTIFY_CACHE_KEY, OrderedDict())
+    if not isinstance(cache, OrderedDict):
+        cache = OrderedDict()
+        app_data[ERROR_NOTIFY_CACHE_KEY] = cache
+
+    # Evict stale entries.
+    stale_keys = [key for key, ts in cache.items() if (now_ts - ts) > ttl_sec]
+    for key in stale_keys:
+        cache.pop(key, None)
+
+    key = _already_notified_key(trace_id, update_id)
+    if key in cache:
+        return False
+    cache[key] = now_ts
+    while len(cache) > 500:
+        cache.popitem(last=False)
+    return True
+
+
+def make_polling_error_callback(
+    *,
+    now_fn: Callable[[], float] = time.monotonic,
+    throttle_window_sec: float = POLLING_ERROR_THROTTLE_WINDOW_SEC,
+) -> Callable[[TelegramError], None]:
+    """Создает безопасный callback для Updater polling ошибок."""
+    state = {
+        "last_emit_ts": None,
+        "suppressed_count": 0,
+        "last_kind": None,
+    }
+
+    def polling_error_callback(error: TelegramError) -> None:
+        try:
+            is_transient, kind = _classify_polling_error(error)
+            if not is_transient:
+                logger.error(
+                    "Non-transient polling error from Telegram API.",
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+                return
+
+            now_ts = now_fn()
+            last_emit_ts = state["last_emit_ts"]
+            last_kind = state["last_kind"]
+            suppressed_count = int(state["suppressed_count"])
+            should_emit = (
+                last_kind != kind
+                or last_emit_ts is None
+                or (now_ts - float(last_emit_ts)) >= throttle_window_sec
+            )
+
+            if should_emit:
+                logger.warning(
+                    "Transient polling network error (%s). "
+                    "Suppressed repeats since last log: %d. Details: %s",
+                    kind,
+                    suppressed_count,
+                    error,
+                )
+                state["last_emit_ts"] = now_ts
+                state["suppressed_count"] = 0
+                state["last_kind"] = kind
+                return
+
+            state["suppressed_count"] = suppressed_count + 1
+        except Exception:
+            # Callback не должен ронять polling loop ни при каких условиях.
+            polling_callback_logger.exception("Polling error callback failed unexpectedly.")
+
+    return polling_error_callback
 
 
 async def user_context_injector(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -92,12 +211,11 @@ async def user_context_injector(update: Update, context: ContextTypes.DEFAULT_TY
         return
     try:
         user_ctx = await repo.get_user_context_by_telegram_id(user.id)
-    except Exception as exc:
+    except AppError as exc:
         logger.warning(
             "Не удалось получить контекст пользователя %s: %s",
             user.id,
             exc,
-            exc_info=True,
         )
         return
     if user_ctx:
@@ -135,12 +253,13 @@ async def debug_incoming(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Глобально логируем необработанные ошибки PTB, чтобы не терять контекст."""
+    """Единственная верхнеуровневая точка финальной обработки ошибок PTB."""
     error = context.error
-    already_logged = bool(getattr(error, "_already_logged", False)) if error else False
     update_obj: Optional[Update] = update if isinstance(update, Update) else None
     user = update_obj.effective_user if update_obj else None
     chat = update_obj.effective_chat if update_obj else None
+    trace_id = get_trace_id() or "no-trace"
+    handler_name = _extract_handler_name(error)
 
     if update_obj and update_obj.callback_query:
         update_type = "callback_query"
@@ -151,30 +270,15 @@ async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_T
     else:
         update_type = "unknown"
 
-    handler_name = None
-    tb = getattr(error, "__traceback__", None)
-    if tb:
-        while tb.tb_next:
-            tb = tb.tb_next
-        handler_name = tb.tb_frame.f_code.co_name
-
-    if already_logged:
+    incident_logged = bool(getattr(error, "_incident_logged", False)) if error else False
+    if incident_logged:
         logger.debug(
-            "Исключение уже залогировано в handler-е, пропускаем дубль",
-            extra={
-                "source": "telegram.application",
-                "handler_name": handler_name,
-                "update_type": update_type,
-                "update_id": update_obj.update_id if update_obj else None,
-                "user_id": user.id if user else None,
-                "username": user.username if user else None,
-                "chat_id": chat.id if chat else None,
-                "trace_id": get_trace_id(),
-            },
+            "Incident already logged for this exception object",
+            extra={"trace_id": trace_id, "handler_name": handler_name},
         )
     else:
         logger.error(
-            "Unhandled exception в Telegram handler",
+            "Unhandled exception in Telegram handler",
             exc_info=(type(error), error, error.__traceback__) if error else None,
             extra={
                 "source": "telegram.application",
@@ -185,49 +289,88 @@ async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_T
                 "user_id": user.id if user else None,
                 "username": user.username if user else None,
                 "chat_id": chat.id if chat else None,
-                "trace_id": get_trace_id(),
+                "trace_id": trace_id,
             },
         )
-    if update_obj:
+        if error is not None:
+            setattr(error, "_incident_logged", True)
+
+    if should_alert(error if isinstance(error, Exception) else Exception("unknown")):
+        logger.warning(
+            "Alert-worthy incident in Telegram handler",
+            extra={
+                "trace_id": trace_id,
+                "handler_name": handler_name,
+                "error_type": type(error).__name__ if error else None,
+            },
+        )
+        if TELEGRAM_CHAT_ID:
+            try:
+                await context.application.bot.send_message(
+                    chat_id=TELEGRAM_CHAT_ID,
+                    text=(
+                        "🚨 Incident in Telegram handler\n"
+                        f"trace_id: {trace_id}\n"
+                        f"handler: {handler_name or 'unknown'}\n"
+                        f"error: {type(error).__name__ if error else 'None'}"
+                    ),
+                )
+            except TelegramError as notify_exc:
+                logger.warning(
+                    "Failed to send alert to TELEGRAM_CHAT_ID: %s",
+                    notify_exc,
+                )
+
+    if not update_obj:
+        return
+
+    notify_allowed = _register_notification_once(
+        context.application.bot_data,
+        trace_id,
+        update_obj.update_id,
+    )
+    if not notify_allowed:
+        logger.debug(
+            "Skipping duplicate user notification for incident",
+            extra={"trace_id": trace_id, "update_id": update_obj.update_id},
+        )
+        return
+
+    user_message = resolve_user_message(
+        error if isinstance(error, Exception) else AppError("Unknown incident")
+    )
+    if not user_message:
+        user_message = "Команда временно недоступна. Попробуйте позже."
+
+    if update_obj.callback_query:
         try:
-            if update_obj.callback_query:
-                try:
-                    await update_obj.callback_query.answer(USER_ERROR_MESSAGE, show_alert=True)
-                except Exception:
-                    logger.debug("Не удалось показать alert пользователю", exc_info=True)
-                if update_obj.callback_query.message:
-                    await update_obj.callback_query.message.reply_text(USER_ERROR_MESSAGE)
-            elif update_obj.message:
-                await update_obj.message.reply_text(USER_ERROR_MESSAGE)
-        except Exception:
-            logger.debug("Не удалось уведомить пользователя об ошибке", exc_info=True)
-    user_notified = bool(getattr(error, "_user_notified", False)) if error else False
-    if update_obj and update_obj.callback_query and not user_notified:
-        try:
-            await update_obj.callback_query.answer(
-                text="Команда временно недоступна. Попробуйте позже.",
-                show_alert=True,
-            )
-            user_notified = True
+            await update_obj.callback_query.answer(user_message, show_alert=True)
+            return
         except TelegramError as notify_error:
-            logger.warning(
-                "Не удалось уведомить пользователя через callback: %s",
-                notify_error,
+            wrapped = TelegramIntegrationError(
+                "Failed to answer callback_query about incident",
+                user_visible=False,
+                details={"trace_id": trace_id, "update_id": update_obj.update_id},
             )
-    if (
-        not user_notified
-        and update_obj
-        and update_obj.effective_message
-    ):
+            logger.warning(
+                "Failed to notify user via callback_query: %s",
+                notify_error,
+                exc_info=(type(wrapped), wrapped, wrapped.__traceback__),
+            )
+
+    if update_obj.effective_message:
         try:
-            await update_obj.effective_message.reply_text(
-                "Команда временно недоступна. Попробуйте позже."
-            )
-            user_notified = True
+            await update_obj.effective_message.reply_text(user_message)
         except TelegramError as notify_error:
+            wrapped = TelegramIntegrationError(
+                "Failed to send user-facing incident message",
+                user_visible=False,
+                details={"trace_id": trace_id, "update_id": update_obj.update_id},
+            )
             logger.warning(
-                "Не удалось отправить сообщение об ошибке: %s",
+                "Failed to send user error message: %s",
                 notify_error,
+                exc_info=(type(wrapped), wrapped, wrapped.__traceback__),
             )
 
 def acquire_lock():
@@ -508,14 +651,17 @@ async def main():
 
         await application.bot.delete_webhook(drop_pending_updates=True)
         logger.info("Webhook удален (если был), переключаемся на Polling.")
+        polling_error_callback = make_polling_error_callback()
         
         try:
             await application.updater.start_polling(
                 timeout=30,
+                bootstrap_retries=3,
                 read_timeout=70,
                 write_timeout=30,
                 connect_timeout=15,
                 pool_timeout=15,
+                error_callback=polling_error_callback,
             )
         except Exception:
             logger.exception("Ошибка при запуске polling")
