@@ -2,6 +2,7 @@
 import logging
 import os
 import sys
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from logging.handlers import RotatingFileHandler
@@ -38,6 +39,34 @@ class _StreamToLogger:
     def flush(self):
         return
 
+
+class _TraceTimestampFormatter(logging.Formatter):
+    """
+    Добавляет timestamp на каждую строку многострочного сообщения/traceback.
+    Это упрощает разбор инцидентов в длинных полотнах лога.
+    """
+
+    _TS_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
+
+    def format(self, record: logging.LogRecord) -> str:
+        rendered = super().format(record)
+        if "\n" not in rendered:
+            return rendered
+
+        ts = self.formatTime(record, self.datefmt)
+        lines = rendered.splitlines()
+        normalized = [lines[0]]
+        for line in lines[1:]:
+            if not line:
+                normalized.append(line)
+                continue
+            if self._TS_PREFIX_RE.match(line):
+                normalized.append(line)
+                continue
+            normalized.append(f"{ts} | {line}")
+        return "\n".join(normalized)
+
+
 def setup_watchdog():
     """
     Настраивает глобальную конфигурацию логирования.
@@ -65,7 +94,7 @@ def setup_watchdog():
     root_logger.handlers = []
 
     # Форматтер
-    formatter = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
+    formatter = _TraceTimestampFormatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
     formatter.converter = lambda *args: datetime.now(ZoneInfo("Europe/Moscow")).timetuple()
     
     # Фильтр чувствительных данных

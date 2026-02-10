@@ -4,7 +4,11 @@
 import logging
 import pytest
 import re
+import sys
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from watch_dog.filters import SensitiveDataFilter
+from watch_dog.logger import _TraceTimestampFormatter
 
 class TestSensitiveDataFilter:
     """Тесты фильтрации чувствительных данных"""
@@ -74,3 +78,30 @@ class TestSensitiveDataFilter:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_trace_formatter_adds_timestamp_on_each_multiline_line():
+    formatter = _TraceTimestampFormatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    formatter.converter = lambda *args: datetime.now(ZoneInfo("Europe/Moscow")).timetuple()
+
+    try:
+        raise RuntimeError("boom")
+    except RuntimeError:
+        record = logging.LogRecord(
+            name="test",
+            level=logging.ERROR,
+            pathname=__file__,
+            lineno=100,
+            msg="Incident happened",
+            args=(),
+            exc_info=sys.exc_info(),
+        )
+
+    rendered = formatter.format(record)
+    lines = [line for line in rendered.splitlines() if line]
+    assert len(lines) > 1
+    ts_prefix = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
+    assert all(ts_prefix.match(line) for line in lines)

@@ -211,7 +211,8 @@ class SystemMenuHandler:
         )
         if not errors:
             return "✅ В логе нет ошибок за последнюю сессию."
-        return "❌ <b>Последние ошибки</b>:\n" + "\n".join(errors)
+        escaped = "\n".join(html.escape(line) for line in errors)
+        return f"❌ <b>Последние ошибки</b>:\n<code>{escaped}</code>"
 
     async def _send_logs(self, query) -> str:
         log_path = None
@@ -342,12 +343,15 @@ class SystemMenuHandler:
                         if any(pattern in lower for pattern in self.POLLING_NOISE_PATTERNS):
                             suppress_polling_block = True
                             continue
-                        bucket.append(f"[{path.name}] {normalized}")
+                        bucket.append(
+                            f"[{path.name}] {self._with_timestamp_prefix(normalized, last_stamp)}"
+                        )
                     elif include_tracebacks and tb_keyword in lower:
                         if suppress_polling_block:
                             continue
-                        prefix = f"{last_stamp} | " if last_stamp and not ts_match else ""
-                        bucket.append(f"[{path.name}] {prefix}{normalized}")
+                        bucket.append(
+                            f"[{path.name}] {self._with_timestamp_prefix(normalized, last_stamp)}"
+                        )
             except Exception as exc:
                 logger.warning("Не удалось прочитать лог %s: %s", path, exc)
         # Убираем дубликаты (одинаковые строки) с сохранением порядка.
@@ -362,6 +366,15 @@ class SystemMenuHandler:
             seen.add(normalized)
             deduped.append(line)
         return deduped
+
+    def _with_timestamp_prefix(self, line: str, fallback_timestamp: str) -> str:
+        """Гарантирует явный timestamp в строке выдачи ошибок."""
+        ts_match = self.TIMESTAMP_RE.search(line.lstrip())
+        if ts_match:
+            return line
+        if fallback_timestamp:
+            return f"{fallback_timestamp} | {line}"
+        return f"no-timestamp | {line}"
 
     async def _send_logs_file(
         self,

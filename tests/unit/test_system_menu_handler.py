@@ -39,6 +39,24 @@ def test_grep_logs_skips_polling_noise(tmp_path):
     assert "self.gen.throw(typ, value, traceback)" not in rendered
 
 
+def test_grep_logs_adds_timestamp_for_continuation_lines(tmp_path):
+    log_path = tmp_path / "errors.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "2026-02-10 09:19:08 - app.core - ERROR - first incident",
+                "Traceback (most recent call last):",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    handler = _make_handler()
+    rows = handler._grep_logs([log_path], limit=10)
+    rendered = "\n".join(rows)
+    assert "2026-02-10 09:19:08 - app.core - ERROR - first incident" in rendered
+    assert "2026-02-10 09:19:08 | Traceback (most recent call last):" in rendered
+
+
 @pytest.mark.asyncio
 async def test_log_system_action_for_errors_uses_summary_payload():
     handler = _make_handler()
@@ -57,3 +75,22 @@ async def test_log_system_action_for_errors_uses_summary_payload():
     assert payload["has_traceback"] is True
     assert "sample_hash" in payload
     assert "result_preview" not in payload
+
+
+@pytest.mark.asyncio
+async def test_collect_recent_errors_escapes_html_chars(monkeypatch):
+    handler = _make_handler()
+    monkeypatch.setattr(
+        handler,
+        "_grep_logs",
+        lambda *args, **kwargs: [
+            "[errors.log] 2026-02-10 - ERROR - broken <locals> & invalid",
+        ],
+    )
+
+    text = await handler._collect_recent_errors()
+
+    assert "<b>Последние ошибки</b>" in text
+    assert "<code>" in text
+    assert "&lt;locals&gt;" in text
+    assert "&amp;" in text
