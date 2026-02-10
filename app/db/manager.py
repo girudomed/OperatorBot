@@ -28,6 +28,30 @@ class DatabaseManager:
         self._lock = asyncio.Lock()
     
     @staticmethod
+    def _clip_for_log(value: Any, limit: int = 240) -> str:
+        text = repr(value)
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit]}...<truncated:{len(text) - limit}>"
+
+    @classmethod
+    def _sanitize_params_for_log(
+        cls, params: Optional[Union[Tuple, List, Dict]]
+    ) -> Optional[Union[Tuple, List, Dict, str]]:
+        if params is None:
+            return None
+        try:
+            if isinstance(params, tuple):
+                return tuple(cls._clip_for_log(item) for item in params)
+            if isinstance(params, list):
+                return [cls._clip_for_log(item) for item in params]
+            if isinstance(params, dict):
+                return {str(key): cls._clip_for_log(val) for key, val in params.items()}
+            return cls._clip_for_log(params)
+        except Exception:
+            return "<unserializable params>"
+
+    @staticmethod
     def _extract_db_error_details(error: Exception) -> Tuple[str, Optional[int], str]:
         error_type = type(error).__name__
         error_code = None
@@ -80,12 +104,13 @@ class DatabaseManager:
     ) -> str:
         error_type, error_code, message = self._extract_db_error_details(error)
         resolved_category = category or self._classify_db_error(error_code, message)
+        safe_params = self._sanitize_params_for_log(params)
         
         # Для критических ошибок схемы или специфичных кодов (1054 - Unknown column)
         # принудительно выводим контекст в текст сообщения для удобства.
         log_msg = f"Ошибка выполнения SQL-запроса ({resolved_category}): {message}"
         if error_code == 1054 or resolved_category == "schema_error":
-            log_msg = f"КРИТИЧЕСКАЯ ОШИБКА СХЕМЫ (1054): {message}\nSQL: {query}\nParams: {repr(params)}"
+            log_msg = f"КРИТИЧЕСКАЯ ОШИБКА СХЕМЫ (1054): {message}\nSQL: {query}\nParams: {safe_params}"
         
         logger.error(
             log_msg,
@@ -95,7 +120,7 @@ class DatabaseManager:
                 "error_message": message,
                 "query_name": self._resolve_query_name(query_name),
                 "sql": query,
-                "params": repr(params),
+                "params": safe_params,
                 "category": resolved_category,
             },
         )
@@ -212,10 +237,11 @@ class DatabaseManager:
             async with connection.cursor() as cursor:
                 try:
                     query_preview = " ".join(query.split()) if isinstance(query, str) else str(query)
+                    safe_params = self._sanitize_params_for_log(params)
                     logger.info(
                         "[DB] Executing query: %s | params=%s",
                         query_preview,
-                        params,
+                        safe_params,
                     )
                     start_time = time.time()
                     await cursor.execute(query, params)

@@ -108,21 +108,14 @@ def _classify_polling_error(error: TelegramError) -> tuple[bool, str]:
     return True, "network_transient"
 
 
-class _TransientUpdaterPollingFilter(logging.Filter):
-    """Скрывает noisy traceback от Updater только для transient polling ошибок."""
+class _UpdaterPollingNoiseFilter(logging.Filter):
+    """Скрывает noisy traceback от Updater, чтобы не дублировать наши polling-логи."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
             if "Exception happened while polling for updates." not in record.getMessage():
                 return True
-            exc_info = getattr(record, "exc_info", None)
-            if not exc_info or len(exc_info) < 2:
-                return True
-            error = exc_info[1]
-            if not isinstance(error, TelegramError):
-                return True
-            is_transient, _ = _classify_polling_error(error)
-            return not is_transient
+            return False
         except Exception:
             # Фильтр не должен ломать логирование в Updater.
             return True
@@ -131,7 +124,7 @@ class _TransientUpdaterPollingFilter(logging.Filter):
 def _install_updater_polling_filter() -> None:
     if getattr(updater_logger, _UPDATER_POLLING_FILTER_FLAG, False):
         return
-    updater_logger.addFilter(_TransientUpdaterPollingFilter())
+    updater_logger.addFilter(_UpdaterPollingNoiseFilter())
     setattr(updater_logger, _UPDATER_POLLING_FILTER_FLAG, True)
 
 

@@ -127,7 +127,7 @@ def test_callback_is_fail_safe_when_logger_warning_raises(monkeypatch):
     assert "Polling error callback failed unexpectedly." in fallback_calls[0][0]
 
 
-def test_updater_filter_suppresses_transient_polling_traceback():
+def test_updater_filter_suppresses_polling_traceback():
     err = NetworkError("transient network")
     err.__cause__ = httpx.ConnectError("connection dropped")
     record = logging.LogRecord(
@@ -139,20 +139,20 @@ def test_updater_filter_suppresses_transient_polling_traceback():
         args=(),
         exc_info=(type(err), err, None),
     )
-    filt = main._TransientUpdaterPollingFilter()
+    filt = main._UpdaterPollingNoiseFilter()
     assert filt.filter(record) is False
 
 
-def test_updater_filter_keeps_non_transient_polling_traceback():
+def test_updater_filter_keeps_other_messages():
     err = TelegramError("bad request")
     record = logging.LogRecord(
         name="telegram.ext.Updater",
         level=logging.ERROR,
         pathname=__file__,
         lineno=1,
-        msg="Exception happened while polling for updates.",
+        msg="Some other updater error",
         args=(),
         exc_info=(type(err), err, None),
     )
-    filt = main._TransientUpdaterPollingFilter()
+    filt = main._UpdaterPollingNoiseFilter()
     assert filt.filter(record) is True
