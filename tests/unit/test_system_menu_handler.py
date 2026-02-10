@@ -57,6 +57,27 @@ def test_grep_logs_adds_timestamp_for_continuation_lines(tmp_path):
     assert "2026-02-10 09:19:08 | Traceback (most recent call last):" in rendered
 
 
+def test_grep_logs_skips_sql_noise_with_result_preview(tmp_path):
+    log_path = tmp_path / "operabot.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "2026-02-10 12:11:01 - app.telegram.handlers.admin_panel - ERROR - Не удалось отправить выгрузку: Timed out",
+                "2026-02-10 12:11:01 | Traceback (most recent call last):",
+                "2026-02-10 12:14:11 - app.db.manager - INFO - [DB] Executing query: INSERT INTO admin_action_logs (...) | params=('system_action', '{\"result_preview\": \"Traceback (most recent call last): ...\"}')",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    handler = _make_handler()
+    rows = handler._grep_logs([log_path], limit=10)
+    rendered = "\n".join(rows)
+    assert "Не удалось отправить выгрузку: Timed out" in rendered
+    assert "Traceback (most recent call last):" in rendered
+    assert "result_preview" not in rendered
+    assert "[DB] Executing query" not in rendered
+
+
 @pytest.mark.asyncio
 async def test_log_system_action_for_errors_uses_summary_payload():
     handler = _make_handler()

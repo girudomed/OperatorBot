@@ -62,6 +62,12 @@ class SystemMenuHandler:
         "self.gen.throw(typ, value, traceback)",
         "telegram/ext/_utils/networkloop.py",
     )
+    NOISE_LINE_SUBSTRINGS = (
+        "admin_action_logs",
+        "system_action",
+        "result_preview",
+        "[db] executing query:",
+    )
     ALLOWED_ROLES = {"founder", "head_of_registry"}
     MAX_LOG_LINES = 40
     MAX_LOG_BYTES = 5 * 1024 * 1024
@@ -338,7 +344,7 @@ class SystemMenuHandler:
                     if not include_current:
                         continue
                     if level_re.search(normalized):
-                        if "admin_action_logs" in normalized or "system_action" in normalized:
+                        if any(token in lower for token in self.NOISE_LINE_SUBSTRINGS):
                             continue
                         if any(pattern in lower for pattern in self.POLLING_NOISE_PATTERNS):
                             suppress_polling_block = True
@@ -348,6 +354,14 @@ class SystemMenuHandler:
                         )
                     elif include_tracebacks and tb_keyword in lower:
                         if suppress_polling_block:
+                            continue
+                        if any(token in lower for token in self.NOISE_LINE_SUBSTRINGS):
+                            continue
+                        stripped = normalized.lstrip()
+                        if not (
+                            stripped.lower().startswith("traceback (most recent call last):")
+                            or "| traceback (most recent call last):" in lower
+                        ):
                             continue
                         bucket.append(
                             f"[{path.name}] {self._with_timestamp_prefix(normalized, last_stamp)}"
