@@ -29,6 +29,41 @@ class _TraceIdFilter(logging.Filter):
         return True
 
 
+def is_polling_noise_record(record: logging.LogRecord) -> bool:
+    """Определяет шумный polling traceback от PTB Updater."""
+    try:
+        if not record:
+            return False
+        logger_name = record.name or ""
+        message = (record.getMessage() or "").lower()
+    except Exception:
+        return False
+    if logger_name.startswith("telegram.ext.Updater") and "exception happened while polling for updates." in message:
+        return True
+    if logger_name.startswith("telegram.ext.Updater") and "self.gen.throw(typ, value, traceback)" in message:
+        return True
+    if "telegram/ext/_utils/networkloop.py" in message and "self.gen.throw" in message:
+        return True
+    return False
+
+
+class _PollingNoiseFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:  # pragma: no cover - простая вставка
+        return not is_polling_noise_record(record)
+
+
+def install_polling_noise_filter() -> None:
+    """Устанавливает fail-safe фильтр polling-noise на logger и root handlers."""
+    noise_logger = logging.getLogger("telegram.ext.Updater")
+    if not any(isinstance(f, _PollingNoiseFilter) for f in noise_logger.filters):
+        noise_logger.addFilter(_PollingNoiseFilter())
+
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        if not any(isinstance(f, _PollingNoiseFilter) for f in handler.filters):
+            handler.addFilter(_PollingNoiseFilter())
+
+
 def generate_trace_id(prefix: str = "req") -> str:
     """Генерирует короткий trace_id вида req-1a2b3c4d."""
     suffix = uuid.uuid4().hex[:8]
@@ -64,6 +99,7 @@ def setup_app_logging() -> logging.Logger:
     # Гарантируем, что filter не добавляется многократно (watch_dog может пересоздавать root).
     if not any(isinstance(f, _TraceIdFilter) for f in root_logger.filters):
         root_logger.addFilter(_TraceIdFilter())
+    install_polling_noise_filter()
     return get_watchdog_logger("app")
 
 
@@ -78,4 +114,6 @@ __all__ = [
     "bind_trace_id",
     "reset_trace_id",
     "get_trace_id",
+    "is_polling_noise_record",
+    "install_polling_noise_filter",
 ]

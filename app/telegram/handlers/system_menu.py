@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import html
+import hashlib
 from collections import deque
 from datetime import datetime, timedelta
 import re
@@ -56,6 +57,11 @@ class SystemMenuHandler:
         Path("logs/logs.log"),
     ]
     TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
+    POLLING_NOISE_PATTERNS = (
+        "exception happened while polling for updates.",
+        "self.gen.throw(typ, value, traceback)",
+        "telegram/ext/_utils/networkloop.py",
+    )
     ALLOWED_ROLES = {"founder", "head_of_registry"}
     MAX_LOG_LINES = 40
     MAX_LOG_BYTES = 5 * 1024 * 1024
@@ -308,11 +314,16 @@ class SystemMenuHandler:
             try:
                 last_stamp = ""
                 include_current = False
+                suppress_polling_block = False
                 cutoff = datetime.now(ZoneInfo("Europe/Moscow")) - timedelta(days=self.ERROR_LOOKBACK_DAYS)
                 cutoff_naive = cutoff.replace(tzinfo=None)
                 for line in self._read_log_lines(path):
                     normalized = line.rstrip()
                     if not normalized:
+                        continue
+                    lower = normalized.lower()
+                    if any(pattern in lower for pattern in self.POLLING_NOISE_PATTERNS):
+                        suppress_polling_block = True
                         continue
                     ts_match = self.TIMESTAMP_RE.search(normalized.lstrip())
                     if ts_match:
@@ -320,14 +331,21 @@ class SystemMenuHandler:
                         include_current = self._is_recent_timestamp(last_stamp, cutoff_naive)
                         if not include_current:
                             continue
-                    lower = normalized.lower()
+                    if " - " in normalized and " - " in normalized[20:]:
+                        # Новая лог-запись сбрасывает suppress-флаг.
+                        suppress_polling_block = False
                     if not include_current:
                         continue
                     if level_re.search(normalized):
                         if "admin_action_logs" in normalized or "system_action" in normalized:
                             continue
+                        if any(pattern in lower for pattern in self.POLLING_NOISE_PATTERNS):
+                            suppress_polling_block = True
+                            continue
                         bucket.append(f"[{path.name}] {normalized}")
                     elif include_tracebacks and tb_keyword in lower:
+                        if suppress_polling_block:
+                            continue
                         prefix = f"{last_stamp} | " if last_stamp and not ts_match else ""
                         bucket.append(f"[{path.name}] {prefix}{normalized}")
             except Exception as exc:
@@ -455,10 +473,13 @@ class SystemMenuHandler:
         try:
             payload = {"action": action}
             if action in {"errors", "system_logs"}:
+                sample = text[:400]
                 payload.update(
                     {
                         "result_len": len(text),
-                        "result_preview": text[:200],
+                        "line_count": len(text.splitlines()) if text else 0,
+                        "has_traceback": "traceback" in text.lower(),
+                        "sample_hash": hashlib.sha256(sample.encode("utf-8")).hexdigest()[:12] if sample else "",
                     }
                 )
             else:

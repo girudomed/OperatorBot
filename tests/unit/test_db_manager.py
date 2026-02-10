@@ -84,3 +84,23 @@ class TestDatabaseManager:
         with pytest.raises(Exception):
             await db_manager.execute_with_retry("SELECT 1", retries=3, base_delay=0.01)
         assert db_manager.execute_query.call_count == 1
+
+    def test_sanitize_params_masks_admin_action_payload(self):
+        query = """
+            INSERT INTO admin_action_logs (actor_id, target_id, action, payload_json, created_at)
+            VALUES (%s, %s, %s, %s, NOW())
+        """
+        noisy_payload = "Traceback (most recent call last):\nself.gen.throw(typ, value, traceback)"
+        params = (11, None, "system_action", noisy_payload)
+
+        sanitized = DatabaseManager._sanitize_params_for_log(params, query=query)
+
+        assert isinstance(sanitized, tuple)
+        assert "omitted payload_json" in str(sanitized[3])
+        assert "Traceback" not in str(sanitized)
+
+    def test_clip_for_log_flattens_multiline_values(self):
+        value = "line1\nline2\rline3"
+        clipped = DatabaseManager._clip_for_log(value, limit=200)
+        assert "\n" not in clipped
+        assert "\r" not in clipped

@@ -30,7 +30,13 @@ from apscheduler.triggers.cron import CronTrigger
 from app.config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
 from app.error_policy import resolve_user_message, should_alert
 from app.errors import AppError, TelegramIntegrationError
-from app.logging_config import get_trace_id, setup_watchdog, get_watchdog_logger
+from app.logging_config import (
+    get_trace_id,
+    install_polling_noise_filter,
+    is_polling_noise_record,
+    setup_watchdog,
+    get_watchdog_logger,
+)
 
 # Импортируем error handlers для установки глобальных обработчиков
 from app.utils.error_handlers import (
@@ -113,9 +119,7 @@ class _UpdaterPollingNoiseFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
-            if "Exception happened while polling for updates." not in record.getMessage():
-                return True
-            return False
+            return not is_polling_noise_record(record)
         except Exception:
             # Фильтр не должен ломать логирование в Updater.
             return True
@@ -124,6 +128,7 @@ class _UpdaterPollingNoiseFilter(logging.Filter):
 def _install_updater_polling_filter() -> None:
     if getattr(updater_logger, _UPDATER_POLLING_FILTER_FLAG, False):
         return
+    install_polling_noise_filter()
     updater_logger.addFilter(_UpdaterPollingNoiseFilter())
     setattr(updater_logger, _UPDATER_POLLING_FILTER_FLAG, True)
 

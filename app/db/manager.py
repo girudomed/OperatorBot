@@ -29,18 +29,36 @@ class DatabaseManager:
     
     @staticmethod
     def _clip_for_log(value: Any, limit: int = 240) -> str:
-        text = repr(value)
+        text = repr(value).replace("\r", " ").replace("\n", " ")
         if len(text) <= limit:
             return text
         return f"{text[:limit]}...<truncated:{len(text) - limit}>"
 
+    @staticmethod
+    def _is_admin_action_logs_query(query: Optional[str]) -> bool:
+        if not isinstance(query, str):
+            return False
+        lowered = " ".join(query.split()).lower()
+        return "admin_action_logs" in lowered and "insert into" in lowered
+
     @classmethod
     def _sanitize_params_for_log(
-        cls, params: Optional[Union[Tuple, List, Dict]]
+        cls,
+        params: Optional[Union[Tuple, List, Dict]],
+        *,
+        query: Optional[str] = None,
     ) -> Optional[Union[Tuple, List, Dict, str]]:
         if params is None:
             return None
         try:
+            if cls._is_admin_action_logs_query(query):
+                if isinstance(params, tuple) and len(params) >= 4:
+                    masked = list(params)
+                    payload = params[3]
+                    payload_len = len(payload) if isinstance(payload, str) else 0
+                    masked[3] = f"<omitted payload_json len={payload_len}>"
+                    return tuple(cls._clip_for_log(item) for item in masked)
+                return "<omitted admin_action_logs params>"
             if isinstance(params, tuple):
                 return tuple(cls._clip_for_log(item) for item in params)
             if isinstance(params, list):
@@ -104,7 +122,7 @@ class DatabaseManager:
     ) -> str:
         error_type, error_code, message = self._extract_db_error_details(error)
         resolved_category = category or self._classify_db_error(error_code, message)
-        safe_params = self._sanitize_params_for_log(params)
+        safe_params = self._sanitize_params_for_log(params, query=query)
         
         # Для критических ошибок схемы или специфичных кодов (1054 - Unknown column)
         # принудительно выводим контекст в текст сообщения для удобства.
@@ -237,7 +255,7 @@ class DatabaseManager:
             async with connection.cursor() as cursor:
                 try:
                     query_preview = " ".join(query.split()) if isinstance(query, str) else str(query)
-                    safe_params = self._sanitize_params_for_log(params)
+                    safe_params = self._sanitize_params_for_log(params, query=query_preview)
                     logger.info(
                         "[DB] Executing query: %s | params=%s",
                         query_preview,
@@ -346,7 +364,9 @@ class DatabaseManager:
                     )
                 last_error = wrapped_error
                 if not is_retryable(wrapped_error):
-                    raise
+                    if isinstance(error, DatabaseIntegrationError):
+                        raise
+                    raise wrapped_error from error
                 retry_cfg = get_retry_config(wrapped_error)
                 logger.warning(
                     f"Ошибка выполнения запроса. Попытка {attempt}/{retries}",

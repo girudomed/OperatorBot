@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from app import main
+from app.logging_config import install_polling_noise_filter, is_polling_noise_record
 import httpx
 from telegram.error import NetworkError, TelegramError
 
@@ -156,3 +157,41 @@ def test_updater_filter_keeps_other_messages():
     )
     filt = main._UpdaterPollingNoiseFilter()
     assert filt.filter(record) is True
+
+
+def test_is_polling_noise_record_matches_expected_message():
+    record = logging.LogRecord(
+        name="telegram.ext.Updater",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg="Exception happened while polling for updates.",
+        args=(),
+        exc_info=None,
+    )
+    assert is_polling_noise_record(record) is True
+
+
+def test_is_polling_noise_record_matches_self_gen_throw_line():
+    record = logging.LogRecord(
+        name="telegram.ext.Updater",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg="self.gen.throw(typ, value, traceback)",
+        args=(),
+        exc_info=None,
+    )
+    assert is_polling_noise_record(record) is True
+
+
+def test_install_polling_noise_filter_adds_handler_filters():
+    root = logging.getLogger()
+    original_handlers = list(root.handlers)
+    handler = logging.StreamHandler()
+    root.handlers = [handler]
+    try:
+        install_polling_noise_filter()
+        assert handler.filters
+    finally:
+        root.handlers = original_handlers

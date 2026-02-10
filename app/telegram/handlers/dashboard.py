@@ -8,13 +8,12 @@ Telegram handlers для Live Dashboard операторов.
 
 from __future__ import annotations
 
-from typing import List, Optional
-
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 import traceback
 
@@ -79,7 +78,7 @@ class DashboardHandler:
                 keyboard.append([
                     InlineKeyboardButton(
                         "👤 Моя статистика",
-                        callback_data=f"dash_my_day_{operator_name}"
+                        callback_data=self._build_callback("my", "day")
                     )
                 ])
                 logger.debug(
@@ -142,7 +141,8 @@ class DashboardHandler:
     async def dashboard_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка callback кнопок дашборда."""
         query = update.callback_query
-        await query.answer()
+        if not await self.safe_answer_callback(query):
+            return
         
         try:
             data = query.data or ""
@@ -152,81 +152,111 @@ class DashboardHandler:
             
             logger.info(f"[DASHBOARD] Callback received: user_id={user_id}, data={data}")
             
-            # Парсим callback data
-            parts = data.split('_')
-            
-            if data.startswith('dash_my_'):
+            callback_type, period = self._parse_callback_data(data)
+            if callback_type is None:
+                logger.warning("[DASHBOARD] Unknown callback format: %s", data)
+                await self.safe_answer_callback(
+                    query,
+                    "Интерфейс устарел. Откройте /dashboard заново.",
+                    show_alert=True,
+                )
+                await query.edit_message_text(
+                    "⚠️ Обнаружена устаревшая клавиатура.\n"
+                    "Откройте /dashboard, чтобы получить актуальное меню."
+                )
+                return
+
+            if callback_type == "my":
                 if not await self._acquire_guard(context, query):
                     return
-                # Персональный дашборд
-                period = parts[2]  # day, week, month
-                operator_name = '_'.join(parts[3:])
-                logger.debug(f"[DASHBOARD] Personal dashboard: operator={operator_name}, period={period}")
+                operator_name = await self._resolve_operator_name(user_id)
+                if not operator_name:
+                    await self.safe_answer_callback(
+                        query,
+                        "Оператор не привязан. Обратитесь к администратору.",
+                        show_alert=True,
+                    )
+                    return
+                logger.debug(
+                    "[DASHBOARD] Personal dashboard: user_id=%s operator=%s period=%s",
+                    user_id,
+                    operator_name,
+                    period,
+                )
                 try:
                     await self._show_single_dashboard(query, operator_name, period)
                 finally:
                     self._release_guard(context)
             
-            elif data.startswith('dash_all_'):
+            elif callback_type == "all":
                 if not await self._acquire_guard(context, query):
                     return
-                # Сводный дашборд
-                period = parts[2]
                 logger.debug(f"[DASHBOARD] Aggregated dashboard: period={period}")
                 try:
                     await self._show_all_operators_dashboard(query, period)
                 finally:
                     self._release_guard(context)
             
-            elif data == 'dash_select_operator':
+            elif callback_type == "select_operator":
                 # Выбор оператора
                 logger.debug(f"[DASHBOARD] Operator selection requested by user_id={user_id}")
                 await self._show_operator_selection(query)
             
-            elif data.startswith('dash_refresh_'):
+            elif callback_type == "refresh_my":
                 if not await self._acquire_guard(context, query):
                     return
-                # Обновление дашборда
-                dashboard_type = parts[2]  # my, all, operator
-                period = parts[3]
-                logger.info(f"[DASHBOARD] Refresh requested: type={dashboard_type}, period={period}")
-                
-                if dashboard_type == 'my' or dashboard_type == 'operator':
-                    operator_name = '_'.join(parts[4:])
-                    # Инвалидируем кеш
-                    await self.cache_service.invalidate_cache(operator_name, period)
-                    try:
-                        await self._show_single_dashboard(query, operator_name, period, refresh=True)
-                    finally:
-                        self._release_guard(context)
-                else:
-                    await self.cache_service.invalidate_cache(period_type=period)
-                    try:
-                        await self._show_all_operators_dashboard(query, period, refresh=True)
-                    finally:
-                        self._release_guard(context)
+                logger.info("[DASHBOARD] Refresh requested: type=my period=%s", period)
+                operator_name = await self._resolve_operator_name(user_id)
+                if not operator_name:
+                    await self.safe_answer_callback(
+                        query,
+                        "Оператор не привязан. Обратитесь к администратору.",
+                        show_alert=True,
+                    )
+                    return
+                await self.cache_service.invalidate_cache(operator_name, period)
+                try:
+                    await self._show_single_dashboard(query, operator_name, period, refresh=True)
+                finally:
+                    self._release_guard(context)
             
-            elif data.startswith('dash_period_'):
+            elif callback_type == "refresh_all":
                 if not await self._acquire_guard(context, query):
                     return
-                # Переключение периода
-                dashboard_type = parts[2]
-                period = parts[3]
-                logger.info(f"[DASHBOARD] Period change: type={dashboard_type}, new_period={period}")
-                
-                if len(parts) > 4:
-                    operator_name = '_'.join(parts[4:])
-                    try:
-                        await self._show_single_dashboard(query, operator_name, period)
-                    finally:
-                        self._release_guard(context)
-                else:
-                    try:
-                        await self._show_all_operators_dashboard(query, period)
-                    finally:
-                        self._release_guard(context)
+                logger.info("[DASHBOARD] Refresh requested: type=all period=%s", period)
+                await self.cache_service.invalidate_cache(period_type=period)
+                try:
+                    await self._show_all_operators_dashboard(query, period, refresh=True)
+                finally:
+                    self._release_guard(context)
             
-            elif data == 'dash_back':
+            elif callback_type == "period_my":
+                if not await self._acquire_guard(context, query):
+                    return
+                logger.info("[DASHBOARD] Period change: type=my new_period=%s", period)
+                operator_name = await self._resolve_operator_name(user_id)
+                if not operator_name:
+                    await self.safe_answer_callback(
+                        query,
+                        "Оператор не привязан. Обратитесь к администратору.",
+                        show_alert=True,
+                    )
+                    return
+                try:
+                    await self._show_single_dashboard(query, operator_name, period)
+                finally:
+                    self._release_guard(context)
+            
+            elif callback_type == "period_all":
+                if not await self._acquire_guard(context, query):
+                    return
+                logger.info("[DASHBOARD] Period change: type=all new_period=%s", period)
+                try:
+                    await self._show_all_operators_dashboard(query, period)
+                finally:
+                    self._release_guard(context)
+            
+            elif callback_type == "back":
                 # Возврат в главное меню
                 logger.debug(f"[DASHBOARD] Back to main menu requested by user_id={user_id}")
                 await query.edit_message_text(
@@ -306,21 +336,21 @@ class DashboardHandler:
                 [
                     InlineKeyboardButton(
                         "День" + (" ◉" if period == 'day' else ""),
-                        callback_data=f"dash_period_my_day_{operator_name}"
+                        callback_data=self._build_callback("period_my", "day")
                     ),
                     InlineKeyboardButton(
                         "Неделя" + (" ◉" if period == 'week' else ""),
-                        callback_data=f"dash_period_my_week_{operator_name}"
+                        callback_data=self._build_callback("period_my", "week")
                     ),
                     InlineKeyboardButton(
                         "Месяц" + (" ◉" if period == 'month' else ""),
-                        callback_data=f"dash_period_my_month_{operator_name}"
+                        callback_data=self._build_callback("period_my", "month")
                     )
                 ],
                 [
                     InlineKeyboardButton(
                         "🔄 Обновить данные",
-                        callback_data=f"dash_refresh_my_{period}_{operator_name}"
+                        callback_data=self._build_callback("refresh_my", period)
                     )
                 ],
                 [
@@ -386,21 +416,21 @@ class DashboardHandler:
                 [
                     InlineKeyboardButton(
                         "День" + (" ◉" if period == 'day' else ""),
-                        callback_data=f"dash_period_all_day"
+                        callback_data=self._build_callback("period_all", "day")
                     ),
                     InlineKeyboardButton(
                         "Неделя" + (" ◉" if period == 'week' else ""),
-                        callback_data=f"dash_period_all_week"
+                        callback_data=self._build_callback("period_all", "week")
                     ),
                     InlineKeyboardButton(
                         "Месяц" + (" ◉" if period == 'month' else ""),
-                        callback_data=f"dash_period_all_month"
+                        callback_data=self._build_callback("period_all", "month")
                     )
                 ],
                 [
                     InlineKeyboardButton(
                         "🔄 Обновить данные",
-                        callback_data=f"dash_refresh_all_{period}"
+                        callback_data=self._build_callback("refresh_all", period)
                     )
                 ],
                 [
@@ -531,6 +561,7 @@ class DashboardHandler:
             }
             
             period_label = period_names.get(period, 'за сегодня')
+            timestamp = self._current_msk_time()
             
             logger.debug(f"[DASHBOARD] Formatting aggregated dashboard for {len(dashboards)} operators")
             
@@ -594,7 +625,7 @@ class DashboardHandler:
             CommandHandler('dashboard', self.dashboard_command),
             CallbackQueryHandler(
                 self.dashboard_callback,
-                pattern='^dash_'
+                pattern=r'^dash(?:_|:)'
             )
         ]
     
@@ -603,7 +634,11 @@ class DashboardHandler:
     
     async def _acquire_guard(self, context: ContextTypes.DEFAULT_TYPE, query) -> bool:
         if context.user_data.get(self._busy_key):
-            await query.answer("Запрос уже выполняется. Подождите пару секунд.", show_alert=True)
+            await self.safe_answer_callback(
+                query,
+                "Запрос уже выполняется. Подождите пару секунд.",
+                show_alert=True,
+            )
             return False
         context.user_data[self._busy_key] = True
         return True
@@ -623,6 +658,96 @@ class DashboardHandler:
             key,
             cooldown_seconds=self._rate_limit_seconds,
         ):
-            await query.answer("Слишком часто обновляете статистику. Подождите пару секунд.", show_alert=True)
+            await self.safe_answer_callback(
+                query,
+                "Слишком часто обновляете статистику. Подождите пару секунд.",
+                show_alert=True,
+            )
             return True
         return False
+
+    async def safe_answer_callback(
+        self,
+        query,
+        text: Optional[str] = None,
+        *,
+        show_alert: bool = False,
+    ) -> bool:
+        """Подтверждает callback без падения на stale/invalid query."""
+        try:
+            if text is None:
+                await query.answer()
+            else:
+                await query.answer(text, show_alert=show_alert)
+            return True
+        except BadRequest as exc:
+            error_text = str(exc).lower()
+            if "query is too old" in error_text or "query id is invalid" in error_text:
+                logger.warning("[DASHBOARD] Stale callback query ignored: %s", exc)
+                return False
+            logger.warning("[DASHBOARD] Failed to answer callback: %s", exc)
+            return False
+        except TelegramError as exc:
+            logger.warning("[DASHBOARD] Telegram callback answer error: %s", exc)
+            return False
+
+    async def _resolve_operator_name(self, user_id: int) -> Optional[str]:
+        user_record = await self.user_repo.get_user_by_telegram_id(user_id)
+        if not user_record:
+            return None
+        return user_record.get("operator_name")
+
+    @staticmethod
+    def _build_callback(action: str, period: Optional[str] = None) -> str:
+        if period:
+            return f"dash:{action}:{period}"
+        return f"dash:{action}"
+
+    @staticmethod
+    def _parse_callback_data(data: str) -> Tuple[Optional[str], str]:
+        """
+        Поддерживает новый формат `dash:<action>:<period>` и legacy `dash_*`.
+        Возвращает (`callback_type`, `period`).
+        """
+        if not data:
+            return None, "day"
+
+        if data.startswith("dash:"):
+            parts = data.split(":")
+            if len(parts) == 2 and parts[1] in {"back", "select_operator"}:
+                return parts[1], "day"
+            if len(parts) == 3:
+                action, period = parts[1], parts[2]
+                if action in {"my", "all", "period_my", "period_all", "refresh_my", "refresh_all"}:
+                    return action, period
+            return None, "day"
+
+        if data == "dash_back":
+            return "back", "day"
+        if data == "dash_select_operator":
+            return "select_operator", "day"
+        if data.startswith("dash_my_"):
+            parts = data.split("_")
+            if len(parts) >= 3:
+                return "my", parts[2]
+        if data.startswith("dash_all_"):
+            parts = data.split("_")
+            if len(parts) >= 3:
+                return "all", parts[2]
+        if data.startswith("dash_refresh_my_"):
+            parts = data.split("_")
+            if len(parts) >= 4:
+                return "refresh_my", parts[3]
+        if data.startswith("dash_refresh_all_"):
+            parts = data.split("_")
+            if len(parts) >= 4:
+                return "refresh_all", parts[3]
+        if data.startswith("dash_period_my_"):
+            parts = data.split("_")
+            if len(parts) >= 4:
+                return "period_my", parts[3]
+        if data.startswith("dash_period_all_"):
+            parts = data.split("_")
+            if len(parts) >= 4:
+                return "period_all", parts[3]
+        return None, "day"

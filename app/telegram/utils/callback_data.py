@@ -37,6 +37,7 @@ class AdminCB:
     # NOTE: This is non-persistent (lost on process restart). For robust production usage
     # consider moving this registry to a persistent store (Redis/DB) and using AdminCB.register_hash.
     _hash_registry: Dict[str, str] = {}
+    HASH_TTL_SECONDS = 24 * 3600
 
     # === ACTIONS (короткие алиасы) ===
     # Главное меню
@@ -201,7 +202,7 @@ class AdminCB:
                 try:
                     await best_effort_async(
                         "best_effort_admincb_save_hash_async",
-                        r.set(f"adm_hd:{digest}", original, ex=24 * 3600),
+                        r.set(f"adm_hd:{digest}", original, ex=cls.HASH_TTL_SECONDS),
                         on_error_result=None,
                         details={"digest": digest},
                     )
@@ -225,7 +226,7 @@ class AdminCB:
         def _save_sync() -> None:
             r = _redis_sync.Redis.from_url(redis_url, decode_responses=True)
             try:
-                r.set(f"adm_hd:{digest}", original, ex=24 * 3600)
+                r.set(f"adm_hd:{digest}", original, ex=cls.HASH_TTL_SECONDS)
             finally:
                 r.close()
 
@@ -263,7 +264,11 @@ class AdminCB:
                 if got:
                     cls._hash_registry[digest] = got
                     return got
-                logger.warning("Hashed admin callback mapping not found in Redis for digest=%s", digest)
+                logger.warning(
+                    "Hashed admin callback mapping not found in Redis for digest=%s",
+                    digest,
+                    extra={"event": "callback_hash_miss", "hash": digest, "age_hint": "unknown"},
+                )
             except ImportError:
                 # redis-py не установлен — переходим к in-memory
                 logger.debug("redis sync client not available for resolving admin callback hash")
@@ -271,7 +276,11 @@ class AdminCB:
         original = cls._hash_registry.get(digest)
         if original:
             return original
-        logger.warning("Hashed admin callback mapping not found in memory for digest=%s", digest)
+        logger.warning(
+            "Hashed admin callback mapping not found in memory for digest=%s",
+            digest,
+            extra={"event": "callback_hash_miss", "hash": digest, "age_hint": "unknown"},
+        )
         return None
 
     @classmethod
@@ -307,7 +316,11 @@ class AdminCB:
                     cls._hash_registry[digest] = got
                     return got
                 # Не найдено в Redis — логируем явное предупреждение и пробуем in-memory
-                logger.warning("Hashed admin callback mapping not found in Redis for digest=%s", digest)
+                logger.warning(
+                    "Hashed admin callback mapping not found in Redis for digest=%s",
+                    digest,
+                    extra={"event": "callback_hash_miss", "hash": digest, "age_hint": "unknown"},
+                )
             except ImportError:
                 logger.debug("redis async client not available for resolving admin callback hash")
 
@@ -316,5 +329,9 @@ class AdminCB:
         if original:
             return original
 
-        logger.warning("Hashed admin callback mapping not found (redis and memory) for digest=%s", digest)
+        logger.warning(
+            "Hashed admin callback mapping not found (redis and memory) for digest=%s",
+            digest,
+            extra={"event": "callback_hash_miss", "hash": digest, "age_hint": "unknown"},
+        )
         return None

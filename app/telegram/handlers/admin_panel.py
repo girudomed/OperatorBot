@@ -29,7 +29,7 @@ from telegram.ext import (
 from app.db.repositories.admin import AdminRepository
 from app.db.repositories.lm_repository import LMRepository
 from app.telegram.middlewares.permissions import PermissionsManager
-from app.logging_config import get_watchdog_logger
+from app.logging_config import get_trace_id, get_watchdog_logger
 from app.telegram.utils.logging import describe_user
 from app.telegram.utils.messages import safe_edit_message
 from app.utils.error_handlers import log_async_exceptions
@@ -217,33 +217,36 @@ class AdminPanelHandler:
         cb_action, cb_args = AdminCB.parse(data)
 
         # Resolve hashed fallback callback_data (adm:hd:<digest>) if present.
-        # When AdminCB.create produced a hashed fallback, it registers the original
-        # callback string in AdminCB._hash_registry via AdminCB.register_hash.
-        # Here we try to resolve that digest back to the original callback_data and
-        # re-parse it so normal routing can proceed. We first check in-memory cache,
-        # then attempt async Redis lookup if configured.
+        # В callback path используем только async resolve, чтобы избежать sync I/O в event loop.
         if cb_action == AdminCB.HD:
             digest = cb_args[0] if cb_args else None
             original = None
             if digest:
-                # Fast path: in-memory
                 try:
-                    original = AdminCB.resolve_hash(digest)
+                    original = await AdminCB.resolve_hash_async(digest)
                 except Exception:
                     original = None
-                # Slow path: async Redis-backed resolve
-                if not original:
-                    try:
-                        original = await AdminCB.resolve_hash_async(digest)
-                    except Exception:
-                        original = None
             if original:
                 data = original
                 cb_action, cb_args = AdminCB.parse(data)
             else:
-                # Не удалось разрешить хеш — аккуратный fallback в меню.
-                await self._safe_answer(query)
-                await self._handle_unknown_callback(query)
+                logger.warning(
+                    "Callback hash mapping missing. Requesting UI refresh.",
+                    extra={
+                        "event": "callback_hash_miss",
+                        "hash": digest,
+                        "trace_id": get_trace_id() or "-",
+                    },
+                )
+                await self._safe_answer(
+                    query,
+                    "Клавиатура устарела. Обновите меню /admin.",
+                    show_alert=True,
+                )
+                try:
+                    await self._show_main_menu(update, context)
+                except Exception:
+                    logger.debug("Не удалось открыть меню после callback hash miss", exc_info=True)
                 return True
 
         user = update.effective_user
