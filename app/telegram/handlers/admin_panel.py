@@ -80,7 +80,7 @@ from telegram.ext import MessageHandler
 class AdminPanelHandler:
     """Основной хендлер админ-панели."""
     
-    SYSTEM_MENU_ROLES = {"founder", "head_of_registry", "superadmin"}
+    SYSTEM_MENU_ROLES = {"founder", "head_of_registry", "superadmin", "stadmin", "developer"}
     
     def __init__(
         self,

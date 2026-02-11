@@ -143,3 +143,15 @@ async def test_can_use_system_tools_allows_superadmin_role():
     allowed = await handler._can_use_system_tools(1, "tester")
 
     assert allowed is True
+
+
+@pytest.mark.asyncio
+async def test_can_use_system_tools_allows_developer_role():
+    handler = AdminPanelHandler(_StubRepo(), _StubPermissions())
+    handler.permissions.is_supreme_admin = MagicMock(return_value=False)  # type: ignore[attr-defined]
+    handler.permissions.is_dev_admin = MagicMock(return_value=False)  # type: ignore[attr-defined]
+    handler.permissions.get_effective_role = AsyncMock(return_value="developer")  # type: ignore[attr-defined]
+
+    allowed = await handler._can_use_system_tools(1, "tester")
+
+    assert allowed is True
