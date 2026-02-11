@@ -32,6 +32,7 @@ def mock_metrics_service():
 @pytest.fixture
 def handler(mock_admin_repo, mock_metrics_service):
     permissions = MagicMock()
+    permissions.can_view_all_stats = AsyncMock(return_value=True)
     return AdminStatsHandler(mock_admin_repo, mock_metrics_service, permissions)
 
 
@@ -55,3 +56,24 @@ class TestAdminStatsHandler:
         mock_admin_repo.get_admins.assert_awaited_once()
         assert mock_metrics_service.calculate_quality_summary.await_count == 5
         query.answer.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_show_stats_denied_without_permission(self, handler, mock_admin_repo, mock_metrics_service):
+        query = MagicMock()
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        query.message.reply_text = AsyncMock()
+        query.data = "adm:st"
+        update = MagicMock()
+        update.callback_query = query
+        update.effective_user = MagicMock(id=22, username="user")
+        context = MagicMock()
+        context.application.bot_data = {}
+
+        handler.permissions.can_view_all_stats = AsyncMock(return_value=False)
+
+        await handler.show_stats(update, context)
+
+        mock_admin_repo.get_pending_users.assert_not_awaited()
+        mock_admin_repo.get_admins.assert_not_awaited()
+        mock_metrics_service.calculate_quality_summary.assert_not_awaited()

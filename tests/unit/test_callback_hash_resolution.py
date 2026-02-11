@@ -10,7 +10,9 @@ from app.telegram.utils.callback_data import AdminCB
 
 
 def _make_handler() -> AdminPanelHandler:
-    permissions = SimpleNamespace()
+    permissions = SimpleNamespace(
+        can_access_admin_panel=AsyncMock(return_value=True),
+    )
     return AdminPanelHandler(admin_repo=SimpleNamespace(), permissions=permissions)
 
 

@@ -213,6 +213,30 @@ class AdminPanelHandler:
         # Сразу подтверждаем callback, чтобы избежать таймаута Telegram.
         await self._safe_answer(query)
 
+        user = update.effective_user
+        if not user:
+            return
+        try:
+            has_access = await self.permissions.can_access_admin_panel(
+                user.id,
+                user.username,
+            )
+        except Exception:
+            logger.exception(
+                "Admin callback access check failed for user_id=%s",
+                user.id,
+            )
+            has_access = False
+        if not has_access:
+            logger.warning(
+                "Denied admin callback access for user_id=%s username=%s callback_data=%s",
+                user.id,
+                user.username,
+                query.data,
+            )
+            await self._safe_answer(query, "Недостаточно прав", show_alert=True)
+            return True
+
         data = query.data or ""
         cb_action, cb_args = AdminCB.parse(data)
 
@@ -249,7 +273,6 @@ class AdminPanelHandler:
                     logger.debug("Не удалось открыть меню после callback hash miss", exc_info=True)
                 return True
 
-        user = update.effective_user
         logger.info(
             "Admin callback: action=%s args=%s data=%s",
             cb_action,

@@ -35,7 +35,12 @@ async def test_dashboard_stale_callbacks_do_not_crash_under_chaos() -> None:
 
 @pytest.mark.asyncio
 async def test_admin_panel_hash_miss_redis_flap_no_crash(monkeypatch) -> None:
-    handler = AdminPanelHandler(admin_repo=SimpleNamespace(), permissions=SimpleNamespace())
+    handler = AdminPanelHandler(
+        admin_repo=SimpleNamespace(),
+        permissions=SimpleNamespace(
+            can_access_admin_panel=AsyncMock(return_value=True),
+        ),
+    )
     handler._safe_answer = AsyncMock(return_value=True)  # type: ignore[method-assign]
     handler._show_main_menu = AsyncMock()  # type: ignore[method-assign]
     handler._handle_new_callback = AsyncMock(return_value=True)  # type: ignore[method-assign]

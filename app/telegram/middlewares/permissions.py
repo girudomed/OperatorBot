@@ -16,7 +16,13 @@ from copy import deepcopy
 from typing import Optional, Dict, Set, Tuple, Any, Literal, List
 from app.db.manager import DatabaseManager
 from app.logging_config import get_watchdog_logger
-from app.config import SUPREME_ADMIN_ID, SUPREME_ADMIN_USERNAME, DEV_ADMIN_ID, DEV_ADMIN_USERNAME
+from app.config import (
+    SUPREME_ADMIN_ID,
+    SUPREME_ADMIN_USERNAME,
+    DEV_ADMIN_ID,
+    DEV_ADMIN_USERNAME,
+    ALLOW_USERNAME_BOOTSTRAP,
+)
 from app.core.roles import role_display_name_from_name, ROLE_ID_TO_NAME
 logger = get_watchdog_logger(__name__)
 
@@ -435,9 +441,14 @@ class PermissionsManager:
         """
         if SUPREME_ADMIN_ID and str(user_id) == str(SUPREME_ADMIN_ID):
             return True
-        normalized = _normalize_username(username)
-        if _SUPREME_ADMIN_USERNAME and normalized == _SUPREME_ADMIN_USERNAME:
-            return True
+        if ALLOW_USERNAME_BOOTSTRAP:
+            normalized = _normalize_username(username)
+            if _SUPREME_ADMIN_USERNAME and normalized == _SUPREME_ADMIN_USERNAME:
+                logger.warning(
+                    "[SECURITY] Username-based Supreme Admin bootstrap is enabled. "
+                    "Use SUPREME_ADMIN_ID for production-safe auth."
+                )
+                return True
         return False
     
     def is_dev_admin(self, user_id: int, username: Optional[str] = None) -> bool:
@@ -446,9 +457,14 @@ class PermissionsManager:
         """
         if DEV_ADMIN_ID and str(user_id) == str(DEV_ADMIN_ID):
             return True
-        normalized = _normalize_username(username)
-        if _DEV_ADMIN_USERNAME and normalized == _DEV_ADMIN_USERNAME:
-            return True
+        if ALLOW_USERNAME_BOOTSTRAP:
+            normalized = _normalize_username(username)
+            if _DEV_ADMIN_USERNAME and normalized == _DEV_ADMIN_USERNAME:
+                logger.warning(
+                    "[SECURITY] Username-based Dev Admin bootstrap is enabled. "
+                    "Use DEV_ADMIN_ID for production-safe auth."
+                )
+                return True
         return False
     
     async def is_admin(self, user_id: int, username: Optional[str] = None) -> bool:

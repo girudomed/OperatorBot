@@ -73,6 +73,24 @@ class TestPermissionsManager:
         
         assert permissions.is_supreme_admin(123) is True
         assert permissions.is_supreme_admin(456) is False
+
+    def test_is_supreme_admin_username_disabled_by_default(self, permissions, monkeypatch):
+        """Bootstrap по username выключен по умолчанию."""
+        monkeypatch.setattr('app.telegram.middlewares.permissions.SUPREME_ADMIN_ID', None)
+        monkeypatch.setattr('app.telegram.middlewares.permissions.SUPREME_ADMIN_USERNAME', 'root_user')
+        monkeypatch.setattr('app.telegram.middlewares.permissions._SUPREME_ADMIN_USERNAME', 'root_user')
+        monkeypatch.setattr('app.telegram.middlewares.permissions.ALLOW_USERNAME_BOOTSTRAP', False)
+
+        assert permissions.is_supreme_admin(456, username="root_user") is False
+
+    def test_is_supreme_admin_username_can_be_enabled(self, permissions, monkeypatch):
+        """Rollback-режим: bootstrap по username можно включить флагом."""
+        monkeypatch.setattr('app.telegram.middlewares.permissions.SUPREME_ADMIN_ID', None)
+        monkeypatch.setattr('app.telegram.middlewares.permissions.SUPREME_ADMIN_USERNAME', 'root_user')
+        monkeypatch.setattr('app.telegram.middlewares.permissions._SUPREME_ADMIN_USERNAME', 'root_user')
+        monkeypatch.setattr('app.telegram.middlewares.permissions.ALLOW_USERNAME_BOOTSTRAP', True)
+
+        assert permissions.is_supreme_admin(456, username="root_user") is True
     
     @pytest.mark.asyncio
     async def test_can_promote_superadmin_can_all(self, permissions, mock_db):

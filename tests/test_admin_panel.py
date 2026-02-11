@@ -14,6 +14,9 @@ class _StubPermissions:
     async def has_permission(self, *_, **__):
         return True
 
+    async def can_access_admin_panel(self, *_, **__):
+        return True
+
 
 class _DummyQuery:
     def __init__(self, data: str):
@@ -97,3 +100,18 @@ async def test_handle_callback_passes_command_payload(monkeypatch):
     call_args = mock_command.await_args
     assert call_args.args[0] == "set_role_page"
     assert call_args.args[1] == "2"
+
+
+@pytest.mark.asyncio
+async def test_handle_callback_denies_non_admin(monkeypatch):
+    handler = AdminPanelHandler(_StubRepo(), _StubPermissions())
+    handler.permissions.can_access_admin_panel = AsyncMock(return_value=False)  # type: ignore[attr-defined]
+    mock_new = AsyncMock()
+    monkeypatch.setattr(handler, "_handle_new_callback", mock_new)
+
+    update = _DummyUpdate(AdminCB.create(AdminCB.DASHBOARD))
+    context = _DummyContext()
+
+    await handler.handle_callback(update, context)
+
+    mock_new.assert_not_awaited()

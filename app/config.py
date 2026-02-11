@@ -137,6 +137,10 @@ SUPREME_ADMIN_ID = os.getenv("SUPREME_ADMIN_ID")
 SUPREME_ADMIN_USERNAME = os.getenv("SUPREME_ADMIN_USERNAME")
 DEV_ADMIN_ID = os.getenv("DEV_ADMIN_ID")
 DEV_ADMIN_USERNAME = os.getenv("DEV_ADMIN_USERNAME")
+ALLOW_USERNAME_BOOTSTRAP = _get_bool(
+    os.getenv("ALLOW_USERNAME_BOOTSTRAP", "false"),
+    False,
+)
 
 # Manual link
 _manual_url = os.getenv(

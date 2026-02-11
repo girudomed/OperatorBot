@@ -64,6 +64,18 @@ class AdminAdminsHandler:
         query = update.callback_query
         if not query:
             return
+        actor = update.effective_user
+        if not actor:
+            return
+        if not await self.permissions.can_manage_users(actor.id, actor.username):
+            await query.answer("Недостаточно прав", show_alert=True)
+            logger.warning(
+                "Denied admin-admins access for user_id=%s username=%s callback_data=%s",
+                actor.id,
+                actor.username,
+                query.data,
+            )
+            return
         action, args = AdminCB.parse(query.data or "")
         if action != AdminCB.ADMINS:
             return

@@ -42,10 +42,26 @@ class AdminStatsHandler:
         """Показывает выбор периода статистики или конкретный период."""
         query = update.callback_query
         user = update.effective_user
+        if not query or not user:
+            return
+
+        allowed = await self.permissions.can_view_all_stats(user.id, user.username)
+        if not allowed:
+            try:
+                await query.answer("Недостаточно прав", show_alert=True)
+            except BadRequest:
+                pass
+            logger.warning(
+                "Denied admin stats access for user_id=%s username=%s",
+                user.id,
+                user.username,
+            )
+            return
+
         action, args = AdminCB.parse(query.data or "")
         sub_action = args[0] if args else None
 
-        user_id = user.id if user else 0
+        user_id = user.id
         if user_id and rate_limit_hit(
             context.application.bot_data,
             user_id,
