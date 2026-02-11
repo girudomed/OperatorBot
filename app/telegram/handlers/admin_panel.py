@@ -216,11 +216,16 @@ class AdminPanelHandler:
         user = update.effective_user
         if not user:
             return
+        data = query.data or ""
+        cb_action, cb_args = AdminCB.parse(data)
         try:
-            has_access = await self.permissions.can_access_admin_panel(
-                user.id,
-                user.username,
-            )
+            if cb_action == AdminCB.SYSTEM:
+                has_access = await self._can_use_system_tools(user.id, user.username)
+            else:
+                has_access = await self.permissions.can_access_admin_panel(
+                    user.id,
+                    user.username,
+                )
         except Exception:
             logger.exception(
                 "Admin callback access check failed for user_id=%s",
@@ -236,9 +241,6 @@ class AdminPanelHandler:
             )
             await self._safe_answer(query, "Недостаточно прав", show_alert=True)
             return True
-
-        data = query.data or ""
-        cb_action, cb_args = AdminCB.parse(data)
 
         # Resolve hashed fallback callback_data (adm:hd:<digest>) if present.
         # В callback path используем только async resolve, чтобы избежать sync I/O в event loop.

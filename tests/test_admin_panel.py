@@ -115,3 +115,19 @@ async def test_handle_callback_denies_non_admin(monkeypatch):
     await handler.handle_callback(update, context)
 
     mock_new.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_handle_callback_allows_system_for_system_roles(monkeypatch):
+    handler = AdminPanelHandler(_StubRepo(), _StubPermissions())
+    handler.permissions.can_access_admin_panel = AsyncMock(return_value=False)  # type: ignore[attr-defined]
+    monkeypatch.setattr(handler, "_can_use_system_tools", AsyncMock(return_value=True))
+    mock_open_system = AsyncMock()
+    monkeypatch.setattr(handler, "_open_system_tools", mock_open_system)
+
+    update = _DummyUpdate(AdminCB.create(AdminCB.SYSTEM))
+    context = _DummyContext()
+
+    await handler.handle_callback(update, context)
+
+    mock_open_system.assert_awaited_once_with(update, context)
