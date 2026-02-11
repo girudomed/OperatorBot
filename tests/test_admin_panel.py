@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from app.telegram.handlers.admin_panel import AdminPanelHandler
 from app.telegram.utils.callback_data import AdminCB
@@ -131,3 +131,15 @@ async def test_handle_callback_allows_system_for_system_roles(monkeypatch):
     await handler.handle_callback(update, context)
 
     mock_open_system.assert_awaited_once_with(update, context)
+
+
+@pytest.mark.asyncio
+async def test_can_use_system_tools_allows_superadmin_role():
+    handler = AdminPanelHandler(_StubRepo(), _StubPermissions())
+    handler.permissions.is_supreme_admin = MagicMock(return_value=False)  # type: ignore[attr-defined]
+    handler.permissions.is_dev_admin = MagicMock(return_value=False)  # type: ignore[attr-defined]
+    handler.permissions.get_effective_role = AsyncMock(return_value="superadmin")  # type: ignore[attr-defined]
+
+    allowed = await handler._can_use_system_tools(1, "tester")
+
+    assert allowed is True

@@ -115,3 +115,17 @@ async def test_collect_recent_errors_escapes_html_chars(monkeypatch):
     assert "<code>" in text
     assert "&lt;locals&gt;" in text
     assert "&amp;" in text
+
+
+@pytest.mark.asyncio
+async def test_can_use_system_allows_superadmin_role():
+    permissions = SimpleNamespace(
+        is_supreme_admin=lambda *_args, **_kwargs: False,
+        is_dev_admin=lambda *_args, **_kwargs: False,
+        get_effective_role=AsyncMock(return_value="superadmin"),
+    )
+    handler = SystemMenuHandler(db_manager=SimpleNamespace(), permissions=permissions)
+
+    allowed = await handler._can_use_system(11, "superuser")
+
+    assert allowed is True

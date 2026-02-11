@@ -68,7 +68,7 @@ class SystemMenuHandler:
         "result_preview",
         "[db] executing query:",
     )
-    ALLOWED_ROLES = {"founder", "head_of_registry"}
+    ALLOWED_ROLES = {"founder", "head_of_registry", "superadmin"}
     MAX_LOG_LINES = 40
     MAX_LOG_BYTES = 5 * 1024 * 1024
     ERROR_LOOKBACK_DAYS = 7
